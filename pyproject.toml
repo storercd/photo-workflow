@@ -14,6 +14,8 @@ dependencies = [
 ]
 
 [project.scripts]
+photo-workflow-run = "photo_workflow.workflow:main"
+photo-workflow-memory-card-copy = "photo_workflow.memory_card_copy:main"
 photo-workflow-short-video-notes = "photo_workflow.video_notes:main"
 photo-workflow-install-font = "photo_workflow.video_notes:install_font_main"
 

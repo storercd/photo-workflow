@@ -17,11 +17,16 @@ ruff check .
 pytest
 ```
 
-## First Workflow
+## Workflow
 
-The first workflow scans the dated camera folder for short `.mp4` files, runs
-local transcription, and creates a `.tif` note image with a red frame and the
-detected speech centered on the canvas.
+The workflow now runs in two steps:
+
+1. Detect a mounted memory card, flatten-copy its files into the dated camera
+	folder, verify the copy, delete the copied files from the card, eject the
+	card, and report remaining disk space.
+2. Scan the dated camera folder for short `.mp4` files, run local
+	transcription, and create `.tif` note images with a red frame and centered
+	speech text.
 
 By default it uses today's folder under:
 
@@ -32,14 +37,32 @@ By default it uses today's folder under:
 You can override that base folder with [photo-workflow.toml](photo-workflow.toml):
 
 ```toml
-[video_notes]
+[workflow]
 camera_root = "/Users/christopherstorer/working/camera"
+
+[memory_card_copy]
+card_mount_root = "/Volumes"
+low_disk_warning_gb = 30.0
+low_disk_warning_percent = 5.0
+copy_verification = "basic"
+
+[video_notes]
 max_duration_seconds = 10.0
 ```
+
+`copy_verification = "basic"` checks file existence and size after copy. Set it
+to `"crc32"` to read both source and destination and compare CRC32 checksums.
 
 Run it with:
 
 ```bash
+uv run photo-workflow-run
+```
+
+Run the steps individually with:
+
+```bash
+uv run photo-workflow-memory-card-copy
 uv run photo-workflow-short-video-notes
 ```
 

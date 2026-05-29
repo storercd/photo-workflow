@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+from photo_workflow import config as app_config
 from photo_workflow import video_notes
 
 
 def test_build_today_source_dir_uses_expected_dated_path() -> None:
-    source_dir = video_notes.build_today_source_dir(
+    source_dir = app_config.build_today_source_dir(
         today=date(2026, 5, 28),
         camera_root=Path("/tmp/camera"),
     )
@@ -15,34 +16,42 @@ def test_build_today_source_dir_uses_expected_dated_path() -> None:
     assert source_dir == Path("/tmp/camera/20260528")
 
 
-def test_load_video_notes_config_returns_defaults_when_config_is_missing(tmp_path: Path) -> None:
-    config = video_notes.load_video_notes_config(tmp_path / "missing.toml")
+def test_load_config_returns_defaults_when_config_is_missing(tmp_path: Path) -> None:
+    config = app_config.load_config(tmp_path / "missing.toml")
 
-    assert config.camera_root == video_notes.DEFAULT_CAMERA_ROOT
-    assert config.max_duration_seconds == video_notes.DEFAULT_MAX_DURATION_SECONDS
+    assert config.workflow.camera_root == app_config.DEFAULT_CAMERA_ROOT
+    assert (
+        config.memory_card_copy.copy_verification == app_config.DEFAULT_COPY_VERIFICATION
+    )
+    assert config.video_notes.max_duration_seconds == app_config.DEFAULT_MAX_DURATION_SECONDS
 
 
-def test_load_video_notes_config_reads_camera_root_from_toml(tmp_path: Path) -> None:
+def test_load_config_reads_sections_from_toml(tmp_path: Path) -> None:
     config_path = tmp_path / "photo-workflow.toml"
     config_path.write_text(
-        '[video_notes]\ncamera_root = "~/camera-roll"\nmax_duration_seconds = 7.5\n'
+        '[workflow]\ncamera_root = "~/camera-roll"\n\n'
+        '[memory_card_copy]\ncopy_verification = "crc32"\n\n'
+        '[video_notes]\nmax_duration_seconds = 7.5\n'
     )
 
-    config = video_notes.load_video_notes_config(config_path)
+    config = app_config.load_config(config_path)
 
-    assert config.camera_root == Path("~/camera-roll").expanduser()
-    assert config.max_duration_seconds == 7.5
+    assert config.workflow.camera_root == Path("~/camera-roll").expanduser()
+    assert config.memory_card_copy.copy_verification == "crc32"
+    assert config.video_notes.max_duration_seconds == 7.5
 
 
 def test_build_today_source_dir_uses_configured_camera_root(tmp_path: Path, monkeypatch) -> None:
     configured_root = tmp_path / "camera"
     monkeypatch.setattr(
-        video_notes,
-        "load_video_notes_config",
-        lambda: video_notes.VideoNotesConfig(camera_root=configured_root),
+        app_config,
+        "load_workflow_config",
+        lambda config_path=app_config.DEFAULT_CONFIG_PATH: app_config.WorkflowConfig(
+            camera_root=configured_root,
+        ),
     )
 
-    source_dir = video_notes.build_today_source_dir(today=date(2026, 5, 29))
+    source_dir = app_config.build_today_source_dir(today=date(2026, 5, 29))
 
     assert source_dir == configured_root / "20260529"
 
@@ -82,7 +91,7 @@ def test_process_short_videos_skips_long_mp4_files(
     monkeypatch.setattr(video_notes, "probe_video_duration_seconds", lambda _: 10.0)
     monkeypatch.setattr(video_notes, "transcribe_video", lambda *args, **kwargs: "unused")
 
-    processed = video_notes.process_short_videos(tmp_path)
+    processed = video_notes.process_short_videos(tmp_path, max_duration_seconds=10.0)
 
     assert processed == []
     assert not (tmp_path / "long.tif").exists()
@@ -99,7 +108,9 @@ def test_process_short_videos_uses_configured_max_duration_when_not_provided(
     monkeypatch.setattr(
         video_notes,
         "load_video_notes_config",
-        lambda: video_notes.VideoNotesConfig(max_duration_seconds=9.0),
+        lambda config_path=app_config.DEFAULT_CONFIG_PATH: app_config.VideoNotesConfig(
+            max_duration_seconds=9.0,
+        ),
     )
     monkeypatch.setattr(video_notes, "transcribe_video", lambda *args, **kwargs: "hello world")
 
@@ -118,26 +129,24 @@ def test_main_reports_when_no_short_videos_are_processed(
     monkeypatch,
     caplog,
 ) -> None:
-    (tmp_path / "long.MP4").write_bytes(b"video")
-
-    monkeypatch.setattr(
-        video_notes,
-        "load_video_notes_config",
-        lambda: video_notes.VideoNotesConfig(
-            camera_root=tmp_path.parent,
-            max_duration_seconds=12.5,
-        ),
-    )
     monkeypatch.setattr(
         video_notes,
         "build_today_source_dir",
-        lambda today=None, camera_root=None: tmp_path,
+        lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        video_notes,
+        "load_video_notes_config",
+        lambda config_path=app_config.DEFAULT_CONFIG_PATH: app_config.VideoNotesConfig(
+            max_duration_seconds=12.5,
+        ),
     )
     monkeypatch.setattr(
         video_notes,
         "process_short_videos",
         lambda source_dir=None, max_duration_seconds=None: [],
     )
+    (tmp_path / "long.MP4").write_bytes(b"video")
 
     with caplog.at_level("INFO"):
         video_notes.main()

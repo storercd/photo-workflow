@@ -1,3 +1,11 @@
-[video_notes]
+[workflow]
 camera_root = "/Users/christopherstorer/working/camera"
+
+[memory_card_copy]
+card_mount_root = "/Volumes"
+low_disk_warning_gb = 30.0
+low_disk_warning_percent = 5.0
+copy_verification = "basic"
+
+[video_notes]
 max_duration_seconds = 10.0

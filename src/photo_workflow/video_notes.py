@@ -8,17 +8,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 import urllib.request
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 
 import mlx_whisper
 from PIL import Image, ImageDraw, ImageFont
 
-DEFAULT_CAMERA_ROOT = Path("/Users/christopherstorer/working/camera")
-DEFAULT_MAX_DURATION_SECONDS = 10.0
+from photo_workflow.config import VideoNotesConfig, build_today_source_dir, load_video_notes_config
+
 DEFAULT_OUTPUT_EXTENSION = ".tif"
 DEFAULT_TRANSCRIPTION_MODEL = "mlx-community/whisper-tiny"
 DEFAULT_TEXT_SCALE_FACTOR = 0.5
@@ -44,15 +42,6 @@ DEFAULT_FONT_PATHS = (
 )
 
 LOGGER = logging.getLogger(__name__)
-DEFAULT_CONFIG_PATH = Path("photo-workflow.toml")
-
-
-@dataclass(frozen=True)
-class VideoNotesConfig:
-    """User-configurable settings for the short-video note workflow."""
-
-    camera_root: Path = DEFAULT_CAMERA_ROOT
-    max_duration_seconds: float = DEFAULT_MAX_DURATION_SECONDS
 
 
 @dataclass(frozen=True)
@@ -63,45 +52,6 @@ class ProcessedVideoNote:
     output_path: Path
     duration_seconds: float
     transcription: str
-
-
-def build_today_source_dir(
-    *,
-    today: date | None = None,
-    camera_root: Path | None = None,
-) -> Path:
-    """Return the dated source directory for the current workflow run."""
-
-    run_date = today or date.today()
-    active_camera_root = camera_root or load_video_notes_config().camera_root
-    return active_camera_root / run_date.strftime("%Y%m%d")
-
-
-def load_video_notes_config(config_path: Path = DEFAULT_CONFIG_PATH) -> VideoNotesConfig:
-    """Load local workflow settings from TOML, falling back to defaults."""
-
-    if not config_path.exists():
-        return VideoNotesConfig()
-
-    with config_path.open("rb") as config_file:
-        config_data = tomllib.load(config_file)
-
-    video_notes_config = config_data.get("video_notes", {})
-    camera_root_value = video_notes_config.get("camera_root")
-    max_duration_value = video_notes_config.get("max_duration_seconds")
-
-    return VideoNotesConfig(
-        camera_root=(
-            Path(camera_root_value).expanduser()
-            if camera_root_value is not None
-            else DEFAULT_CAMERA_ROOT
-        ),
-        max_duration_seconds=(
-            float(max_duration_value)
-            if max_duration_value is not None
-            else DEFAULT_MAX_DURATION_SECONDS
-        ),
-    )
 
 
 def process_short_videos(
@@ -430,13 +380,14 @@ def require_tool(name: str) -> str:
     return tool_path
 
 
-def main() -> None:
-    """Run the short-video note workflow for today's camera folder."""
+def run_video_notes_step(source_dir: Path, *, config: VideoNotesConfig) -> None:
+    """Process short videos in the dated source directory."""
 
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-    config = load_video_notes_config()
-    source_dir = build_today_source_dir(camera_root=config.camera_root)
     total_videos = len(iter_mp4_files(source_dir)) if source_dir.exists() else 0
+    if not source_dir.exists():
+        LOGGER.info("no .mp4 files found in %s", source_dir)
+        return
+
     processed_notes = process_short_videos(
         source_dir=source_dir,
         max_duration_seconds=config.max_duration_seconds,
@@ -460,6 +411,13 @@ def main() -> None:
             note.video_path.name,
             note.transcription,
         )
+
+
+def main() -> None:
+    """Run the short-video note workflow for today's camera folder."""
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    run_video_notes_step(build_today_source_dir(), config=load_video_notes_config())
 
 
 def install_font_main() -> None:
