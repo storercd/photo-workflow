@@ -9,5 +9,5 @@ copy_verification = "basic"
 ignored_extensions = [".ctg", ".log", ".tmp"]
 
 [video_notes]
-max_duration_seconds = 10.0
+max_duration_seconds = 15.0
 transcription_model = "mlx-community/whisper-medium-mlx"
