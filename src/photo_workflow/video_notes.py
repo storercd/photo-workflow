@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import urllib.request
 from dataclasses import dataclass
 from datetime import date
@@ -43,6 +44,15 @@ DEFAULT_FONT_PATHS = (
 )
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_CONFIG_PATH = Path("photo-workflow.toml")
+
+
+@dataclass(frozen=True)
+class VideoNotesConfig:
+    """User-configurable settings for the short-video note workflow."""
+
+    camera_root: Path = DEFAULT_CAMERA_ROOT
+    max_duration_seconds: float = DEFAULT_MAX_DURATION_SECONDS
 
 
 @dataclass(frozen=True)
@@ -56,30 +66,65 @@ class ProcessedVideoNote:
 
 
 def build_today_source_dir(
-    *, today: date | None = None, camera_root: Path = DEFAULT_CAMERA_ROOT
+    *,
+    today: date | None = None,
+    camera_root: Path | None = None,
 ) -> Path:
     """Return the dated source directory for the current workflow run."""
 
     run_date = today or date.today()
-    return camera_root / run_date.strftime("%Y%m%d")
+    active_camera_root = camera_root or load_video_notes_config().camera_root
+    return active_camera_root / run_date.strftime("%Y%m%d")
+
+
+def load_video_notes_config(config_path: Path = DEFAULT_CONFIG_PATH) -> VideoNotesConfig:
+    """Load local workflow settings from TOML, falling back to defaults."""
+
+    if not config_path.exists():
+        return VideoNotesConfig()
+
+    with config_path.open("rb") as config_file:
+        config_data = tomllib.load(config_file)
+
+    video_notes_config = config_data.get("video_notes", {})
+    camera_root_value = video_notes_config.get("camera_root")
+    max_duration_value = video_notes_config.get("max_duration_seconds")
+
+    return VideoNotesConfig(
+        camera_root=(
+            Path(camera_root_value).expanduser()
+            if camera_root_value is not None
+            else DEFAULT_CAMERA_ROOT
+        ),
+        max_duration_seconds=(
+            float(max_duration_value)
+            if max_duration_value is not None
+            else DEFAULT_MAX_DURATION_SECONDS
+        ),
+    )
 
 
 def process_short_videos(
     source_dir: Path | None = None,
     *,
-    max_duration_seconds: float = DEFAULT_MAX_DURATION_SECONDS,
+    max_duration_seconds: float | None = None,
     transcription_model: str = DEFAULT_TRANSCRIPTION_MODEL,
 ) -> list[ProcessedVideoNote]:
     """Process short MP4 clips in the dated source directory."""
 
     active_source_dir = source_dir or build_today_source_dir()
+    active_max_duration_seconds = (
+        load_video_notes_config().max_duration_seconds
+        if max_duration_seconds is None
+        else max_duration_seconds
+    )
     if not active_source_dir.exists():
         raise FileNotFoundError(f"Source directory does not exist: {active_source_dir}")
 
     processed_notes: list[ProcessedVideoNote] = []
     for video_path in iter_mp4_files(active_source_dir):
         duration_seconds = probe_video_duration_seconds(video_path)
-        if duration_seconds >= max_duration_seconds:
+        if duration_seconds >= active_max_duration_seconds:
             continue
 
         transcription = transcribe_video(video_path, model=transcription_model)
@@ -389,17 +434,22 @@ def main() -> None:
     """Run the short-video note workflow for today's camera folder."""
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    source_dir = build_today_source_dir()
+    config = load_video_notes_config()
+    source_dir = build_today_source_dir(camera_root=config.camera_root)
     total_videos = len(iter_mp4_files(source_dir)) if source_dir.exists() else 0
-    processed_notes = process_short_videos(source_dir=source_dir)
+    processed_notes = process_short_videos(
+        source_dir=source_dir,
+        max_duration_seconds=config.max_duration_seconds,
+    )
     if not processed_notes:
         if total_videos == 0:
             LOGGER.info("no .mp4 files found in %s", source_dir)
         else:
             LOGGER.info(
-                "found %s .mp4 file(s) in %s, but none were shorter than 10 seconds",
+                "found %s .mp4 file(s) in %s, but none were shorter than %s seconds",
                 total_videos,
                 source_dir,
+                format_duration_seconds(config.max_duration_seconds),
             )
         return
 
@@ -418,6 +468,15 @@ def install_font_main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     installed_font_path = install_default_note_font()
     LOGGER.info("installed font at %s", installed_font_path)
+
+
+def format_duration_seconds(duration_seconds: float) -> str:
+    """Return a stable, human-readable duration string for logging."""
+
+    if duration_seconds.is_integer():
+        return str(int(duration_seconds))
+
+    return str(duration_seconds)
 
 
 if __name__ == "__main__":

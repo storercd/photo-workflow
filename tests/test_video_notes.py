@@ -15,6 +15,38 @@ def test_build_today_source_dir_uses_expected_dated_path() -> None:
     assert source_dir == Path("/tmp/camera/20260528")
 
 
+def test_load_video_notes_config_returns_defaults_when_config_is_missing(tmp_path: Path) -> None:
+    config = video_notes.load_video_notes_config(tmp_path / "missing.toml")
+
+    assert config.camera_root == video_notes.DEFAULT_CAMERA_ROOT
+    assert config.max_duration_seconds == video_notes.DEFAULT_MAX_DURATION_SECONDS
+
+
+def test_load_video_notes_config_reads_camera_root_from_toml(tmp_path: Path) -> None:
+    config_path = tmp_path / "photo-workflow.toml"
+    config_path.write_text(
+        '[video_notes]\ncamera_root = "~/camera-roll"\nmax_duration_seconds = 7.5\n'
+    )
+
+    config = video_notes.load_video_notes_config(config_path)
+
+    assert config.camera_root == Path("~/camera-roll").expanduser()
+    assert config.max_duration_seconds == 7.5
+
+
+def test_build_today_source_dir_uses_configured_camera_root(tmp_path: Path, monkeypatch) -> None:
+    configured_root = tmp_path / "camera"
+    monkeypatch.setattr(
+        video_notes,
+        "load_video_notes_config",
+        lambda: video_notes.VideoNotesConfig(camera_root=configured_root),
+    )
+
+    source_dir = video_notes.build_today_source_dir(today=date(2026, 5, 29))
+
+    assert source_dir == configured_root / "20260529"
+
+
 def test_process_short_videos_creates_note_for_short_mp4(
     tmp_path: Path,
     monkeypatch,
@@ -56,6 +88,31 @@ def test_process_short_videos_skips_long_mp4_files(
     assert not (tmp_path / "long.tif").exists()
 
 
+def test_process_short_videos_uses_configured_max_duration_when_not_provided(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    video_path = tmp_path / "clip.MP4"
+    video_path.write_bytes(b"video")
+
+    monkeypatch.setattr(video_notes, "probe_video_duration_seconds", lambda _: 8.0)
+    monkeypatch.setattr(
+        video_notes,
+        "load_video_notes_config",
+        lambda: video_notes.VideoNotesConfig(max_duration_seconds=9.0),
+    )
+    monkeypatch.setattr(video_notes, "transcribe_video", lambda *args, **kwargs: "hello world")
+
+    def fake_create_note_image(output_path: Path, transcription: str) -> None:
+        output_path.write_text(transcription)
+
+    monkeypatch.setattr(video_notes, "create_note_image", fake_create_note_image)
+
+    processed = video_notes.process_short_videos(tmp_path)
+
+    assert [item.output_path.name for item in processed] == ["clip.tif"]
+
+
 def test_main_reports_when_no_short_videos_are_processed(
     tmp_path: Path,
     monkeypatch,
@@ -63,14 +120,30 @@ def test_main_reports_when_no_short_videos_are_processed(
 ) -> None:
     (tmp_path / "long.MP4").write_bytes(b"video")
 
-    monkeypatch.setattr(video_notes, "build_today_source_dir", lambda: tmp_path)
-    monkeypatch.setattr(video_notes, "process_short_videos", lambda source_dir=None: [])
+    monkeypatch.setattr(
+        video_notes,
+        "load_video_notes_config",
+        lambda: video_notes.VideoNotesConfig(
+            camera_root=tmp_path.parent,
+            max_duration_seconds=12.5,
+        ),
+    )
+    monkeypatch.setattr(
+        video_notes,
+        "build_today_source_dir",
+        lambda today=None, camera_root=None: tmp_path,
+    )
+    monkeypatch.setattr(
+        video_notes,
+        "process_short_videos",
+        lambda source_dir=None, max_duration_seconds=None: [],
+    )
 
     with caplog.at_level("INFO"):
         video_notes.main()
 
     assert "found 1 .mp4 file(s)" in caplog.text
-    assert "none were shorter than 10 seconds" in caplog.text
+    assert "none were shorter than 12.5 seconds" in caplog.text
 
 
 def test_iter_mp4_files_matches_case_insensitive_extensions(tmp_path: Path) -> None:

@@ -29,6 +29,14 @@ By default it uses today's folder under:
 /Users/christopherstorer/working/camera/YYYYMMDD
 ```
 
+You can override that base folder with [photo-workflow.toml](photo-workflow.toml):
+
+```toml
+[video_notes]
+camera_root = "/Users/christopherstorer/working/camera"
+max_duration_seconds = 10.0
+```
+
 Run it with:
 
 ```bash

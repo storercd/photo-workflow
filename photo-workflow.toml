@@ -1,0 +1,3 @@
+[video_notes]
+camera_root = "/Users/christopherstorer/working/camera"
+max_duration_seconds = 10.0
