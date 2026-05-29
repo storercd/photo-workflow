@@ -45,6 +45,7 @@ card_mount_root = "/Volumes"
 low_disk_warning_gb = 30.0
 low_disk_warning_percent = 5.0
 copy_verification = "basic"
+ignored_extensions = [".ctg", ".log", ".tmp"]
 
 [video_notes]
 max_duration_seconds = 10.0
@@ -52,6 +53,7 @@ max_duration_seconds = 10.0
 
 `copy_verification = "basic"` checks file existence and size after copy. Set it
 to `"crc32"` to read both source and destination and compare CRC32 checksums.
+`ignored_extensions` skips known non-media sidecar files during copy and delete.
 
 Run it with:
 

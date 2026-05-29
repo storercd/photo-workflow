@@ -85,6 +85,41 @@ def test_run_memory_card_import_ignores_ctg_files(tmp_path: Path, monkeypatch) -
     assert ctg_path.exists()
 
 
+def test_run_memory_card_import_uses_configured_ignored_extensions(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    mount_root = tmp_path / "Volumes"
+    card_root = mount_root / "SDCARD"
+    dcim_root = card_root / "DCIM" / "100MEDIA"
+    dcim_root.mkdir(parents=True)
+    (dcim_root / "A001.CR3").write_bytes(b"raw")
+    ignored_path = dcim_root / "CARD.LOG"
+    ignored_path.write_bytes(b"camera-log")
+    target_dir = tmp_path / "camera" / "20260529"
+
+    monkeypatch.setattr(memory_card_copy, "eject_memory_card", lambda card_root: None)
+    usage = namedtuple("usage", ["total", "used", "free"])
+    monkeypatch.setattr(
+        memory_card_copy.shutil,
+        "disk_usage",
+        lambda _: usage(total=200 * 1024**3, used=100 * 1024**3, free=100 * 1024**3),
+    )
+
+    result = memory_card_copy.run_memory_card_import(
+        target_dir,
+        config=app_config.MemoryCardCopyConfig(
+            card_mount_root=mount_root,
+            ignored_extensions=(".log",),
+        ),
+    )
+
+    assert result is not None
+    assert result.imported_files == 1
+    assert sorted(path.name for path in target_dir.iterdir()) == ["A001.CR3"]
+    assert ignored_path.exists()
+
+
 def test_run_memory_card_import_stops_before_delete_when_verification_fails(
     tmp_path: Path,
     monkeypatch,

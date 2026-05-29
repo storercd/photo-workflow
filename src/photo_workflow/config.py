@@ -13,6 +13,7 @@ DEFAULT_CARD_MOUNT_ROOT = Path("/Volumes")
 DEFAULT_LOW_DISK_WARNING_GB = 30.0
 DEFAULT_LOW_DISK_WARNING_PERCENT = 5.0
 DEFAULT_COPY_VERIFICATION = "basic"
+DEFAULT_IGNORED_CARD_EXTENSIONS = (".ctg", ".log", ".tmp")
 DEFAULT_MAX_DURATION_SECONDS = 10.0
 VALID_COPY_VERIFICATION_METHODS = {"basic", "crc32"}
 
@@ -32,6 +33,7 @@ class MemoryCardCopyConfig:
     low_disk_warning_gb: float = DEFAULT_LOW_DISK_WARNING_GB
     low_disk_warning_percent: float = DEFAULT_LOW_DISK_WARNING_PERCENT
     copy_verification: str = DEFAULT_COPY_VERIFICATION
+    ignored_extensions: tuple[str, ...] = DEFAULT_IGNORED_CARD_EXTENSIONS
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,13 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             f"{sorted(VALID_COPY_VERIFICATION_METHODS)}"
         )
 
+    ignored_extensions = normalize_ignored_extensions(
+        memory_card_copy_config.get(
+            "ignored_extensions",
+            list(DEFAULT_IGNORED_CARD_EXTENSIONS),
+        )
+    )
+
     return AppConfig(
         workflow=WorkflowConfig(
             camera_root=Path(
@@ -96,6 +105,7 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
                 )
             ),
             copy_verification=copy_verification,
+            ignored_extensions=ignored_extensions,
         ),
         video_notes=VideoNotesConfig(
             max_duration_seconds=float(
@@ -138,3 +148,24 @@ def build_today_source_dir(
     run_date = today or date.today()
     active_camera_root = camera_root or load_workflow_config().camera_root
     return active_camera_root / run_date.strftime("%Y%m%d")
+
+
+def normalize_ignored_extensions(extensions: object) -> tuple[str, ...]:
+    """Return normalized ignored file extensions for card ingest."""
+
+    if not isinstance(extensions, list):
+        raise ValueError("memory_card_copy.ignored_extensions must be a TOML array")
+
+    normalized_extensions: list[str] = []
+    for extension in extensions:
+        if not isinstance(extension, str):
+            raise ValueError("memory_card_copy.ignored_extensions entries must be strings")
+
+        normalized_extension = extension.strip().lower()
+        if not normalized_extension:
+            raise ValueError("memory_card_copy.ignored_extensions cannot contain blanks")
+        if not normalized_extension.startswith("."):
+            normalized_extension = f".{normalized_extension}"
+        normalized_extensions.append(normalized_extension)
+
+    return tuple(dict.fromkeys(normalized_extensions))

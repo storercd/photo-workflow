@@ -23,6 +23,10 @@ def test_load_config_returns_defaults_when_config_is_missing(tmp_path: Path) -> 
     assert (
         config.memory_card_copy.copy_verification == app_config.DEFAULT_COPY_VERIFICATION
     )
+    assert (
+        config.memory_card_copy.ignored_extensions
+        == app_config.DEFAULT_IGNORED_CARD_EXTENSIONS
+    )
     assert config.video_notes.max_duration_seconds == app_config.DEFAULT_MAX_DURATION_SECONDS
 
 
@@ -30,7 +34,8 @@ def test_load_config_reads_sections_from_toml(tmp_path: Path) -> None:
     config_path = tmp_path / "photo-workflow.toml"
     config_path.write_text(
         '[workflow]\ncamera_root = "~/camera-roll"\n\n'
-        '[memory_card_copy]\ncopy_verification = "crc32"\n\n'
+        '[memory_card_copy]\ncopy_verification = "crc32"\n'
+        'ignored_extensions = ["ctg", ".LOG"]\n\n'
         '[video_notes]\nmax_duration_seconds = 7.5\n'
     )
 
@@ -38,6 +43,7 @@ def test_load_config_reads_sections_from_toml(tmp_path: Path) -> None:
 
     assert config.workflow.camera_root == Path("~/camera-roll").expanduser()
     assert config.memory_card_copy.copy_verification == "crc32"
+    assert config.memory_card_copy.ignored_extensions == (".ctg", ".log")
     assert config.video_notes.max_duration_seconds == 7.5
 
 

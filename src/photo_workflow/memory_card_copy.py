@@ -18,7 +18,6 @@ from photo_workflow.config import (
 
 DEFAULT_COPY_PROGRESS_INTERVAL = 50
 DEFAULT_CARD_MARKER_DIRNAME = "DCIM"
-IGNORED_CARD_SUFFIXES = {".ctg"}
 LOGGER = logging.getLogger(__name__)
 
 
@@ -45,7 +44,7 @@ def run_memory_card_import(
         LOGGER.info("no memory card detected in %s", config.card_mount_root)
         return None
 
-    source_files = iter_memory_card_files(card_root)
+    source_files = iter_memory_card_files(card_root, ignored_extensions=config.ignored_extensions)
     LOGGER.info("detected memory card at %s", card_root)
     LOGGER.info("found %s importable file(s) on the memory card", len(source_files))
 
@@ -80,14 +79,21 @@ def find_memory_card_mount(mount_root: Path) -> Path | None:
     return None
 
 
-def iter_memory_card_files(card_root: Path) -> list[Path]:
+def iter_memory_card_files(
+    card_root: Path,
+    *,
+    ignored_extensions: tuple[str, ...] | None = None,
+) -> list[Path]:
     """Return all regular, non-hidden files under the mounted memory card."""
 
+    active_ignored_extensions = set(
+        ignored_extensions or load_memory_card_copy_config().ignored_extensions
+    )
     return sorted(
         path
         for path in card_root.rglob("*")
         if path.is_file()
-        and path.suffix.lower() not in IGNORED_CARD_SUFFIXES
+        and path.suffix.lower() not in active_ignored_extensions
         and not is_hidden_card_path(path, card_root=card_root)
     )
 
