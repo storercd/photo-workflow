@@ -49,6 +49,7 @@ ignored_extensions = [".ctg", ".log", ".tmp"]
 
 [video_notes]
 max_duration_seconds = 10.0
+transcription_model = "mlx-community/whisper-medium-mlx"
 ```
 
 `copy_verification = "basic"` checks file existence and size after copy. Set it
@@ -66,6 +67,17 @@ Run the steps individually with:
 ```bash
 uv run photo-workflow-memory-card-copy
 uv run photo-workflow-short-video-notes
+uv run photo-workflow-benchmark-transcription
+```
+
+The benchmark command defaults to `video-test/` and compares `tiny`, `small`,
+and `medium` MLX Whisper models. You can override both the folder and models:
+
+```bash
+uv run photo-workflow-benchmark-transcription video-test \
+	mlx-community/whisper-tiny-mlx \
+	mlx-community/whisper-small-mlx \
+	mlx-community/whisper-medium-mlx
 ```
 
 This workflow requires `ffmpeg` and `ffprobe` to be available on `PATH`.

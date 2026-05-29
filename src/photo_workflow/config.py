@@ -15,6 +15,7 @@ DEFAULT_LOW_DISK_WARNING_PERCENT = 5.0
 DEFAULT_COPY_VERIFICATION = "basic"
 DEFAULT_IGNORED_CARD_EXTENSIONS = (".ctg", ".log", ".tmp")
 DEFAULT_MAX_DURATION_SECONDS = 10.0
+DEFAULT_TRANSCRIPTION_MODEL = "mlx-community/whisper-tiny-mlx"
 VALID_COPY_VERIFICATION_METHODS = {"basic", "crc32"}
 
 
@@ -41,6 +42,7 @@ class VideoNotesConfig:
     """Settings specific to video-note generation."""
 
     max_duration_seconds: float = DEFAULT_MAX_DURATION_SECONDS
+    transcription_model: str = DEFAULT_TRANSCRIPTION_MODEL
 
 
 @dataclass(frozen=True)
@@ -120,7 +122,13 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
                     "max_duration_seconds",
                     DEFAULT_MAX_DURATION_SECONDS,
                 )
-            )
+            ),
+            transcription_model=str(
+                video_notes_config.get(
+                    "transcription_model",
+                    DEFAULT_TRANSCRIPTION_MODEL,
+                )
+            ),
         ),
     )
 

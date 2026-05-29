@@ -32,6 +32,7 @@ def test_load_config_returns_defaults_when_config_is_missing(tmp_path: Path) -> 
         == app_config.DEFAULT_IGNORED_CARD_EXTENSIONS
     )
     assert config.video_notes.max_duration_seconds == app_config.DEFAULT_MAX_DURATION_SECONDS
+    assert config.video_notes.transcription_model == app_config.DEFAULT_TRANSCRIPTION_MODEL
 
 
 def test_load_config_reads_sections_from_toml(tmp_path: Path) -> None:
@@ -42,6 +43,7 @@ def test_load_config_reads_sections_from_toml(tmp_path: Path) -> None:
         '[memory_card_copy]\ncopy_verification = "crc32"\n'
         'ignored_extensions = ["ctg", ".LOG"]\n\n'
         '[video_notes]\nmax_duration_seconds = 7.5\n'
+        'transcription_model = "mlx-community/whisper-medium-mlx"\n'
     )
 
     config = app_config.load_config(config_path)
@@ -50,6 +52,7 @@ def test_load_config_reads_sections_from_toml(tmp_path: Path) -> None:
     assert config.memory_card_copy.copy_verification == "crc32"
     assert config.memory_card_copy.ignored_extensions == (".ctg", ".log")
     assert config.video_notes.max_duration_seconds == 7.5
+    assert config.video_notes.transcription_model == "mlx-community/whisper-medium-mlx"
 
 
 def test_build_today_source_dir_uses_configured_camera_root(tmp_path: Path, monkeypatch) -> None:
@@ -139,6 +142,41 @@ def test_process_short_videos_uses_configured_max_duration_when_not_provided(
     assert [item.output_path.name for item in processed] == ["clip.tif"]
 
 
+def test_process_short_videos_uses_configured_transcription_model_when_not_provided(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify video processing uses the configured transcription model by default."""
+    video_path = tmp_path / "clip.MP4"
+    video_path.write_bytes(b"video")
+    captured_models: list[str] = []
+
+    monkeypatch.setattr(video_notes, "probe_video_duration_seconds", lambda _: 4.0)
+    monkeypatch.setattr(
+        video_notes,
+        "load_video_notes_config",
+        lambda config_path=app_config.DEFAULT_CONFIG_PATH: app_config.VideoNotesConfig(
+            max_duration_seconds=9.0,
+            transcription_model="mlx-community/whisper-medium-mlx",
+        ),
+    )
+
+    def fake_transcribe_video(video_path: Path, *, model: str) -> str:
+        captured_models.append(model)
+        return "hello world"
+
+    def fake_create_note_image(output_path: Path, transcription: str) -> None:
+        output_path.write_text(transcription)
+
+    monkeypatch.setattr(video_notes, "transcribe_video", fake_transcribe_video)
+    monkeypatch.setattr(video_notes, "create_note_image", fake_create_note_image)
+
+    processed = video_notes.process_short_videos(tmp_path)
+
+    assert [item.output_path.name for item in processed] == ["clip.tif"]
+    assert captured_models == ["mlx-community/whisper-medium-mlx"]
+
+
 def test_main_reports_when_no_short_videos_are_processed(
     tmp_path: Path,
     monkeypatch,
@@ -155,12 +193,13 @@ def test_main_reports_when_no_short_videos_are_processed(
         "load_video_notes_config",
         lambda config_path=app_config.DEFAULT_CONFIG_PATH: app_config.VideoNotesConfig(
             max_duration_seconds=12.5,
+            transcription_model="mlx-community/whisper-medium-mlx",
         ),
     )
     monkeypatch.setattr(
         video_notes,
         "process_short_videos",
-        lambda source_dir=None, max_duration_seconds=None: [],
+        lambda source_dir=None, max_duration_seconds=None, transcription_model=None: [],
     )
     (tmp_path / "long.MP4").write_bytes(b"video")
 
@@ -169,6 +208,75 @@ def test_main_reports_when_no_short_videos_are_processed(
 
     assert "found 1 .mp4 file(s)" in caplog.text
     assert "none were shorter than 12.5 seconds" in caplog.text
+
+
+def test_run_video_notes_step_logs_transcription_model(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    """Verify the video notes step logs the configured transcription model."""
+    monkeypatch.setattr(
+        video_notes,
+        "process_short_videos",
+        lambda source_dir=None, max_duration_seconds=None, transcription_model=None: [],
+    )
+
+    with caplog.at_level("INFO"):
+        video_notes.run_video_notes_step(
+            tmp_path,
+            config=app_config.VideoNotesConfig(
+                max_duration_seconds=10.0,
+                transcription_model="mlx-community/whisper-medium-mlx",
+            ),
+        )
+
+    assert "using transcription model mlx-community/whisper-medium-mlx" in caplog.text
+
+
+def test_benchmark_transcriptions_returns_results_for_each_file_and_model(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify transcription benchmarking runs every requested model for each MP4 clip."""
+    (tmp_path / "clip1.MP4").write_bytes(b"video")
+    (tmp_path / "clip2.mp4").write_bytes(b"video")
+    recorded_calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        video_notes,
+        "transcribe_video",
+        lambda video_path, *, model: recorded_calls.append((video_path.name, model))
+        or f"{video_path.name}:{model}",
+    )
+
+    results = video_notes.benchmark_transcriptions(
+        tmp_path,
+        models=("mlx-community/whisper-tiny-mlx", "mlx-community/whisper-medium-mlx"),
+    )
+
+    assert [(result.video_path.name, result.model) for result in results] == [
+        ("clip1.MP4", "mlx-community/whisper-tiny-mlx"),
+        ("clip1.MP4", "mlx-community/whisper-medium-mlx"),
+        ("clip2.mp4", "mlx-community/whisper-tiny-mlx"),
+        ("clip2.mp4", "mlx-community/whisper-medium-mlx"),
+    ]
+    assert recorded_calls == [
+        ("clip1.MP4", "mlx-community/whisper-tiny-mlx"),
+        ("clip1.MP4", "mlx-community/whisper-medium-mlx"),
+        ("clip2.mp4", "mlx-community/whisper-tiny-mlx"),
+        ("clip2.mp4", "mlx-community/whisper-medium-mlx"),
+    ]
+
+
+def test_parse_benchmark_args_supports_source_dir_and_model_overrides() -> None:
+    """Verify benchmark CLI arguments override the default folder and model list."""
+    source_dir, models = video_notes.parse_benchmark_args(
+        ["custom-test-dir", "model-a", "model-b"]
+    )
+
+    assert source_dir == Path("custom-test-dir")
+    assert models == ("model-a", "model-b")
 
 
 def test_iter_mp4_files_matches_case_insensitive_extensions(tmp_path: Path) -> None:

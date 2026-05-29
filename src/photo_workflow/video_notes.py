@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,10 +17,20 @@ from pathlib import Path
 import mlx_whisper
 from PIL import Image, ImageDraw, ImageFont
 
-from photo_workflow.config import VideoNotesConfig, build_today_source_dir, load_video_notes_config
+from photo_workflow.config import (
+    DEFAULT_TRANSCRIPTION_MODEL,
+    VideoNotesConfig,
+    build_today_source_dir,
+    load_video_notes_config,
+)
 
 DEFAULT_OUTPUT_EXTENSION = ".tif"
-DEFAULT_TRANSCRIPTION_MODEL = "mlx-community/whisper-tiny"
+DEFAULT_BENCHMARK_SOURCE_DIR = Path("video-test")
+DEFAULT_BENCHMARK_TRANSCRIPTION_MODELS = (
+    "mlx-community/whisper-tiny-mlx",
+    "mlx-community/whisper-small-mlx",
+    "mlx-community/whisper-medium-mlx",
+)
 DEFAULT_TEXT_SCALE_FACTOR = 0.5
 DEFAULT_FONT_CACHE_ENV_VAR = "PHOTO_WORKFLOW_FONT_CACHE_DIR"
 DEFAULT_FONT_PATH_ENV_VAR = "PHOTO_WORKFLOW_FONT_PATH"
@@ -54,11 +66,21 @@ class ProcessedVideoNote:
     transcription: str
 
 
+@dataclass(frozen=True)
+class TranscriptionBenchmarkResult:
+    """Result for a transcription benchmark run."""
+
+    video_path: Path
+    model: str
+    elapsed_seconds: float
+    transcription: str
+
+
 def process_short_videos(
     source_dir: Path | None = None,
     *,
     max_duration_seconds: float | None = None,
-    transcription_model: str = DEFAULT_TRANSCRIPTION_MODEL,
+    transcription_model: str | None = None,
 ) -> list[ProcessedVideoNote]:
     """
     Process short MP4 clips in the dated source directory.
@@ -75,6 +97,11 @@ def process_short_videos(
         if max_duration_seconds is None
         else max_duration_seconds
     )
+    active_transcription_model = (
+        load_video_notes_config().transcription_model
+        if transcription_model is None
+        else transcription_model
+    )
     if not active_source_dir.exists():
         raise FileNotFoundError(f"Source directory does not exist: {active_source_dir}")
 
@@ -84,7 +111,7 @@ def process_short_videos(
         if duration_seconds >= active_max_duration_seconds:
             continue
 
-        transcription = transcribe_video(video_path, model=transcription_model)
+        transcription = transcribe_video(video_path, model=active_transcription_model)
         output_path = video_path.with_suffix(DEFAULT_OUTPUT_EXTENSION)
         create_note_image(output_path, transcription)
         copy_file_timestamp(video_path, output_path)
@@ -432,6 +459,7 @@ def require_tool(name: str) -> str:
 
 def run_video_notes_step(source_dir: Path, *, config: VideoNotesConfig) -> None:
     """Process short videos in the dated source directory."""
+    LOGGER.info("using transcription model %s", config.transcription_model)
     total_videos = len(iter_mp4_files(source_dir)) if source_dir.exists() else 0
     if not source_dir.exists():
         LOGGER.info("no .mp4 files found in %s", source_dir)
@@ -440,6 +468,7 @@ def run_video_notes_step(source_dir: Path, *, config: VideoNotesConfig) -> None:
     processed_notes = process_short_videos(
         source_dir=source_dir,
         max_duration_seconds=config.max_duration_seconds,
+        transcription_model=config.transcription_model,
     )
     if not processed_notes:
         if total_videos == 0:
@@ -466,6 +495,89 @@ def main() -> None:
     """Run the short-video note workflow for today's camera folder."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     run_video_notes_step(build_today_source_dir(), config=load_video_notes_config())
+
+
+def benchmark_transcriptions(
+    source_dir: Path,
+    *,
+    models: tuple[str, ...] = DEFAULT_BENCHMARK_TRANSCRIPTION_MODELS,
+) -> list[TranscriptionBenchmarkResult]:
+    """
+    Benchmark multiple transcription models against a folder of MP4 files.
+
+    Returns:
+        Benchmark results for each file and model combination.
+
+    Raises:
+        FileNotFoundError: If the benchmark source directory does not exist.
+    """
+    if not source_dir.exists():
+        raise FileNotFoundError(f"Benchmark source directory does not exist: {source_dir}")
+
+    results: list[TranscriptionBenchmarkResult] = []
+    for video_path in iter_mp4_files(source_dir):
+        for model in models:
+            start_time = time.perf_counter()
+            transcription = transcribe_video(video_path, model=model)
+            elapsed_seconds = time.perf_counter() - start_time
+            results.append(
+                TranscriptionBenchmarkResult(
+                    video_path=video_path,
+                    model=model,
+                    elapsed_seconds=elapsed_seconds,
+                    transcription=transcription,
+                )
+            )
+
+    return results
+
+
+def benchmark_main() -> None:
+    """Run transcription benchmarks for a folder of test clips."""
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    source_dir, models = parse_benchmark_args()
+    results = benchmark_transcriptions(source_dir, models=models)
+    LOGGER.info(
+        "benchmarking %s file(s) across %s model(s) in %s",
+        len(iter_mp4_files(source_dir)),
+        len(models),
+        source_dir,
+    )
+    for result in results:
+        LOGGER.info(
+            "%s | %s | %.2fs | %s",
+            result.video_path.name,
+            result.model,
+            result.elapsed_seconds,
+            result.transcription,
+        )
+
+
+def parse_benchmark_args(argv: list[str] | None = None) -> tuple[Path, tuple[str, ...]]:
+    """
+    Parse CLI arguments for transcription benchmarking.
+
+    Returns:
+        The source directory and transcription models to benchmark.
+    """
+    parser = argparse.ArgumentParser(
+        prog="photo-workflow-benchmark-transcription",
+        description="Benchmark multiple transcription models against a folder of MP4 clips.",
+    )
+    parser.add_argument(
+        "source_dir",
+        nargs="?",
+        default=str(DEFAULT_BENCHMARK_SOURCE_DIR),
+        help="Directory containing MP4 files to benchmark.",
+    )
+    parser.add_argument(
+        "models",
+        nargs="*",
+        default=list(DEFAULT_BENCHMARK_TRANSCRIPTION_MODELS),
+        help="Model repo names to benchmark.",
+    )
+    parsed_args = parser.parse_args(argv)
+    return Path(parsed_args.source_dir), tuple(parsed_args.models)
 
 
 def install_font_main() -> None:

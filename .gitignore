@@ -7,3 +7,5 @@ dist/
 build/
 *.egg-info/
 .venv/
+.DS_Store
+video-test/
