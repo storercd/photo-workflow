@@ -1,3 +1,5 @@
+"""Workflow orchestration tests."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +9,7 @@ from photo_workflow import workflow
 
 
 def test_main_runs_memory_card_import_before_video_notes(tmp_path: Path, monkeypatch) -> None:
+    """Verify the full workflow runs card import before video note generation."""
     source_dir = tmp_path / "camera" / "20260529"
     call_order: list[str] = []
 

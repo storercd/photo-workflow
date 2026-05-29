@@ -60,8 +60,15 @@ def process_short_videos(
     max_duration_seconds: float | None = None,
     transcription_model: str = DEFAULT_TRANSCRIPTION_MODEL,
 ) -> list[ProcessedVideoNote]:
-    """Process short MP4 clips in the dated source directory."""
+    """
+    Process short MP4 clips in the dated source directory.
 
+    Returns:
+        The processed note results for clips shorter than the configured threshold.
+
+    Raises:
+        FileNotFoundError: If the source directory does not exist.
+    """
     active_source_dir = source_dir or build_today_source_dir()
     active_max_duration_seconds = (
         load_video_notes_config().max_duration_seconds
@@ -96,7 +103,6 @@ def process_short_videos(
 
 def iter_mp4_files(source_dir: Path) -> list[Path]:
     """Return MP4 files in the source directory, regardless of extension case."""
-
     return sorted(
         path
         for path in source_dir.iterdir()
@@ -105,8 +111,12 @@ def iter_mp4_files(source_dir: Path) -> list[Path]:
 
 
 def probe_video_duration_seconds(video_path: Path) -> float:
-    """Return the clip duration using ffprobe."""
+    """
+    Return the clip duration using ffprobe.
 
+    Returns:
+        The clip duration in seconds.
+    """
     ffprobe_path = require_tool("ffprobe")
     result = subprocess.run(
         [
@@ -127,8 +137,12 @@ def probe_video_duration_seconds(video_path: Path) -> float:
 
 
 def transcribe_video(video_path: Path, *, model: str = DEFAULT_TRANSCRIPTION_MODEL) -> str:
-    """Extract mono audio and return a normalized transcription."""
+    """
+    Extract mono audio and return a normalized transcription.
 
+    Returns:
+        The normalized transcription text, or a fallback marker when no speech is detected.
+    """
     ffmpeg_path = require_tool("ffmpeg")
     with tempfile.TemporaryDirectory(prefix="photo-workflow-") as tmp_dir:
         audio_path = Path(tmp_dir) / f"{video_path.stem}.wav"
@@ -159,7 +173,6 @@ def transcribe_video(video_path: Path, *, model: str = DEFAULT_TRANSCRIPTION_MOD
 
 def create_note_image(output_path: Path, transcription: str) -> None:
     """Render a note image with a red frame and centered transcription."""
-
     width = DEFAULT_NOTE_WIDTH
     height = DEFAULT_NOTE_HEIGHT
     border_width = DEFAULT_NOTE_BORDER_WIDTH
@@ -201,8 +214,12 @@ def build_center_text_layout(
     image_size: tuple[int, int],
     border_width: int,
 ) -> tuple[ImageFont.ImageFont | ImageFont.FreeTypeFont, str, int]:
-    """Find the largest fitting layout, then render at a scaled-down size."""
+    """
+    Find the largest fitting layout, then render at a scaled-down size.
 
+    Returns:
+        The chosen font, wrapped text, and line spacing for rendering.
+    """
     width, height = image_size
     max_text_width = width - (border_width * DEFAULT_TEXT_MARGIN_MULTIPLIER)
     max_text_height = height - (border_width * DEFAULT_TEXT_MARGIN_MULTIPLIER)
@@ -269,8 +286,12 @@ def wrap_text_to_pixel_width(
     max_text_width: int,
     draw: ImageDraw.ImageDraw,
 ) -> str:
-    """Wrap text by measured pixel width instead of character count."""
+    """
+    Wrap text by measured pixel width instead of character count.
 
+    Returns:
+        The wrapped text separated by newline characters.
+    """
     words = text.split()
     if not words:
         return text
@@ -292,8 +313,12 @@ def wrap_text_to_pixel_width(
 
 
 def load_note_font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
-    """Load a large scalable font for note rendering."""
+    """
+    Load a large scalable font for note rendering.
 
+    Returns:
+        A usable font object for note rendering.
+    """
     for font_path in iter_note_font_paths():
         try:
             return ImageFont.truetype(str(font_path), size=size)
@@ -307,8 +332,12 @@ def load_note_font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
 
 
 def iter_note_font_paths() -> list[Path]:
-    """Return local font candidates in preference order."""
+    """
+    Return local font candidates in preference order.
 
+    Returns:
+        Candidate font paths ordered by preference.
+    """
     font_paths: list[Path] = []
     configured_font_path = os.environ.get(DEFAULT_FONT_PATH_ENV_VAR)
     if configured_font_path:
@@ -324,8 +353,12 @@ def iter_note_font_paths() -> list[Path]:
 
 
 def build_font_cache_dir() -> Path:
-    """Return the local cache directory for downloaded fonts."""
+    """
+    Return the local cache directory for downloaded fonts.
 
+    Returns:
+        The directory used to cache downloaded fonts.
+    """
     configured_cache_dir = os.environ.get(DEFAULT_FONT_CACHE_ENV_VAR)
     if configured_cache_dir:
         return Path(configured_cache_dir).expanduser()
@@ -337,8 +370,12 @@ def build_font_cache_dir() -> Path:
 
 
 def build_cached_font_path() -> Path:
-    """Return the path of the project's cached default font."""
+    """
+    Return the path of the project's cached default font.
 
+    Returns:
+        The full path to the cached default font file.
+    """
     return build_font_cache_dir() / DEFAULT_DOWNLOADED_FONT_FILENAME
 
 
@@ -347,8 +384,15 @@ def install_default_note_font(
     *,
     force: bool = False,
 ) -> Path:
-    """Download and cache the default note font once for later runs."""
+    """
+    Download and cache the default note font once for later runs.
 
+    Returns:
+        The installed font path.
+
+    Raises:
+        ValueError: If the downloaded font payload is empty.
+    """
     target_path = destination or build_cached_font_path()
     if target_path.exists() and not force:
         return target_path
@@ -366,14 +410,20 @@ def install_default_note_font(
 
 def copy_file_timestamp(source_path: Path, target_path: Path) -> None:
     """Copy atime and mtime from the source file to the generated file."""
-
     source_stat = source_path.stat()
     os.utime(target_path, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
 
 
 def require_tool(name: str) -> str:
-    """Return the full path to a required external binary."""
+    """
+    Return the full path to a required external binary.
 
+    Returns:
+        The resolved executable path.
+
+    Raises:
+        FileNotFoundError: If the required executable is not available on `PATH`.
+    """
     tool_path = shutil.which(name)
     if tool_path is None:
         raise FileNotFoundError(f"Required tool not found on PATH: {name}")
@@ -382,7 +432,6 @@ def require_tool(name: str) -> str:
 
 def run_video_notes_step(source_dir: Path, *, config: VideoNotesConfig) -> None:
     """Process short videos in the dated source directory."""
-
     total_videos = len(iter_mp4_files(source_dir)) if source_dir.exists() else 0
     if not source_dir.exists():
         LOGGER.info("no .mp4 files found in %s", source_dir)
@@ -415,14 +464,12 @@ def run_video_notes_step(source_dir: Path, *, config: VideoNotesConfig) -> None:
 
 def main() -> None:
     """Run the short-video note workflow for today's camera folder."""
-
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     run_video_notes_step(build_today_source_dir(), config=load_video_notes_config())
 
 
 def install_font_main() -> None:
     """Download and cache the default note font for later workflow runs."""
-
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     installed_font_path = install_default_note_font()
     LOGGER.info("installed font at %s", installed_font_path)
@@ -430,7 +477,6 @@ def install_font_main() -> None:
 
 def format_duration_seconds(duration_seconds: float) -> str:
     """Return a stable, human-readable duration string for logging."""
-
     if duration_seconds.is_integer():
         return str(int(duration_seconds))
 

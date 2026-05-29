@@ -53,8 +53,15 @@ class AppConfig:
 
 
 def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
-    """Load workflow settings from TOML, falling back to defaults."""
+    """
+    Load workflow settings from TOML, falling back to defaults.
 
+    Returns:
+        The fully resolved application configuration.
+
+    Raises:
+        ValueError: If the configured copy verification mode or ignored extensions are invalid.
+    """
     if not config_path.exists():
         return AppConfig()
 
@@ -120,7 +127,6 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
 
 def load_workflow_config(config_path: Path = DEFAULT_CONFIG_PATH) -> WorkflowConfig:
     """Return the shared workflow configuration."""
-
     return load_config(config_path).workflow
 
 
@@ -128,13 +134,11 @@ def load_memory_card_copy_config(
     config_path: Path = DEFAULT_CONFIG_PATH,
 ) -> MemoryCardCopyConfig:
     """Return the memory-card copy configuration."""
-
     return load_config(config_path).memory_card_copy
 
 
 def load_video_notes_config(config_path: Path = DEFAULT_CONFIG_PATH) -> VideoNotesConfig:
     """Return the video-notes configuration."""
-
     return load_config(config_path).video_notes
 
 
@@ -144,15 +148,21 @@ def build_today_source_dir(
     camera_root: Path | None = None,
 ) -> Path:
     """Return the dated source directory for the current workflow run."""
-
     run_date = today or date.today()
     active_camera_root = camera_root or load_workflow_config().camera_root
     return active_camera_root / run_date.strftime("%Y%m%d")
 
 
 def normalize_ignored_extensions(extensions: object) -> tuple[str, ...]:
-    """Return normalized ignored file extensions for card ingest."""
+    """
+    Return normalized ignored file extensions for card ingest.
 
+    Returns:
+        A normalized, de-duplicated tuple of lowercase file extensions.
+
+    Raises:
+        ValueError: If the configured extensions are not a list of non-empty strings.
+    """
     if not isinstance(extensions, list):
         raise ValueError("memory_card_copy.ignored_extensions must be a TOML array")
 

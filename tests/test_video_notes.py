@@ -1,3 +1,5 @@
+"""Video note and shared config tests."""
+
 from __future__ import annotations
 
 from datetime import date
@@ -8,6 +10,7 @@ from photo_workflow import video_notes
 
 
 def test_build_today_source_dir_uses_expected_dated_path() -> None:
+    """Verify the dated source directory format uses YYYYMMDD."""
     source_dir = app_config.build_today_source_dir(
         today=date(2026, 5, 28),
         camera_root=Path("/tmp/camera"),
@@ -17,6 +20,7 @@ def test_build_today_source_dir_uses_expected_dated_path() -> None:
 
 
 def test_load_config_returns_defaults_when_config_is_missing(tmp_path: Path) -> None:
+    """Verify missing config files fall back to default settings."""
     config = app_config.load_config(tmp_path / "missing.toml")
 
     assert config.workflow.camera_root == app_config.DEFAULT_CAMERA_ROOT
@@ -31,6 +35,7 @@ def test_load_config_returns_defaults_when_config_is_missing(tmp_path: Path) -> 
 
 
 def test_load_config_reads_sections_from_toml(tmp_path: Path) -> None:
+    """Verify TOML settings are loaded and normalized across config sections."""
     config_path = tmp_path / "photo-workflow.toml"
     config_path.write_text(
         '[workflow]\ncamera_root = "~/camera-roll"\n\n'
@@ -48,6 +53,7 @@ def test_load_config_reads_sections_from_toml(tmp_path: Path) -> None:
 
 
 def test_build_today_source_dir_uses_configured_camera_root(tmp_path: Path, monkeypatch) -> None:
+    """Verify the shared workflow camera root controls the dated source path."""
     configured_root = tmp_path / "camera"
     monkeypatch.setattr(
         app_config,
@@ -66,6 +72,7 @@ def test_process_short_videos_creates_note_for_short_mp4(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    """Verify short clips generate note images with copied timestamps."""
     video_path = tmp_path / "clip.MP4"
     video_path.write_bytes(b"video")
     expected_timestamp = 1_717_171_717_000_000_000
@@ -91,6 +98,7 @@ def test_process_short_videos_skips_long_mp4_files(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    """Verify clips at or above the duration limit are skipped."""
     video_path = tmp_path / "long.MP4"
     video_path.write_bytes(b"video")
 
@@ -107,6 +115,7 @@ def test_process_short_videos_uses_configured_max_duration_when_not_provided(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    """Verify video processing uses the configured duration limit by default."""
     video_path = tmp_path / "clip.MP4"
     video_path.write_bytes(b"video")
 
@@ -135,6 +144,7 @@ def test_main_reports_when_no_short_videos_are_processed(
     monkeypatch,
     caplog,
 ) -> None:
+    """Verify the CLI logs when no videos qualify for note generation."""
     monkeypatch.setattr(
         video_notes,
         "build_today_source_dir",
@@ -162,6 +172,7 @@ def test_main_reports_when_no_short_videos_are_processed(
 
 
 def test_iter_mp4_files_matches_case_insensitive_extensions(tmp_path: Path) -> None:
+    """Verify MP4 discovery is case-insensitive."""
     (tmp_path / "a.MP4").write_bytes(b"video")
     (tmp_path / "b.mp4").write_bytes(b"video")
     (tmp_path / "c.Mov").write_bytes(b"video")
@@ -172,6 +183,7 @@ def test_iter_mp4_files_matches_case_insensitive_extensions(tmp_path: Path) -> N
 
 
 def test_build_center_text_layout_uses_larger_font_for_shorter_text() -> None:
+    """Verify shorter text layouts can use larger fonts than longer text."""
     short_font, _, _ = video_notes.build_center_text_layout(
         "Peach",
         image_size=(video_notes.DEFAULT_NOTE_WIDTH, video_notes.DEFAULT_NOTE_HEIGHT),
@@ -188,6 +200,7 @@ def test_build_center_text_layout_uses_larger_font_for_shorter_text() -> None:
 
 
 def test_build_center_text_layout_applies_text_scale_factor(monkeypatch) -> None:
+    """Verify the configured text scale factor affects the chosen font size."""
     sample_text = "Out of focus, I'm a point."
 
     monkeypatch.setattr(video_notes, "DEFAULT_TEXT_SCALE_FACTOR", 0.5)
@@ -211,6 +224,7 @@ def test_iter_note_font_paths_prefers_configured_then_system_then_cached_fonts(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    """Verify font discovery prefers configured, system, then cached fonts."""
     configured_font_path = tmp_path / "configured.ttf"
     cached_font_path = tmp_path / "cache" / video_notes.DEFAULT_DOWNLOADED_FONT_FILENAME
     configured_font_path.write_bytes(b"configured")
@@ -231,6 +245,7 @@ def test_install_default_note_font_downloads_into_cache(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    """Verify the default note font download is written to the target path."""
     destination = tmp_path / video_notes.DEFAULT_DOWNLOADED_FONT_FILENAME
 
     class FakeResponse:

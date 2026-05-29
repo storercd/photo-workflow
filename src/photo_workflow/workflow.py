@@ -11,7 +11,6 @@ from photo_workflow.video_notes import run_video_notes_step
 
 def main() -> None:
     """Run the configured workflow steps in order."""
-
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     config = load_config()
     source_dir = build_today_source_dir(camera_root=config.workflow.camera_root)

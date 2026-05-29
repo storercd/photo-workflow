@@ -1,3 +1,5 @@
+"""Memory card copy workflow tests."""
+
 from __future__ import annotations
 
 from collections import namedtuple
@@ -10,6 +12,7 @@ from photo_workflow import memory_card_copy
 
 
 def test_find_memory_card_mount_returns_volume_with_dcim(tmp_path: Path) -> None:
+    """Verify card detection uses the presence of a DCIM directory."""
     mount_root = tmp_path / "Volumes"
     (mount_root / "Macintosh HD").mkdir(parents=True)
     card_root = mount_root / "UNTITLED"
@@ -25,6 +28,7 @@ def test_run_memory_card_import_copies_flattens_and_cleans_card(
     monkeypatch,
     caplog,
 ) -> None:
+    """Verify ingest copies media files, flattens paths, and cleans the card."""
     mount_root = tmp_path / "Volumes"
     card_root = mount_root / "SDCARD"
     dcim_root = card_root / "DCIM" / "100MEDIA"
@@ -57,6 +61,7 @@ def test_run_memory_card_import_copies_flattens_and_cleans_card(
 
 
 def test_run_memory_card_import_ignores_ctg_files(tmp_path: Path, monkeypatch) -> None:
+    """Verify default ignored Canon catalog files stay on the memory card."""
     mount_root = tmp_path / "Volumes"
     card_root = mount_root / "SDCARD"
     dcim_root = card_root / "DCIM" / "100MEDIA"
@@ -89,6 +94,7 @@ def test_run_memory_card_import_uses_configured_ignored_extensions(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    """Verify configured ignored extensions are skipped during ingest."""
     mount_root = tmp_path / "Volumes"
     card_root = mount_root / "SDCARD"
     dcim_root = card_root / "DCIM" / "100MEDIA"
@@ -124,6 +130,7 @@ def test_run_memory_card_import_stops_before_delete_when_verification_fails(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    """Verify a failed verification leaves source files in place and skips eject."""
     mount_root = tmp_path / "Volumes"
     card_root = mount_root / "SDCARD"
     source_dir = card_root / "DCIM" / "100MEDIA"
@@ -159,6 +166,7 @@ def test_report_target_disk_space_warns_when_below_threshold(
     monkeypatch,
     caplog,
 ) -> None:
+    """Verify low free space emits a warning for the target volume."""
     usage = namedtuple("usage", ["total", "used", "free"])
     monkeypatch.setattr(
         memory_card_copy.shutil,

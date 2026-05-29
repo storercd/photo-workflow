@@ -37,8 +37,12 @@ def run_memory_card_import(
     *,
     config: MemoryCardCopyConfig,
 ) -> MemoryCardImportResult | None:
-    """Import files from a mounted memory card into the target directory."""
+    """
+    Import files from a mounted memory card into the target directory.
 
+    Returns:
+        The import result when a card is detected, otherwise `None`.
+    """
     card_root = find_memory_card_mount(config.card_mount_root)
     if card_root is None:
         LOGGER.info("no memory card detected in %s", config.card_mount_root)
@@ -68,7 +72,6 @@ def run_memory_card_import(
 
 def find_memory_card_mount(mount_root: Path) -> Path | None:
     """Return the first mounted volume that looks like a camera card."""
-
     if not mount_root.exists():
         return None
 
@@ -85,7 +88,6 @@ def iter_memory_card_files(
     ignored_extensions: tuple[str, ...] | None = None,
 ) -> list[Path]:
     """Return all regular, non-hidden files under the mounted memory card."""
-
     active_ignored_extensions = set(
         ignored_extensions or load_memory_card_copy_config().ignored_extensions
     )
@@ -100,14 +102,20 @@ def iter_memory_card_files(
 
 def is_hidden_card_path(path: Path, *, card_root: Path) -> bool:
     """Return whether the card-relative path contains hidden path components."""
-
     relative_parts = path.relative_to(card_root).parts
     return any(part.startswith(".") for part in relative_parts)
 
 
 def build_copy_plan(source_files: list[Path], target_dir: Path) -> list[tuple[Path, Path]]:
-    """Return source and target pairs, failing early on filename collisions."""
+    """
+    Return source and target pairs, failing early on filename collisions.
 
+    Returns:
+        Source and target file pairs for the import operation.
+
+    Raises:
+        FileExistsError: If duplicate source names or existing target files would collide.
+    """
     planned_targets: set[Path] = set()
     copy_plan: list[tuple[Path, Path]] = []
 
@@ -125,7 +133,6 @@ def build_copy_plan(source_files: list[Path], target_dir: Path) -> list[tuple[Pa
 
 def copy_files(copy_plan: list[tuple[Path, Path]]) -> None:
     """Copy source files into the target directory and log progress."""
-
     total_files = len(copy_plan)
     for index, (source_path, target_path) in enumerate(copy_plan, start=1):
         shutil.copy2(source_path, target_path)
@@ -135,7 +142,6 @@ def copy_files(copy_plan: list[tuple[Path, Path]]) -> None:
 
 def should_log_copy_progress(index: int, total_files: int) -> bool:
     """Return whether the current copy position should emit progress logging."""
-
     return index == 1 or index == total_files or index % DEFAULT_COPY_PROGRESS_INTERVAL == 0
 
 
@@ -144,8 +150,12 @@ def verify_copied_files(
     *,
     verification_method: str,
 ) -> None:
-    """Validate imported files before the source card is modified."""
+    """
+    Validate imported files before the source card is modified.
 
+    Raises:
+        ValueError: If a copied file is missing, has a size mismatch, or fails checksum validation.
+    """
     LOGGER.info(
         "verifying %s copied file(s) using %s verification",
         len(copy_plan),
@@ -163,7 +173,6 @@ def verify_copied_files(
 
 def calculate_crc32(file_path: Path) -> int:
     """Return the CRC32 checksum for a file."""
-
     checksum = 0
     with file_path.open("rb") as file_handle:
         for chunk in iter(lambda: file_handle.read(1024 * 1024), b""):
@@ -173,7 +182,6 @@ def calculate_crc32(file_path: Path) -> int:
 
 def delete_memory_card_files(source_files: list[Path], *, card_root: Path) -> None:
     """Permanently delete imported files from the memory card."""
-
     for source_path in source_files:
         source_path.unlink()
 
@@ -190,7 +198,6 @@ def delete_memory_card_files(source_files: list[Path], *, card_root: Path) -> No
 
 def eject_memory_card(card_root: Path) -> None:
     """Eject the mounted memory card."""
-
     diskutil_path = require_tool("diskutil")
     subprocess.run(
         [diskutil_path, "eject", str(card_root)],
@@ -205,8 +212,12 @@ def report_target_disk_space(
     *,
     config: MemoryCardCopyConfig,
 ) -> tuple[float, float]:
-    """Log remaining disk space for the target volume and warn when low."""
+    """
+    Log remaining disk space for the target volume and warn when low.
 
+    Returns:
+        The free space in gigabytes and percent for the target volume.
+    """
     usage = shutil.disk_usage(target_dir)
     free_space_gb = usage.free / (1024**3)
     free_space_percent = (usage.free / usage.total) * 100
@@ -231,8 +242,15 @@ def report_target_disk_space(
 
 
 def require_tool(name: str) -> str:
-    """Return the full path to a required external binary."""
+    """
+    Return the full path to a required external binary.
 
+    Returns:
+        The resolved executable path.
+
+    Raises:
+        FileNotFoundError: If the required executable is not available on `PATH`.
+    """
     tool_path = shutil.which(name)
     if tool_path is None:
         raise FileNotFoundError(f"Required tool not found on PATH: {name}")
@@ -241,7 +259,6 @@ def require_tool(name: str) -> str:
 
 def main() -> None:
     """Run the memory-card ingest workflow for today's target folder."""
-
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     workflow_config = load_workflow_config()
     copy_config = load_memory_card_copy_config()
