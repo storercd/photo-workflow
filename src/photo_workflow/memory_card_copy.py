@@ -120,7 +120,7 @@ def build_copy_plan(source_files: list[Path], target_dir: Path) -> list[tuple[Pa
     copy_plan: list[tuple[Path, Path]] = []
 
     for source_path in source_files:
-        target_path = target_dir / source_path.name
+        target_path = target_dir / build_target_filename(target_dir, source_path)
         if target_path in planned_targets:
             raise FileExistsError(f"Duplicate filename on memory card: {source_path.name}")
         if target_path.exists():
@@ -129,6 +129,11 @@ def build_copy_plan(source_files: list[Path], target_dir: Path) -> list[tuple[Pa
         copy_plan.append((source_path, target_path))
 
     return copy_plan
+
+
+def build_target_filename(target_dir: Path, source_path: Path) -> str:
+    """Return the target filename prefixed with the workflow date directory name."""
+    return f"{target_dir.name}_{source_path.name}"
 
 
 def copy_files(copy_plan: list[tuple[Path, Path]]) -> None:

@@ -53,7 +53,10 @@ def test_run_memory_card_import_copies_flattens_and_cleans_card(
 
     assert result is not None
     assert result.imported_files == 2
-    assert sorted(path.name for path in target_dir.iterdir()) == ["A001.CR3", "A001.JPG"]
+    assert sorted(path.name for path in target_dir.iterdir()) == [
+        "20260529_A001.CR3",
+        "20260529_A001.JPG",
+    ]
     assert list(memory_card_copy.iter_memory_card_files(card_root)) == []
     assert "detected memory card" in caplog.text
     assert "copied 2/2 files" in caplog.text
@@ -86,7 +89,7 @@ def test_run_memory_card_import_ignores_ctg_files(tmp_path: Path, monkeypatch) -
 
     assert result is not None
     assert result.imported_files == 1
-    assert sorted(path.name for path in target_dir.iterdir()) == ["A001.CR3"]
+    assert sorted(path.name for path in target_dir.iterdir()) == ["20260529_A001.CR3"]
     assert ctg_path.exists()
 
 
@@ -122,8 +125,33 @@ def test_run_memory_card_import_uses_configured_ignored_extensions(
 
     assert result is not None
     assert result.imported_files == 1
-    assert sorted(path.name for path in target_dir.iterdir()) == ["A001.CR3"]
+    assert sorted(path.name for path in target_dir.iterdir()) == ["20260529_A001.CR3"]
     assert ignored_path.exists()
+
+
+def test_build_copy_plan_prefixes_target_names_with_target_date(tmp_path: Path) -> None:
+    """Verify copied files are renamed with the target date prefix."""
+    source_file = tmp_path / "AH9A9764.CR3"
+    source_file.write_bytes(b"raw")
+    target_dir = tmp_path / "20260601"
+
+    copy_plan = memory_card_copy.build_copy_plan([source_file], target_dir)
+
+    assert copy_plan == [
+        (source_file, target_dir / "20260601_AH9A9764.CR3"),
+    ]
+
+
+def test_build_copy_plan_rejects_existing_prefixed_target(tmp_path: Path) -> None:
+    """Verify ingest fails when the prefixed target filename already exists."""
+    source_file = tmp_path / "AH9A9764.CR3"
+    source_file.write_bytes(b"raw")
+    target_dir = tmp_path / "20260601"
+    target_dir.mkdir()
+    (target_dir / "20260601_AH9A9764.CR3").write_bytes(b"existing")
+
+    with pytest.raises(FileExistsError, match="Target file already exists"):
+        memory_card_copy.build_copy_plan([source_file], target_dir)
 
 
 def test_run_memory_card_import_stops_before_delete_when_verification_fails(
