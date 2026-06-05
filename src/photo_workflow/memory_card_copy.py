@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import sys
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,8 @@ from photo_workflow.config import (
 
 DEFAULT_COPY_PROGRESS_INTERVAL = 50
 DEFAULT_CARD_MARKER_DIRNAME = "DCIM"
+ANSI_RESET = "\033[0m"
+ANSI_WARNING = "\033[1;31m"
 LOGGER = logging.getLogger(__name__)
 
 
@@ -237,13 +240,25 @@ def report_target_disk_space(
         or free_space_percent < config.low_disk_warning_percent
     ):
         LOGGER.warning(
-            "low disk space on %s: %.1f GB free (%.1f%%)",
-            target_dir,
-            free_space_gb,
-            free_space_percent,
+            format_low_disk_warning(target_dir, free_space_gb, free_space_percent),
         )
 
     return free_space_gb, free_space_percent
+
+
+def format_low_disk_warning(
+    target_dir: Path,
+    free_space_gb: float,
+    free_space_percent: float,
+) -> str:
+    """Return a low-disk warning message with ANSI emphasis for interactive terminals."""
+    warning_message = (
+        f"low disk space on {target_dir}: {free_space_gb:.1f} GB free "
+        f"({free_space_percent:.1f}%)"
+    )
+    if not sys.stderr.isatty():
+        return warning_message
+    return f"{ANSI_WARNING}{warning_message}{ANSI_RESET}"
 
 
 def require_tool(name: str) -> str:
