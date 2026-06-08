@@ -20,6 +20,7 @@ from photo_workflow.config import (
 DEFAULT_COPY_PROGRESS_INTERVAL = 50
 DEFAULT_CARD_MARKER_DIRNAME = "DCIM"
 ANSI_RESET = "\033[0m"
+ANSI_SUCCESS = "\033[1;32m"
 ANSI_WARNING = "\033[1;31m"
 LOGGER = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ def run_memory_card_import(
     verify_copied_files(copy_plan, verification_method=config.copy_verification)
     delete_memory_card_files(source_files, card_root=card_root)
     eject_memory_card(card_root)
-    LOGGER.info("ejected memory card at %s", card_root)
+    LOGGER.info(format_eject_message(card_root))
 
     free_space_gb, free_space_percent = report_target_disk_space(target_dir, config=config)
     return MemoryCardImportResult(
@@ -259,6 +260,14 @@ def format_low_disk_warning(
     if not sys.stderr.isatty():
         return warning_message
     return f"{ANSI_WARNING}{warning_message}{ANSI_RESET}"
+
+
+def format_eject_message(card_root: Path) -> str:
+    """Return an ejection message with ANSI emphasis for interactive terminals."""
+    message = f"ejected memory card at {card_root}"
+    if not sys.stderr.isatty():
+        return message
+    return f"{ANSI_SUCCESS}{message}{ANSI_RESET}"
 
 
 def require_tool(name: str) -> str:

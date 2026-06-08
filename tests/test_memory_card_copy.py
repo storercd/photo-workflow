@@ -210,3 +210,31 @@ def test_report_target_disk_space_warns_when_below_threshold(
 
     assert "target volume free space" in caplog.text
     assert "low disk space" in caplog.text
+
+
+def test_format_eject_message_is_plain_when_not_interactive(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify non-interactive ejection messages omit ANSI styling."""
+    monkeypatch.setattr(memory_card_copy.sys.stderr, "isatty", lambda: False)
+
+    message = memory_card_copy.format_eject_message(tmp_path / "SDCARD")
+
+    assert message == f"ejected memory card at {tmp_path / 'SDCARD'}"
+
+
+def test_format_eject_message_is_green_when_interactive(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify interactive ejection messages use green ANSI styling."""
+    monkeypatch.setattr(memory_card_copy.sys.stderr, "isatty", lambda: True)
+
+    message = memory_card_copy.format_eject_message(tmp_path / "SDCARD")
+
+    assert message == (
+        f"{memory_card_copy.ANSI_SUCCESS}"
+        f"ejected memory card at {tmp_path / 'SDCARD'}"
+        f"{memory_card_copy.ANSI_RESET}"
+    )
