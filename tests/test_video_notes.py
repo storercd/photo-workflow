@@ -97,6 +97,52 @@ def test_process_short_videos_creates_note_for_short_mp4(
     assert output_path.stat().st_mtime_ns == expected_timestamp
 
 
+def test_process_short_videos_can_write_notes_outside_video_folder(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify note images can be written to a separate target folder."""
+    video_dir = tmp_path / "videos"
+    output_dir = tmp_path / "processed"
+    video_dir.mkdir()
+    output_dir.mkdir()
+    video_path = video_dir / "clip.MP4"
+    video_path.write_bytes(b"video")
+
+    monkeypatch.setattr(video_notes, "probe_video_duration_seconds", lambda _: 4.2)
+    monkeypatch.setattr(video_notes, "transcribe_video", lambda *args, **kwargs: "hello world")
+
+    def fake_create_note_image(output_path: Path, transcription: str) -> None:
+        output_path.write_text(transcription)
+
+    monkeypatch.setattr(video_notes, "create_note_image", fake_create_note_image)
+
+    processed = video_notes.process_short_videos(video_dir, output_dir=output_dir)
+
+    assert [item.video_path for item in processed] == [video_path]
+    assert [item.output_path for item in processed] == [output_dir / "clip.tif"]
+
+
+def test_move_videos_to_processing_subdir_moves_only_top_level_mp4_files(tmp_path: Path) -> None:
+    """Verify top-level MP4 files are relocated into the videos subfolder."""
+    top_level_video = tmp_path / "clip.MP4"
+    existing_video_dir = tmp_path / video_notes.DEFAULT_VIDEO_SUBDIR_NAME
+    nested_video = existing_video_dir / "nested.mp4"
+    image_path = tmp_path / "photo.jpg"
+    top_level_video.write_bytes(b"video")
+    existing_video_dir.mkdir()
+    nested_video.write_bytes(b"video")
+    image_path.write_bytes(b"image")
+
+    video_dir = video_notes.move_videos_to_processing_subdir(tmp_path)
+
+    assert video_dir == existing_video_dir
+    assert not top_level_video.exists()
+    assert (video_dir / "clip.MP4").exists()
+    assert nested_video.exists()
+    assert image_path.exists()
+
+
 def test_process_short_videos_skips_long_mp4_files(
     tmp_path: Path,
     monkeypatch,
@@ -199,7 +245,7 @@ def test_main_reports_when_no_short_videos_are_processed(
     monkeypatch.setattr(
         video_notes,
         "process_short_videos",
-        lambda source_dir=None, max_duration_seconds=None, transcription_model=None: [],
+        lambda source_dir=None, output_dir=None, max_duration_seconds=None, transcription_model=None: [],
     )
     (tmp_path / "long.MP4").write_bytes(b"video")
 
@@ -219,7 +265,7 @@ def test_run_video_notes_step_logs_transcription_model(
     monkeypatch.setattr(
         video_notes,
         "process_short_videos",
-        lambda source_dir=None, max_duration_seconds=None, transcription_model=None: [],
+        lambda source_dir=None, output_dir=None, max_duration_seconds=None, transcription_model=None: [],
     )
 
     with caplog.at_level("INFO"):
@@ -232,6 +278,38 @@ def test_run_video_notes_step_logs_transcription_model(
         )
 
     assert "using transcription model mlx-community/whisper-medium-mlx" in caplog.text
+
+
+def test_run_video_notes_step_moves_videos_before_processing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify the workflow relocates videos before creating note images."""
+    video_path = tmp_path / "clip.MP4"
+    video_path.write_bytes(b"video")
+    captured_calls: list[tuple[Path, Path | None]] = []
+
+    monkeypatch.setattr(
+        video_notes,
+        "process_short_videos",
+        lambda source_dir=None, output_dir=None, max_duration_seconds=None, transcription_model=None: captured_calls.append(
+            (source_dir, output_dir)
+        ) or [],
+    )
+
+    video_notes.run_video_notes_step(
+        tmp_path,
+        config=app_config.VideoNotesConfig(max_duration_seconds=10.0),
+    )
+
+    assert not video_path.exists()
+    assert (tmp_path / video_notes.DEFAULT_VIDEO_SUBDIR_NAME / "clip.MP4").exists()
+    assert captured_calls == [
+        (
+            tmp_path / video_notes.DEFAULT_VIDEO_SUBDIR_NAME,
+            tmp_path,
+        )
+    ]
 
 
 def test_benchmark_transcriptions_returns_results_for_each_file_and_model(

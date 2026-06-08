@@ -25,6 +25,7 @@ from photo_workflow.config import (
 )
 
 DEFAULT_OUTPUT_EXTENSION = ".tif"
+DEFAULT_VIDEO_SUBDIR_NAME = "videos"
 DEFAULT_BENCHMARK_SOURCE_DIR = Path("video-test")
 DEFAULT_BENCHMARK_TRANSCRIPTION_MODELS = (
     "mlx-community/whisper-tiny-mlx",
@@ -79,6 +80,7 @@ class TranscriptionBenchmarkResult:
 def process_short_videos(
     source_dir: Path | None = None,
     *,
+    output_dir: Path | None = None,
     max_duration_seconds: float | None = None,
     transcription_model: str | None = None,
 ) -> list[ProcessedVideoNote]:
@@ -92,6 +94,7 @@ def process_short_videos(
         FileNotFoundError: If the source directory does not exist.
     """
     active_source_dir = source_dir or build_today_source_dir()
+    active_output_dir = output_dir or active_source_dir
     active_max_duration_seconds = (
         load_video_notes_config().max_duration_seconds
         if max_duration_seconds is None
@@ -112,7 +115,7 @@ def process_short_videos(
             continue
 
         transcription = transcribe_video(video_path, model=active_transcription_model)
-        output_path = video_path.with_suffix(DEFAULT_OUTPUT_EXTENSION)
+        output_path = active_output_dir / f"{video_path.stem}{DEFAULT_OUTPUT_EXTENSION}"
         create_note_image(output_path, transcription)
         copy_file_timestamp(video_path, output_path)
 
@@ -135,6 +138,21 @@ def iter_mp4_files(source_dir: Path) -> list[Path]:
         for path in source_dir.iterdir()
         if path.is_file() and path.suffix.lower() == ".mp4"
     )
+
+
+def move_videos_to_processing_subdir(
+    source_dir: Path,
+    *,
+    subdir_name: str = DEFAULT_VIDEO_SUBDIR_NAME,
+) -> Path:
+    """Move top-level MP4 files into the processing subdirectory and return it."""
+    videos_dir = source_dir / subdir_name
+    videos_dir.mkdir(exist_ok=True)
+
+    for video_path in iter_mp4_files(source_dir):
+        video_path.replace(videos_dir / video_path.name)
+
+    return videos_dir
 
 
 def probe_video_duration_seconds(video_path: Path) -> float:
@@ -460,13 +478,16 @@ def require_tool(name: str) -> str:
 def run_video_notes_step(source_dir: Path, *, config: VideoNotesConfig) -> None:
     """Process short videos in the dated source directory."""
     LOGGER.info("using transcription model %s", config.transcription_model)
-    total_videos = len(iter_mp4_files(source_dir)) if source_dir.exists() else 0
     if not source_dir.exists():
         LOGGER.info("no .mp4 files found in %s", source_dir)
         return
 
+    video_source_dir = move_videos_to_processing_subdir(source_dir)
+    total_videos = len(iter_mp4_files(video_source_dir))
+
     processed_notes = process_short_videos(
-        source_dir=source_dir,
+        source_dir=video_source_dir,
+        output_dir=source_dir,
         max_duration_seconds=config.max_duration_seconds,
         transcription_model=config.transcription_model,
     )
