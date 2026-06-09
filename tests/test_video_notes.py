@@ -143,6 +143,21 @@ def test_move_videos_to_processing_subdir_moves_only_top_level_mp4_files(tmp_pat
     assert image_path.exists()
 
 
+def test_move_videos_to_processing_subdir_skips_folder_creation_without_top_level_mp4s(
+    tmp_path: Path,
+) -> None:
+    """Verify the videos subfolder is not created when no top-level MP4 files exist."""
+    existing_video_dir = tmp_path / video_notes.DEFAULT_VIDEO_SUBDIR_NAME
+    image_path = tmp_path / "photo.jpg"
+    image_path.write_bytes(b"image")
+
+    video_dir = video_notes.move_videos_to_processing_subdir(tmp_path)
+
+    assert video_dir == existing_video_dir
+    assert not existing_video_dir.exists()
+    assert image_path.exists()
+
+
 def test_process_short_videos_skips_long_mp4_files(
     tmp_path: Path,
     monkeypatch,

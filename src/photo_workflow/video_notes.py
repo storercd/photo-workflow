@@ -145,11 +145,20 @@ def move_videos_to_processing_subdir(
     *,
     subdir_name: str = DEFAULT_VIDEO_SUBDIR_NAME,
 ) -> Path:
-    """Move top-level MP4 files into the processing subdirectory and return it."""
+    """
+    Move top-level MP4 files into the processing subdirectory.
+
+    Returns:
+        The processing subdirectory path.
+    """
     videos_dir = source_dir / subdir_name
+    top_level_videos = iter_mp4_files(source_dir)
+    if not top_level_videos:
+        return videos_dir
+
     videos_dir.mkdir(exist_ok=True)
 
-    for video_path in iter_mp4_files(source_dir):
+    for video_path in top_level_videos:
         video_path.replace(videos_dir / video_path.name)
 
     return videos_dir
