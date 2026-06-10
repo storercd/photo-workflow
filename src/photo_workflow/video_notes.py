@@ -492,6 +492,10 @@ def run_video_notes_step(source_dir: Path, *, config: VideoNotesConfig) -> None:
         return
 
     video_source_dir = move_videos_to_processing_subdir(source_dir)
+    if not video_source_dir.exists():
+        LOGGER.info("no .mp4 files found in %s", source_dir)
+        return
+
     total_videos = len(iter_mp4_files(video_source_dir))
 
     processed_notes = process_short_videos(

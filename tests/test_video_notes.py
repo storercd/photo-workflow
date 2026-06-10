@@ -295,6 +295,20 @@ def test_run_video_notes_step_logs_transcription_model(
     assert "using transcription model mlx-community/whisper-medium-mlx" in caplog.text
 
 
+def test_run_video_notes_step_logs_when_no_videos_are_present(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    """Verify the workflow does not fail when there are no MP4 files to process."""
+    with caplog.at_level("INFO"):
+        video_notes.run_video_notes_step(
+            tmp_path,
+            config=app_config.VideoNotesConfig(max_duration_seconds=10.0),
+        )
+
+    assert "no .mp4 files found" in caplog.text
+
+
 def test_run_video_notes_step_moves_videos_before_processing(
     tmp_path: Path,
     monkeypatch,
