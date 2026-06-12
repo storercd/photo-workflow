@@ -6,7 +6,8 @@ card_mount_root = "/Volumes"
 low_disk_warning_gb = 30.0
 low_disk_warning_percent = 5.0
 copy_verification = "basic"
-ignored_extensions = [".ctg", ".log", ".tmp"]
+# TODO: perhaps it makes more sense to list the extensions we DO want to copy, rather than the ones we want to ignore?
+ignored_extensions = [".ctg", ".log", ".tmp", ".fir"]
 
 [video_notes]
 max_duration_seconds = 15.0
