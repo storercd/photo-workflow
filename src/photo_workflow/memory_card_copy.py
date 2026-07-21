@@ -288,7 +288,11 @@ def require_tool(name: str) -> str:
 
 def main() -> None:
     """Run the memory-card ingest workflow for today's target folder."""
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     workflow_config = load_workflow_config()
     copy_config = load_memory_card_copy_config()
     target_dir = build_today_source_dir(camera_root=workflow_config.camera_root)

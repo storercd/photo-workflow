@@ -527,7 +527,11 @@ def run_video_notes_step(source_dir: Path, *, config: VideoNotesConfig) -> None:
 
 def main() -> None:
     """Run the short-video note workflow for today's camera folder."""
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     run_video_notes_step(build_today_source_dir(), config=load_video_notes_config())
 
 
@@ -568,7 +572,11 @@ def benchmark_transcriptions(
 
 def benchmark_main() -> None:
     """Run transcription benchmarks for a folder of test clips."""
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     source_dir, models = parse_benchmark_args()
     results = benchmark_transcriptions(source_dir, models=models)
     LOGGER.info(
@@ -616,7 +624,11 @@ def parse_benchmark_args(argv: list[str] | None = None) -> tuple[Path, tuple[str
 
 def install_font_main() -> None:
     """Download and cache the default note font for later workflow runs."""
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     installed_font_path = install_default_note_font()
     LOGGER.info("installed font at %s", installed_font_path)
 
