@@ -18,6 +18,7 @@ from photo_workflow.config import (
 )
 
 DEFAULT_COPY_PROGRESS_INTERVAL = 50
+DEFAULT_VERIFICATION_PROGRESS_INTERVAL = 100
 DEFAULT_CARD_MARKER_DIRNAME = "DCIM"
 ANSI_RESET = "\033[0m"
 ANSI_SUCCESS = "\033[1;32m"
@@ -151,7 +152,21 @@ def copy_files(copy_plan: list[tuple[Path, Path]]) -> None:
 
 def should_log_copy_progress(index: int, total_files: int) -> bool:
     """Return whether the current copy position should emit progress logging."""
-    return index == 1 or index == total_files or index % DEFAULT_COPY_PROGRESS_INTERVAL == 0
+    return should_log_progress(index, total_files, interval=DEFAULT_COPY_PROGRESS_INTERVAL)
+
+
+def should_log_verification_progress(index: int, total_files: int) -> bool:
+    """Return whether the current verification position should emit progress logging."""
+    return should_log_progress(
+        index,
+        total_files,
+        interval=DEFAULT_VERIFICATION_PROGRESS_INTERVAL,
+    )
+
+
+def should_log_progress(index: int, total_files: int, *, interval: int) -> bool:
+    """Return whether progress should be logged for the first, periodic, or last item."""
+    return index == 1 or index == total_files or index % interval == 0
 
 
 def verify_copied_files(
@@ -170,7 +185,8 @@ def verify_copied_files(
         len(copy_plan),
         verification_method,
     )
-    for source_path, target_path in copy_plan:
+    total_files = len(copy_plan)
+    for index, (source_path, target_path) in enumerate(copy_plan, start=1):
         if not target_path.exists():
             raise ValueError(f"Copied file is missing: {target_path}")
         if source_path.stat().st_size != target_path.stat().st_size:
@@ -178,6 +194,8 @@ def verify_copied_files(
         if verification_method == "crc32":
             if calculate_crc32(source_path) != calculate_crc32(target_path):
                 raise ValueError(f"Copied file checksum mismatch: {source_path.name}")
+        if should_log_verification_progress(index, total_files):
+            LOGGER.info("verified %s/%s files", index, total_files)
 
 
 def calculate_crc32(file_path: Path) -> int:

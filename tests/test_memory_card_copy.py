@@ -60,6 +60,7 @@ def test_run_memory_card_import_copies_flattens_and_cleans_card(
     assert list(memory_card_copy.iter_memory_card_files(card_root)) == []
     assert "detected memory card" in caplog.text
     assert "copied 2/2 files" in caplog.text
+    assert "verified 2/2 files" in caplog.text
     assert "ejected memory card" in caplog.text
 
 
@@ -238,3 +239,23 @@ def test_format_eject_message_is_green_when_interactive(
         f"ejected memory card at {tmp_path / 'SDCARD'}"
         f"{memory_card_copy.ANSI_RESET}"
     )
+
+
+def test_verify_copied_files_logs_progress_every_100_files(tmp_path: Path, caplog) -> None:
+    """Verify file verification logs first, periodic, and final progress updates."""
+    copy_plan: list[tuple[Path, Path]] = []
+    for index in range(205):
+        source_path = tmp_path / f"source-{index}.cr3"
+        target_path = tmp_path / f"target-{index}.cr3"
+        source_path.write_bytes(b"raw")
+        target_path.write_bytes(b"raw")
+        copy_plan.append((source_path, target_path))
+
+    with caplog.at_level("INFO"):
+        memory_card_copy.verify_copied_files(copy_plan, verification_method="basic")
+
+    assert "verifying 205 copied file(s) using basic verification" in caplog.text
+    assert "verified 1/205 files" in caplog.text
+    assert "verified 100/205 files" in caplog.text
+    assert "verified 200/205 files" in caplog.text
+    assert "verified 205/205 files" in caplog.text
