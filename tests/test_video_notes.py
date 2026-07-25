@@ -260,7 +260,8 @@ def test_main_reports_when_no_short_videos_are_processed(
     monkeypatch.setattr(
         video_notes,
         "process_short_videos",
-        lambda source_dir=None, output_dir=None, max_duration_seconds=None, transcription_model=None: [],
+        lambda source_dir=None, output_dir=None, max_duration_seconds=None,
+        transcription_model=None: [],
     )
     (tmp_path / "long.MP4").write_bytes(b"video")
 
@@ -280,7 +281,8 @@ def test_run_video_notes_step_logs_transcription_model(
     monkeypatch.setattr(
         video_notes,
         "process_short_videos",
-        lambda source_dir=None, output_dir=None, max_duration_seconds=None, transcription_model=None: [],
+        lambda source_dir=None, output_dir=None, max_duration_seconds=None,
+        transcription_model=None: [],
     )
 
     with caplog.at_level("INFO"):
@@ -321,9 +323,9 @@ def test_run_video_notes_step_moves_videos_before_processing(
     monkeypatch.setattr(
         video_notes,
         "process_short_videos",
-        lambda source_dir=None, output_dir=None, max_duration_seconds=None, transcription_model=None: captured_calls.append(
-            (source_dir, output_dir)
-        ) or [],
+        lambda source_dir=None, output_dir=None, max_duration_seconds=None,
+        transcription_model=None: captured_calls.append((source_dir, output_dir))
+        or [],
     )
 
     video_notes.run_video_notes_step(
