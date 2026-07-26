@@ -130,6 +130,35 @@ def test_run_memory_card_import_uses_configured_ignored_extensions(
     assert ignored_path.exists()
 
 
+def test_run_memory_card_import_logs_copy_and_verification_elapsed_time(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    """Verify ingest logs elapsed time for copy and verification stages."""
+    mount_root = tmp_path / "Volumes"
+    card_root = mount_root / "SDCARD"
+    dcim_root = card_root / "DCIM" / "100MEDIA"
+    dcim_root.mkdir(parents=True)
+    (dcim_root / "A001.CR3").write_bytes(b"raw")
+    target_dir = tmp_path / "camera" / "20260529"
+    timing_values = iter([10.0, 12.5, 20.0, 23.25])
+
+    monkeypatch.setattr(memory_card_copy, "delete_memory_card_files", lambda *args, **kwargs: None)
+    monkeypatch.setattr(memory_card_copy, "eject_memory_card", lambda card_root: None)
+    monkeypatch.setattr(memory_card_copy.time, "perf_counter", lambda: next(timing_values))
+
+    with caplog.at_level("INFO"):
+        memory_card_copy.run_memory_card_import(
+            target_dir,
+            config=app_config.MemoryCardCopyConfig(card_mount_root=mount_root),
+            report_disk_space=False,
+        )
+
+    assert "import completed in 2.50s" in caplog.text
+    assert "verification completed in 3.25s" in caplog.text
+
+
 def test_build_copy_plan_prefixes_target_names_with_target_date(tmp_path: Path) -> None:
     """Verify copied files are renamed with the target date prefix."""
     source_file = tmp_path / "AH9A9764.CR3"

@@ -6,6 +6,7 @@ import logging
 import shutil
 import subprocess
 import sys
+import time
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,8 +61,18 @@ def run_memory_card_import(
 
     target_dir.mkdir(parents=True, exist_ok=True)
     copy_plan = build_copy_plan(source_files, target_dir)
-    copy_files(copy_plan)
-    verify_copied_files(copy_plan, verification_method=config.copy_verification)
+    copy_start_time = time.perf_counter()
+    try:
+        copy_files(copy_plan)
+    finally:
+        log_stage_elapsed("import", copy_start_time)
+
+    verification_start_time = time.perf_counter()
+    try:
+        verify_copied_files(copy_plan, verification_method=config.copy_verification)
+    finally:
+        log_stage_elapsed("verification", verification_start_time)
+
     delete_memory_card_files(source_files, card_root=card_root)
     eject_memory_card(card_root)
     LOGGER.info(format_eject_message(card_root))
@@ -171,6 +182,12 @@ def should_log_verification_progress(index: int, total_files: int) -> bool:
 def should_log_progress(index: int, total_files: int, *, interval: int) -> bool:
     """Return whether progress should be logged for the first, periodic, or last item."""
     return index == 1 or index == total_files or index % interval == 0
+
+
+def log_stage_elapsed(stage_name: str, start_time: float) -> None:
+    """Log elapsed time for a named workflow stage."""
+    elapsed_seconds = time.perf_counter() - start_time
+    LOGGER.info("%s completed in %.2fs", stage_name, elapsed_seconds)
 
 
 def verify_copied_files(

@@ -19,6 +19,23 @@ def build_assessment(camera_root: Path) -> rejected_folders.RejectedFolderAssess
     )
 
 
+def build_non_empty_assessment(camera_root: Path) -> rejected_folders.RejectedFolderAssessment:
+    """Return a rejected-folder assessment with one folder for purge-path tests."""
+    return rejected_folders.RejectedFolderAssessment(
+        camera_root=camera_root,
+        disk_total_bytes=100,
+        folders=[
+            rejected_folders.RejectedFolderAssessmentItem(
+                folder_path=camera_root / "20260701" / "_Rejected",
+                reclaimable_bytes=15,
+                percent_of_disk=15.0,
+            )
+        ],
+        total_reclaimable_bytes=15,
+        total_percent_of_disk=15.0,
+    )
+
+
 def test_main_runs_memory_card_import_before_video_notes(tmp_path: Path, monkeypatch) -> None:
     """Verify the full workflow runs card import before video note generation."""
     source_dir = tmp_path / "camera" / "20260529"
@@ -223,3 +240,75 @@ def test_main_passes_reclaimable_percent_to_final_disk_space_report(
     workflow.main([])
 
     assert captured_percentages == [15.0]
+
+
+def test_main_logs_video_notes_elapsed_time(tmp_path: Path, monkeypatch, caplog) -> None:
+    """Verify the workflow logs elapsed time for the video-notes stage."""
+    source_dir = tmp_path / "camera" / "20260529"
+    timing_values = iter([50.0, 54.75])
+
+    monkeypatch.setattr(
+        workflow,
+        "load_config",
+        lambda: app_config.AppConfig(
+            workflow=app_config.WorkflowConfig(camera_root=tmp_path / "camera"),
+            memory_card_copy=app_config.MemoryCardCopyConfig(),
+            video_notes=app_config.VideoNotesConfig(max_duration_seconds=9.0),
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "build_today_source_dir",
+        lambda today=None, camera_root=None: source_dir,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "run_memory_card_import",
+        lambda target_dir, config, report_disk_space: None,
+    )
+    monkeypatch.setattr(workflow, "run_video_notes_step", lambda source_dir, config: None)
+    monkeypatch.setattr(
+        workflow,
+        "run_rejected_folder_step",
+        lambda camera_root, purge_rejected: build_assessment(camera_root),
+    )
+    monkeypatch.setattr(workflow, "resolve_disk_usage_path", lambda camera_root: camera_root)
+    monkeypatch.setattr(
+        workflow,
+        "report_target_disk_space",
+        lambda target_dir, config, reclaimable_percent=None: None,
+    )
+    monkeypatch.setattr(workflow.time, "perf_counter", lambda: next(timing_values))
+
+    with caplog.at_level("INFO"):
+        workflow.main([])
+
+    assert "video notes completed in 4.75s" in caplog.text
+
+
+def test_run_rejected_folder_step_logs_scan_and_purge_elapsed_time(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    """Verify rejected-folder scan and purge stages log elapsed time."""
+    timing_values = iter([1.0, 2.25, 5.0, 6.5])
+
+    monkeypatch.setattr(
+        workflow,
+        "assess_rejected_folders",
+        lambda camera_root: build_non_empty_assessment(camera_root),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "log_rejected_folder_assessment",
+        lambda assessment, purge_rejected: None,
+    )
+    monkeypatch.setattr(workflow, "purge_rejected_folders", lambda assessment: 1)
+    monkeypatch.setattr(workflow.time, "perf_counter", lambda: next(timing_values))
+
+    with caplog.at_level("INFO"):
+        workflow.run_rejected_folder_step(tmp_path / "camera", purge_rejected=True)
+
+    assert "rejected-folder scan completed in 1.25s" in caplog.text
+    assert "rejected-folder purge completed in 1.50s" in caplog.text
