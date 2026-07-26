@@ -213,6 +213,36 @@ def test_report_target_disk_space_warns_when_below_threshold(
     assert "low disk space" in caplog.text
 
 
+def test_report_target_disk_space_includes_purge_hint_when_space_is_reclaimable(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    """Verify low disk warnings include reclaimable-space guidance when available."""
+    usage = namedtuple("usage", ["total", "used", "free"])
+    monkeypatch.setattr(
+        memory_card_copy.shutil,
+        "disk_usage",
+        lambda _: usage(total=100 * 1024**3, used=96 * 1024**3, free=4 * 1024**3),
+    )
+
+    with caplog.at_level("INFO"):
+        memory_card_copy.report_target_disk_space(
+            tmp_path,
+            config=app_config.MemoryCardCopyConfig(),
+            reclaimable_percent=8.52,
+        )
+
+    warning_messages = [
+        record.message for record in caplog.records if record.levelname == "WARNING"
+    ]
+
+    assert warning_messages == [
+        f"low disk space on {tmp_path}: 4.0 GB free (4.0%)",
+        "run with --purge-rejected to reclaim an additional 8.52% disk space.",
+    ]
+
+
 def test_format_eject_message_is_plain_when_not_interactive(
     tmp_path: Path,
     monkeypatch,

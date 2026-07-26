@@ -19,7 +19,7 @@ pytest
 
 ## Workflow
 
-The workflow now runs in two steps:
+The workflow now runs in three steps:
 
 1. Detect a mounted memory card, flatten-copy its files into the dated camera
 	folder, verify the copy, delete the copied files from the card, eject the
@@ -27,6 +27,9 @@ The workflow now runs in two steps:
 2. Scan the dated camera folder for short `.mp4` files, run local
 	transcription, and create `.tif` note images with a red frame and centered
 	speech text.
+3. Assess any `_Rejected` folders under the configured camera root, report the
+	reclaimable disk space for each folder and the total, and optionally purge
+	them.
 
 By default it uses today's folder under:
 
@@ -60,6 +63,13 @@ Run it with:
 
 ```bash
 uv run photo-workflow-run
+```
+
+Add `--purge-rejected` to delete the assessed `_Rejected` folders after the
+report is logged:
+
+```bash
+uv run photo-workflow-run --purge-rejected
 ```
 
 Run the steps individually with:

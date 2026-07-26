@@ -41,6 +41,7 @@ def run_memory_card_import(
     target_dir: Path,
     *,
     config: MemoryCardCopyConfig,
+    report_disk_space: bool = True,
 ) -> MemoryCardImportResult | None:
     """
     Import files from a mounted memory card into the target directory.
@@ -65,7 +66,10 @@ def run_memory_card_import(
     eject_memory_card(card_root)
     LOGGER.info(format_eject_message(card_root))
 
-    free_space_gb, free_space_percent = report_target_disk_space(target_dir, config=config)
+    free_space_gb = 0.0
+    free_space_percent = 0.0
+    if report_disk_space:
+        free_space_gb, free_space_percent = report_target_disk_space(target_dir, config=config)
     return MemoryCardImportResult(
         card_root=card_root,
         target_dir=target_dir,
@@ -238,6 +242,7 @@ def report_target_disk_space(
     target_dir: Path,
     *,
     config: MemoryCardCopyConfig,
+    reclaimable_percent: float | None = None,
 ) -> tuple[float, float]:
     """
     Log remaining disk space for the target volume and warn when low.
@@ -259,8 +264,14 @@ def report_target_disk_space(
         or free_space_percent < config.low_disk_warning_percent
     ):
         LOGGER.warning(
-            format_low_disk_warning(target_dir, free_space_gb, free_space_percent),
+            format_low_disk_warning(
+                target_dir,
+                free_space_gb,
+                free_space_percent,
+            ),
         )
+        if reclaimable_percent is not None and reclaimable_percent > 0:
+            LOGGER.warning(format_reclaimable_space_hint(reclaimable_percent))
 
     return free_space_gb, free_space_percent
 
@@ -278,6 +289,17 @@ def format_low_disk_warning(
     if not sys.stderr.isatty():
         return warning_message
     return f"{ANSI_WARNING}{warning_message}{ANSI_RESET}"
+
+
+def format_reclaimable_space_hint(reclaimable_percent: float) -> str:
+    """Return a reclaimable-space hint with ANSI emphasis for interactive terminals."""
+    hint_message = (
+        "run with --purge-rejected to reclaim an additional "
+        f"{reclaimable_percent:.2f}% disk space."
+    )
+    if not sys.stderr.isatty():
+        return hint_message
+    return f"{ANSI_WARNING}{hint_message}{ANSI_RESET}"
 
 
 def format_eject_message(card_root: Path) -> str:
