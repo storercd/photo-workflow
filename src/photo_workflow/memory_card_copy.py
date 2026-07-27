@@ -73,8 +73,13 @@ def run_memory_card_import(
     finally:
         log_stage_elapsed("verification", verification_start_time)
 
+    delete_start_time = time.perf_counter()
     delete_memory_card_files(source_files, card_root=card_root)
+    log_stage_elapsed("memory card deletion", delete_start_time)
+
+    eject_start_time = time.perf_counter()
     eject_memory_card(card_root)
+    log_stage_elapsed("memory card eject", eject_start_time)
     LOGGER.info(format_eject_message(card_root))
 
     free_space_gb = 0.0
