@@ -73,6 +73,7 @@ def run_memory_card_import(
     finally:
         log_stage_elapsed("verification", verification_start_time)
 
+    LOGGER.info("deleting %s file(s) from memory card", len(source_files))
     delete_start_time = time.perf_counter()
     delete_memory_card_files(source_files, card_root=card_root)
     log_stage_elapsed("memory card deletion", delete_start_time)
