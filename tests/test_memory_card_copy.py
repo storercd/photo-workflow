@@ -60,7 +60,7 @@ def test_run_memory_card_import_copies_flattens_and_cleans_card(
     assert list(memory_card_copy.iter_memory_card_files(card_root)) == []
     assert "detected memory card" in caplog.text
     assert "copied 2/2 files" in caplog.text
-    assert "verified 2/2 files" in caplog.text
+    assert "verifying 2 copied file(s) using basic verification" in caplog.text
     assert "ejected memory card" in caplog.text
 
 
@@ -142,7 +142,7 @@ def test_run_memory_card_import_logs_copy_and_verification_elapsed_time(
     dcim_root.mkdir(parents=True)
     (dcim_root / "A001.CR3").write_bytes(b"raw")
     target_dir = tmp_path / "camera" / "20260529"
-    timing_values = iter([10.0, 12.5, 20.0, 23.25])
+    timing_values = iter([10.0, 12.5, 20.0, 23.25, 30.0, 31.0, 40.0, 40.5])
 
     monkeypatch.setattr(memory_card_copy, "delete_memory_card_files", lambda *args, **kwargs: None)
     monkeypatch.setattr(memory_card_copy, "eject_memory_card", lambda card_root: None)
@@ -300,8 +300,8 @@ def test_format_eject_message_is_green_when_interactive(
     )
 
 
-def test_verify_copied_files_logs_progress_every_100_files(tmp_path: Path, caplog) -> None:
-    """Verify file verification logs first, periodic, and final progress updates."""
+def test_verify_copied_files_logs_verification_start(tmp_path: Path, caplog) -> None:
+    """Verify file verification logs the start message."""
     copy_plan: list[tuple[Path, Path]] = []
     for index in range(205):
         source_path = tmp_path / f"source-{index}.cr3"
@@ -314,7 +314,7 @@ def test_verify_copied_files_logs_progress_every_100_files(tmp_path: Path, caplo
         memory_card_copy.verify_copied_files(copy_plan, verification_method="basic")
 
     assert "verifying 205 copied file(s) using basic verification" in caplog.text
-    assert "verified 1/205 files" in caplog.text
-    assert "verified 100/205 files" in caplog.text
-    assert "verified 200/205 files" in caplog.text
-    assert "verified 205/205 files" in caplog.text
+    assert "verified 1/205 files" not in caplog.text
+    assert "verified 100/205 files" not in caplog.text
+    assert "verified 200/205 files" not in caplog.text
+    assert "verified 205/205 files" not in caplog.text
