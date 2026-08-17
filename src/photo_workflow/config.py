@@ -13,6 +13,7 @@ DEFAULT_CARD_MOUNT_ROOT = Path("/Volumes")
 DEFAULT_LOW_DISK_WARNING_GB = 30.0
 DEFAULT_LOW_DISK_WARNING_PERCENT = 5.0
 DEFAULT_COPY_VERIFICATION = "basic"
+DEFAULT_HALT_ON_INSUFFICIENT_SPACE = True
 DEFAULT_IGNORED_CARD_EXTENSIONS = (".ctg", ".log", ".tmp")
 DEFAULT_MAX_DURATION_SECONDS = 10.0
 DEFAULT_TRANSCRIPTION_MODEL = "mlx-community/whisper-tiny-mlx"
@@ -34,6 +35,7 @@ class MemoryCardCopyConfig:
     low_disk_warning_gb: float = DEFAULT_LOW_DISK_WARNING_GB
     low_disk_warning_percent: float = DEFAULT_LOW_DISK_WARNING_PERCENT
     copy_verification: str = DEFAULT_COPY_VERIFICATION
+    halt_on_insufficient_space: bool = DEFAULT_HALT_ON_INSUFFICIENT_SPACE
     ignored_extensions: tuple[str, ...] = DEFAULT_IGNORED_CARD_EXTENSIONS
 
 
@@ -90,6 +92,12 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             list(DEFAULT_IGNORED_CARD_EXTENSIONS),
         )
     )
+    halt_on_insufficient_space = memory_card_copy_config.get(
+        "halt_on_insufficient_space",
+        DEFAULT_HALT_ON_INSUFFICIENT_SPACE,
+    )
+    if not isinstance(halt_on_insufficient_space, bool):
+        raise ValueError("memory_card_copy.halt_on_insufficient_space must be a boolean")
 
     return AppConfig(
         workflow=WorkflowConfig(
@@ -114,6 +122,7 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
                 )
             ),
             copy_verification=copy_verification,
+            halt_on_insufficient_space=halt_on_insufficient_space,
             ignored_extensions=ignored_extensions,
         ),
         video_notes=VideoNotesConfig(
@@ -155,10 +164,15 @@ def build_today_source_dir(
     today: date | None = None,
     camera_root: Path | None = None,
 ) -> Path:
-    """Return the dated source directory for the current workflow run."""
+    """Return the YYYY/MM/YYYYMMDD source directory for the current workflow run."""
     run_date = today or date.today()
     active_camera_root = camera_root or load_workflow_config().camera_root
-    return active_camera_root / run_date.strftime("%Y%m%d")
+    return (
+        active_camera_root
+        / run_date.strftime("%Y")
+        / run_date.strftime("%m")
+        / run_date.strftime("%Y%m%d")
+    )
 
 
 def normalize_ignored_extensions(extensions: object) -> tuple[str, ...]:

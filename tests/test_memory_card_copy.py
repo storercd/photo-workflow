@@ -219,6 +219,43 @@ def test_run_memory_card_import_stops_before_delete_when_verification_fails(
     assert eject_calls == []
 
 
+def test_run_memory_card_import_stops_before_copy_when_target_lacks_space(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify the import leaves the card unchanged when the target is too full."""
+    mount_root = tmp_path / "Volumes"
+    card_root = mount_root / "SDCARD"
+    source_dir = card_root / "DCIM" / "100MEDIA"
+    source_dir.mkdir(parents=True)
+    source_file = source_dir / "A001.CR3"
+    source_file.write_bytes(b"raw")
+    target_dir = tmp_path / "camera" / "20260529"
+    usage = namedtuple("usage", ["total", "used", "free"])
+    copied_files: list[tuple[Path, Path]] = []
+
+    monkeypatch.setattr(
+        memory_card_copy.shutil,
+        "disk_usage",
+        lambda _: usage(total=100, used=98, free=2),
+    )
+    monkeypatch.setattr(
+        memory_card_copy,
+        "copy_files",
+        lambda copy_plan: copied_files.extend(copy_plan),
+    )
+
+    with pytest.raises(OSError, match="insufficient free space"):
+        memory_card_copy.run_memory_card_import(
+            target_dir,
+            config=app_config.MemoryCardCopyConfig(card_mount_root=mount_root),
+        )
+
+    assert copied_files == []
+    assert source_file.exists()
+    assert not target_dir.exists() or list(target_dir.iterdir()) == []
+
+
 def test_report_target_disk_space_warns_when_below_threshold(
     tmp_path: Path,
     monkeypatch,

@@ -10,13 +10,13 @@ from photo_workflow import video_notes
 
 
 def test_build_today_source_dir_uses_expected_dated_path() -> None:
-    """Verify the dated source directory format uses YYYYMMDD."""
+    """Verify the dated source directory format uses YYYY/MM/YYYYMMDD."""
     source_dir = app_config.build_today_source_dir(
         today=date(2026, 5, 28),
         camera_root=Path("/tmp/camera"),
     )
 
-    assert source_dir == Path("/tmp/camera/20260528")
+    assert source_dir == Path("/tmp/camera/2026/05/20260528")
 
 
 def test_load_config_returns_defaults_when_config_is_missing(tmp_path: Path) -> None:
@@ -27,6 +27,7 @@ def test_load_config_returns_defaults_when_config_is_missing(tmp_path: Path) -> 
     assert (
         config.memory_card_copy.copy_verification == app_config.DEFAULT_COPY_VERIFICATION
     )
+    assert config.memory_card_copy.halt_on_insufficient_space is True
     assert (
         config.memory_card_copy.ignored_extensions
         == app_config.DEFAULT_IGNORED_CARD_EXTENSIONS
@@ -41,6 +42,7 @@ def test_load_config_reads_sections_from_toml(tmp_path: Path) -> None:
     config_path.write_text(
         '[workflow]\ncamera_root = "~/camera-roll"\n\n'
         '[memory_card_copy]\ncopy_verification = "crc32"\n'
+        'halt_on_insufficient_space = false\n'
         'ignored_extensions = ["ctg", ".LOG"]\n\n'
         '[video_notes]\nmax_duration_seconds = 7.5\n'
         'transcription_model = "mlx-community/whisper-medium-mlx"\n'
@@ -50,6 +52,7 @@ def test_load_config_reads_sections_from_toml(tmp_path: Path) -> None:
 
     assert config.workflow.camera_root == Path("~/camera-roll").expanduser()
     assert config.memory_card_copy.copy_verification == "crc32"
+    assert config.memory_card_copy.halt_on_insufficient_space is False
     assert config.memory_card_copy.ignored_extensions == (".ctg", ".log")
     assert config.video_notes.max_duration_seconds == 7.5
     assert config.video_notes.transcription_model == "mlx-community/whisper-medium-mlx"
@@ -68,7 +71,7 @@ def test_build_today_source_dir_uses_configured_camera_root(tmp_path: Path, monk
 
     source_dir = app_config.build_today_source_dir(today=date(2026, 5, 29))
 
-    assert source_dir == configured_root / "20260529"
+    assert source_dir == configured_root / "2026" / "05" / "20260529"
 
 
 def test_process_short_videos_creates_note_for_short_mp4(

@@ -60,6 +60,8 @@ def run_memory_card_import(
 
     target_dir.mkdir(parents=True, exist_ok=True)
     copy_plan = build_copy_plan(source_files, target_dir)
+    if config.halt_on_insufficient_space:
+        ensure_target_has_sufficient_space(copy_plan, target_dir)
     copy_start_time = time.perf_counter()
     try:
         copy_files(copy_plan)
@@ -168,6 +170,25 @@ def copy_files(copy_plan: list[tuple[Path, Path]]) -> None:
         shutil.copy2(source_path, target_path)
         if should_log_copy_progress(index, total_files):
             LOGGER.info("copied %s/%s files", index, total_files)
+
+
+def ensure_target_has_sufficient_space(
+    copy_plan: list[tuple[Path, Path]],
+    target_dir: Path,
+) -> None:
+    """
+    Raise an error when the target volume cannot hold all planned source files.
+
+    Raises:
+        OSError: If the target volume lacks space for every planned source file.
+    """
+    required_bytes = sum(source_path.stat().st_size for source_path, _ in copy_plan)
+    available_bytes = shutil.disk_usage(target_dir).free
+    if required_bytes > available_bytes:
+        raise OSError(
+            "insufficient free space on target volume: "
+            f"{required_bytes} bytes required, {available_bytes} bytes available"
+        )
 
 
 def should_log_copy_progress(index: int, total_files: int) -> bool:
