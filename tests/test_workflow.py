@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 from photo_workflow import config as app_config
@@ -34,6 +35,23 @@ def build_non_empty_assessment(camera_root: Path) -> rejected_folders.RejectedFo
         total_reclaimable_bytes=15,
         total_percent_of_disk=15.0,
     )
+
+
+def test_open_target_folder_launches_finder_for_processed_folder(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify the processed folder opens in Finder after the workflow completes."""
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, check: commands.append(command),
+    )
+
+    workflow.open_target_folder(tmp_path / "camera" / "20260529")
+
+    assert commands == [["open", str(tmp_path / "camera" / "20260529")]]
 
 
 def test_main_runs_memory_card_import_before_video_notes(tmp_path: Path, monkeypatch) -> None:
@@ -81,10 +99,15 @@ def test_main_runs_memory_card_import_before_video_notes(tmp_path: Path, monkeyp
         "resolve_disk_usage_path",
         lambda camera_root: camera_root,
     )
+    monkeypatch.setattr(
+        workflow,
+        "open_target_folder",
+        lambda target_dir: call_order.append("open"),
+    )
 
     workflow.main([])
 
-    assert call_order == ["import", "video_notes", "rejected", "disk_space"]
+    assert call_order == ["import", "video_notes", "rejected", "disk_space", "open"]
 
 
 def test_main_passes_purge_rejected_flag_to_rejected_folder_step(
@@ -127,6 +150,7 @@ def test_main_passes_purge_rejected_flag_to_rejected_folder_step(
         lambda target_dir, config, reclaimable_percent=None: None,
     )
     monkeypatch.setattr(workflow, "resolve_disk_usage_path", lambda camera_root: camera_root)
+    monkeypatch.setattr(workflow, "open_target_folder", lambda target_dir: None)
 
     workflow.main(["--purge-rejected"])
 
@@ -183,6 +207,7 @@ def test_main_defers_disk_space_report_until_after_rejected_step(
         "report_target_disk_space",
         lambda target_dir, config, reclaimable_percent=None: call_order.append("disk_space"),
     )
+    monkeypatch.setattr(workflow, "open_target_folder", lambda target_dir: None)
 
     workflow.main([])
 
@@ -236,6 +261,7 @@ def test_main_passes_reclaimable_percent_to_final_disk_space_report(
             reclaimable_percent
         ),
     )
+    monkeypatch.setattr(workflow, "open_target_folder", lambda target_dir: None)
 
     workflow.main([])
 
@@ -278,6 +304,7 @@ def test_main_logs_video_notes_elapsed_time(tmp_path: Path, monkeypatch, caplog)
         "report_target_disk_space",
         lambda target_dir, config, reclaimable_percent=None: None,
     )
+    monkeypatch.setattr(workflow, "open_target_folder", lambda target_dir: None)
     monkeypatch.setattr(workflow.time, "perf_counter", lambda: next(timing_values))
 
     with caplog.at_level("INFO"):

@@ -30,6 +30,7 @@ The workflow now runs in three steps:
 3. Assess any `_Rejected` folders under the configured camera root, report the
 	reclaimable disk space for each folder and the total, and optionally purge
 	them.
+4. Open the processed dated camera folder in Finder after all steps complete.
 
 By default it uses today's folder under:
 

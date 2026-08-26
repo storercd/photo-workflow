@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
 import time
 from pathlib import Path
 
@@ -70,6 +71,11 @@ def log_stage_elapsed(stage_name: str, start_time: float) -> None:
     LOGGER.info("%s completed in %.2fs", stage_name, elapsed_seconds)
 
 
+def open_target_folder(target_dir: Path) -> None:
+    """Open the completed target folder in Finder."""
+    subprocess.run(["open", str(target_dir)], check=True)
+
+
 def main(argv: list[str] | None = None) -> None:
     """Run the configured workflow steps in order."""
     parsed_args = parse_args(argv)
@@ -104,3 +110,4 @@ def main(argv: list[str] | None = None) -> None:
             else rejected_folder_assessment.total_percent_of_disk
         ),
     )
+    open_target_folder(source_dir)

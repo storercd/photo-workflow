@@ -256,6 +256,42 @@ def test_run_memory_card_import_stops_before_copy_when_target_lacks_space(
     assert not target_dir.exists() or list(target_dir.iterdir()) == []
 
 
+def test_run_memory_card_import_stops_before_copy_when_card_is_read_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify a read-only card mount halts the import before any copy occurs."""
+    mount_root = tmp_path / "Volumes"
+    card_root = mount_root / "SDCARD"
+    source_dir = card_root / "DCIM" / "100MEDIA"
+    source_dir.mkdir(parents=True)
+    source_file = source_dir / "A001.CR3"
+    source_file.write_bytes(b"raw")
+    target_dir = tmp_path / "camera" / "20260529"
+    copied_files: list[tuple[Path, Path]] = []
+
+    monkeypatch.setattr(
+        memory_card_copy.os,
+        "statvfs",
+        lambda _: type("FilesystemStats", (), {"f_flag": memory_card_copy.os.ST_RDONLY})(),
+    )
+    monkeypatch.setattr(
+        memory_card_copy,
+        "copy_files",
+        lambda copy_plan: copied_files.extend(copy_plan),
+    )
+
+    with pytest.raises(OSError, match="memory card is read-only"):
+        memory_card_copy.run_memory_card_import(
+            target_dir,
+            config=app_config.MemoryCardCopyConfig(card_mount_root=mount_root),
+        )
+
+    assert copied_files == []
+    assert source_file.exists()
+    assert not target_dir.exists()
+
+
 def test_report_target_disk_space_warns_when_below_threshold(
     tmp_path: Path,
     monkeypatch,

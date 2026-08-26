@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -54,6 +55,7 @@ def run_memory_card_import(
         LOGGER.info("no memory card detected in %s", config.card_mount_root)
         return None
 
+    ensure_memory_card_is_writable(card_root)
     source_files = iter_memory_card_files(card_root, ignored_extensions=config.ignored_extensions)
     LOGGER.info("detected memory card at %s", card_root)
     LOGGER.info("found %s importable file(s) on the memory card", len(source_files))
@@ -107,6 +109,17 @@ def find_memory_card_mount(mount_root: Path) -> Path | None:
             return volume_path
 
     return None
+
+
+def ensure_memory_card_is_writable(card_root: Path) -> None:
+    """
+    Raise an error when the mounted memory card is read-only.
+
+    Raises:
+        OSError: If the memory card's filesystem is mounted read-only.
+    """
+    if os.statvfs(card_root).f_flag & os.ST_RDONLY:
+        raise OSError(f"memory card is read-only: {card_root}")
 
 
 def iter_memory_card_files(
