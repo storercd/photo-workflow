@@ -54,6 +54,56 @@ def test_open_target_folder_launches_finder_for_processed_folder(
     assert commands == [["open", str(tmp_path / "camera" / "20260529")]]
 
 
+def test_open_single_target_folder_opens_only_one_imported_folder(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify Finder opens when the import contains one capture-date folder."""
+    opened_folders: list[Path] = []
+    target_dir = tmp_path / "camera" / "2026" / "06" / "20260601"
+    monkeypatch.setattr(workflow, "open_target_folder", opened_folders.append)
+
+    workflow.open_single_target_folder((target_dir,))
+
+    assert opened_folders == [target_dir]
+
+
+def test_open_single_target_folder_skips_finder_for_multiple_imported_folders(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify Finder stays closed when a card contains multiple capture dates."""
+    opened_folders: list[Path] = []
+    target_dirs = (
+        tmp_path / "camera" / "2026" / "06" / "20260601",
+        tmp_path / "camera" / "2026" / "06" / "20260602",
+    )
+    monkeypatch.setattr(workflow, "open_target_folder", opened_folders.append)
+
+    workflow.open_single_target_folder(target_dirs)
+
+    assert opened_folders == []
+
+
+def test_log_target_folders_writes_each_imported_folder_on_its_own_line(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    """Verify each imported target folder is listed at workflow completion."""
+    target_dirs = (
+        tmp_path / "camera" / "2026" / "06" / "20260601",
+        tmp_path / "camera" / "2026" / "06" / "20260602",
+    )
+
+    with caplog.at_level("INFO"):
+        workflow.log_target_folders(target_dirs)
+
+    assert [record.message for record in caplog.records] == [
+        f"target folder: {target_dirs[0]}",
+        f"target folder: {target_dirs[1]}",
+    ]
+
+
 def test_main_runs_memory_card_import_before_video_notes(tmp_path: Path, monkeypatch) -> None:
     """Verify the full workflow runs card import before video note generation."""
     source_dir = tmp_path / "camera" / "20260529"

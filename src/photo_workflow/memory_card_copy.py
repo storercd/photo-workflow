@@ -10,11 +10,11 @@ import sys
 import time
 import zlib
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 
 from photo_workflow.config import (
     MemoryCardCopyConfig,
-    build_today_source_dir,
     load_memory_card_copy_config,
     load_workflow_config,
 )
@@ -32,20 +32,20 @@ class MemoryCardImportResult:
     """Result for a memory-card ingest run."""
 
     card_root: Path
-    target_dir: Path
+    target_dirs: tuple[Path, ...]
     imported_files: int
     free_space_gb: float
     free_space_percent: float
 
 
 def run_memory_card_import(
-    target_dir: Path,
+    camera_root: Path,
     *,
     config: MemoryCardCopyConfig,
     report_disk_space: bool = True,
 ) -> MemoryCardImportResult | None:
     """
-    Import files from a mounted memory card into the target directory.
+    Import files from a mounted memory card into capture-date directories.
 
     Returns:
         The import result when a card is detected, otherwise `None`.
@@ -60,10 +60,10 @@ def run_memory_card_import(
     LOGGER.info("detected memory card at %s", card_root)
     LOGGER.info("found %s importable file(s) on the memory card", len(source_files))
 
-    target_dir.mkdir(parents=True, exist_ok=True)
-    copy_plan = build_copy_plan(source_files, target_dir)
+    camera_root.mkdir(parents=True, exist_ok=True)
+    copy_plan = build_copy_plan(source_files, camera_root)
     if config.halt_on_insufficient_space:
-        ensure_target_has_sufficient_space(copy_plan, target_dir)
+        ensure_target_has_sufficient_space(copy_plan, camera_root)
     copy_start_time = time.perf_counter()
     try:
         copy_files(copy_plan)
@@ -89,10 +89,10 @@ def run_memory_card_import(
     free_space_gb = 0.0
     free_space_percent = 0.0
     if report_disk_space:
-        free_space_gb, free_space_percent = report_target_disk_space(target_dir, config=config)
+        free_space_gb, free_space_percent = report_target_disk_space(camera_root, config=config)
     return MemoryCardImportResult(
         card_root=card_root,
-        target_dir=target_dir,
+        target_dirs=tuple(sorted({target_path.parent for _, target_path in copy_plan})),
         imported_files=len(copy_plan),
         free_space_gb=free_space_gb,
         free_space_percent=free_space_percent,
@@ -146,7 +146,7 @@ def is_hidden_card_path(path: Path, *, card_root: Path) -> bool:
     return any(part.startswith(".") for part in relative_parts)
 
 
-def build_copy_plan(source_files: list[Path], target_dir: Path) -> list[tuple[Path, Path]]:
+def build_copy_plan(source_files: list[Path], camera_root: Path) -> list[tuple[Path, Path]]:
     """
     Return source and target pairs, failing early on filename collisions.
 
@@ -160,7 +160,9 @@ def build_copy_plan(source_files: list[Path], target_dir: Path) -> list[tuple[Pa
     copy_plan: list[tuple[Path, Path]] = []
 
     for source_path in source_files:
-        target_path = target_dir / build_target_filename(target_dir, source_path)
+        capture_date = read_capture_date(source_path)
+        capture_dir = build_capture_dir(camera_root, capture_date)
+        target_path = capture_dir / build_target_filename(capture_date, source_path)
         if target_path in planned_targets:
             raise FileExistsError(f"Duplicate filename on memory card: {source_path.name}")
         if target_path.exists():
@@ -171,15 +173,56 @@ def build_copy_plan(source_files: list[Path], target_dir: Path) -> list[tuple[Pa
     return copy_plan
 
 
-def build_target_filename(target_dir: Path, source_path: Path) -> str:
-    """Return the target filename prefixed with the workflow date directory name."""
-    return f"{target_dir.name}_{source_path.name}"
+def read_capture_date(source_path: Path) -> date:
+    """
+    Return the capture date stored in the media file metadata.
+
+    Returns:
+        The calendar date on which the media was captured.
+
+    Raises:
+        ValueError: If the file has no usable capture-date metadata.
+    """
+    exiftool_path = require_tool("exiftool")
+    for tag_name in ("DateTimeOriginal", "CreateDate", "MediaCreateDate"):
+        captured_at = read_metadata_timestamp(exiftool_path, tag_name, source_path)
+        if captured_at:
+            return datetime.strptime(captured_at, "%Y:%m:%d %H:%M:%S").date()
+
+    raise ValueError(f"Capture date metadata is missing: {source_path}")
+
+
+def read_metadata_timestamp(exiftool_path: str, tag_name: str, source_path: Path) -> str:
+    """Return a metadata timestamp value for a file, or an empty string when absent."""
+    result = subprocess.run(
+        [exiftool_path, "-s3", f"-{tag_name}", str(source_path)],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def build_capture_dir(camera_root: Path, capture_date: date) -> Path:
+    """Return the dated destination directory for a media capture date."""
+    return (
+        camera_root
+        / capture_date.strftime("%Y")
+        / capture_date.strftime("%m")
+        / capture_date.strftime("%Y%m%d")
+    )
+
+
+def build_target_filename(capture_date: date, source_path: Path) -> str:
+    """Return a target filename prefixed with its capture date."""
+    return f"{capture_date:%Y%m%d}_{source_path.name}"
 
 
 def copy_files(copy_plan: list[tuple[Path, Path]]) -> None:
     """Copy source files into the target directory and log progress."""
     total_files = len(copy_plan)
     for index, (source_path, target_path) in enumerate(copy_plan, start=1):
+        target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, target_path)
         if should_log_copy_progress(index, total_files):
             LOGGER.info("copied %s/%s files", index, total_files)
@@ -371,7 +414,7 @@ def require_tool(name: str) -> str:
 
 
 def main() -> None:
-    """Run the memory-card ingest workflow for today's target folder."""
+    """Run the memory-card ingest workflow into capture-date folders."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(message)s",
@@ -379,5 +422,4 @@ def main() -> None:
     )
     workflow_config = load_workflow_config()
     copy_config = load_memory_card_copy_config()
-    target_dir = build_today_source_dir(camera_root=workflow_config.camera_root)
-    run_memory_card_import(target_dir, config=copy_config)
+    run_memory_card_import(workflow_config.camera_root, config=copy_config)

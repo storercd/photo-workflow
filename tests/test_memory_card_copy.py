@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections import namedtuple
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from photo_workflow import config as app_config
 from photo_workflow import memory_card_copy
+
+
+@pytest.fixture(autouse=True)
+def mock_capture_date(monkeypatch, request) -> None:
+    """Provide a capture date for byte-only media fixtures."""
+    if request.node.name == "test_read_capture_date_uses_exiftool_datetime_original":
+        return
+    monkeypatch.setattr(
+        memory_card_copy,
+        "read_capture_date",
+        lambda source_path: date(2026, 5, 29),
+    )
 
 
 def test_find_memory_card_mount_returns_volume_with_dcim(tmp_path: Path) -> None:
@@ -35,7 +49,8 @@ def test_run_memory_card_import_copies_flattens_and_cleans_card(
     dcim_root.mkdir(parents=True)
     (dcim_root / "A001.CR3").write_bytes(b"raw")
     (dcim_root / "A001.JPG").write_bytes(b"jpeg")
-    target_dir = tmp_path / "camera" / "20260529"
+    camera_root = tmp_path / "camera"
+    target_dir = camera_root / "2026" / "05" / "20260529"
 
     monkeypatch.setattr(memory_card_copy, "eject_memory_card", lambda card_root: None)
     usage = namedtuple("usage", ["total", "used", "free"])
@@ -47,12 +62,13 @@ def test_run_memory_card_import_copies_flattens_and_cleans_card(
 
     with caplog.at_level("INFO"):
         result = memory_card_copy.run_memory_card_import(
-            target_dir,
+            camera_root,
             config=app_config.MemoryCardCopyConfig(card_mount_root=mount_root),
         )
 
     assert result is not None
     assert result.imported_files == 2
+    assert result.target_dirs == (target_dir,)
     assert sorted(path.name for path in target_dir.iterdir()) == [
         "20260529_A001.CR3",
         "20260529_A001.JPG",
@@ -73,7 +89,8 @@ def test_run_memory_card_import_ignores_ctg_files(tmp_path: Path, monkeypatch) -
     (dcim_root / "A001.CR3").write_bytes(b"raw")
     ctg_path = dcim_root / "CANONMSC.CTG"
     ctg_path.write_bytes(b"catalog")
-    target_dir = tmp_path / "camera" / "20260529"
+    camera_root = tmp_path / "camera"
+    target_dir = camera_root / "2026" / "05" / "20260529"
 
     monkeypatch.setattr(memory_card_copy, "eject_memory_card", lambda card_root: None)
     usage = namedtuple("usage", ["total", "used", "free"])
@@ -84,7 +101,7 @@ def test_run_memory_card_import_ignores_ctg_files(tmp_path: Path, monkeypatch) -
     )
 
     result = memory_card_copy.run_memory_card_import(
-        target_dir,
+        camera_root,
         config=app_config.MemoryCardCopyConfig(card_mount_root=mount_root),
     )
 
@@ -106,7 +123,8 @@ def test_run_memory_card_import_uses_configured_ignored_extensions(
     (dcim_root / "A001.CR3").write_bytes(b"raw")
     ignored_path = dcim_root / "CARD.LOG"
     ignored_path.write_bytes(b"camera-log")
-    target_dir = tmp_path / "camera" / "20260529"
+    camera_root = tmp_path / "camera"
+    target_dir = camera_root / "2026" / "05" / "20260529"
 
     monkeypatch.setattr(memory_card_copy, "eject_memory_card", lambda card_root: None)
     usage = namedtuple("usage", ["total", "used", "free"])
@@ -117,7 +135,7 @@ def test_run_memory_card_import_uses_configured_ignored_extensions(
     )
 
     result = memory_card_copy.run_memory_card_import(
-        target_dir,
+        camera_root,
         config=app_config.MemoryCardCopyConfig(
             card_mount_root=mount_root,
             ignored_extensions=(".log",),
@@ -141,7 +159,7 @@ def test_run_memory_card_import_logs_copy_and_verification_elapsed_time(
     dcim_root = card_root / "DCIM" / "100MEDIA"
     dcim_root.mkdir(parents=True)
     (dcim_root / "A001.CR3").write_bytes(b"raw")
-    target_dir = tmp_path / "camera" / "20260529"
+    camera_root = tmp_path / "camera"
     timing_values = iter([10.0, 12.5, 20.0, 23.25, 30.0, 31.0, 40.0, 40.5])
 
     monkeypatch.setattr(memory_card_copy, "delete_memory_card_files", lambda *args, **kwargs: None)
@@ -150,7 +168,7 @@ def test_run_memory_card_import_logs_copy_and_verification_elapsed_time(
 
     with caplog.at_level("INFO"):
         memory_card_copy.run_memory_card_import(
-            target_dir,
+            camera_root,
             config=app_config.MemoryCardCopyConfig(card_mount_root=mount_root),
             report_disk_space=False,
         )
@@ -159,29 +177,57 @@ def test_run_memory_card_import_logs_copy_and_verification_elapsed_time(
     assert "verification completed in 3.25s" in caplog.text
 
 
-def test_build_copy_plan_prefixes_target_names_with_target_date(tmp_path: Path) -> None:
-    """Verify copied files are renamed with the target date prefix."""
+def test_build_copy_plan_sorts_files_by_capture_date(tmp_path: Path, monkeypatch) -> None:
+    """Verify copied files use their capture date for directory and filename."""
     source_file = tmp_path / "AH9A9764.CR3"
     source_file.write_bytes(b"raw")
-    target_dir = tmp_path / "20260601"
+    camera_root = tmp_path / "camera"
+    capture_date = date(2026, 6, 1)
+    monkeypatch.setattr(
+        memory_card_copy,
+        "read_capture_date",
+        lambda source_path: capture_date,
+    )
 
-    copy_plan = memory_card_copy.build_copy_plan([source_file], target_dir)
+    copy_plan = memory_card_copy.build_copy_plan([source_file], camera_root)
 
     assert copy_plan == [
-        (source_file, target_dir / "20260601_AH9A9764.CR3"),
+        (
+            source_file,
+            camera_root / "2026" / "06" / "20260601" / "20260601_AH9A9764.CR3",
+        ),
     ]
+
+
+def test_read_capture_date_uses_exiftool_datetime_original(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify capture-date extraction reads DateTimeOriginal through exiftool."""
+    source_file = tmp_path / "AH9A9764.CR3"
+    source_file.write_bytes(b"raw")
+    monkeypatch.setattr(memory_card_copy, "require_tool", lambda name: "/usr/local/bin/exiftool")
+    monkeypatch.setattr(
+        memory_card_copy.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "2026:06:01 14:30:00\n"),
+    )
+
+    capture_date = memory_card_copy.read_capture_date(source_file)
+
+    assert capture_date == date(2026, 6, 1)
 
 
 def test_build_copy_plan_rejects_existing_prefixed_target(tmp_path: Path) -> None:
     """Verify ingest fails when the prefixed target filename already exists."""
     source_file = tmp_path / "AH9A9764.CR3"
     source_file.write_bytes(b"raw")
-    target_dir = tmp_path / "20260601"
-    target_dir.mkdir()
-    (target_dir / "20260601_AH9A9764.CR3").write_bytes(b"existing")
+    target_dir = tmp_path / "camera" / "2026" / "05" / "20260529"
+    target_dir.mkdir(parents=True)
+    (target_dir / "20260529_AH9A9764.CR3").write_bytes(b"existing")
 
     with pytest.raises(FileExistsError, match="Target file already exists"):
-        memory_card_copy.build_copy_plan([source_file], target_dir)
+        memory_card_copy.build_copy_plan([source_file], tmp_path / "camera")
 
 
 def test_run_memory_card_import_stops_before_delete_when_verification_fails(
@@ -195,7 +241,7 @@ def test_run_memory_card_import_stops_before_delete_when_verification_fails(
     source_dir.mkdir(parents=True)
     source_file = source_dir / "A001.CR3"
     source_file.write_bytes(b"raw")
-    target_dir = tmp_path / "camera" / "20260529"
+    camera_root = tmp_path / "camera"
     eject_calls: list[Path] = []
 
     monkeypatch.setattr(
@@ -211,7 +257,7 @@ def test_run_memory_card_import_stops_before_delete_when_verification_fails(
 
     with pytest.raises(ValueError, match="bad copy"):
         memory_card_copy.run_memory_card_import(
-            target_dir,
+            camera_root,
             config=app_config.MemoryCardCopyConfig(card_mount_root=mount_root),
         )
 
@@ -230,7 +276,7 @@ def test_run_memory_card_import_stops_before_copy_when_target_lacks_space(
     source_dir.mkdir(parents=True)
     source_file = source_dir / "A001.CR3"
     source_file.write_bytes(b"raw")
-    target_dir = tmp_path / "camera" / "20260529"
+    camera_root = tmp_path / "camera"
     usage = namedtuple("usage", ["total", "used", "free"])
     copied_files: list[tuple[Path, Path]] = []
 
@@ -247,13 +293,13 @@ def test_run_memory_card_import_stops_before_copy_when_target_lacks_space(
 
     with pytest.raises(OSError, match="insufficient free space"):
         memory_card_copy.run_memory_card_import(
-            target_dir,
+            camera_root,
             config=app_config.MemoryCardCopyConfig(card_mount_root=mount_root),
         )
 
     assert copied_files == []
     assert source_file.exists()
-    assert not target_dir.exists() or list(target_dir.iterdir()) == []
+    assert not camera_root.exists() or list(camera_root.iterdir()) == []
 
 
 def test_run_memory_card_import_stops_before_copy_when_card_is_read_only(
@@ -267,7 +313,7 @@ def test_run_memory_card_import_stops_before_copy_when_card_is_read_only(
     source_dir.mkdir(parents=True)
     source_file = source_dir / "A001.CR3"
     source_file.write_bytes(b"raw")
-    target_dir = tmp_path / "camera" / "20260529"
+    camera_root = tmp_path / "camera"
     copied_files: list[tuple[Path, Path]] = []
 
     monkeypatch.setattr(
@@ -283,13 +329,13 @@ def test_run_memory_card_import_stops_before_copy_when_card_is_read_only(
 
     with pytest.raises(OSError, match="memory card is read-only"):
         memory_card_copy.run_memory_card_import(
-            target_dir,
+            camera_root,
             config=app_config.MemoryCardCopyConfig(card_mount_root=mount_root),
         )
 
     assert copied_files == []
     assert source_file.exists()
-    assert not target_dir.exists()
+    assert not camera_root.exists()
 
 
 def test_report_target_disk_space_warns_when_below_threshold(

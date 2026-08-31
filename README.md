@@ -21,8 +21,8 @@ pytest
 
 The workflow now runs in three steps:
 
-1. Detect a mounted memory card, flatten-copy its files into the dated camera
-	folder, verify the copy, delete the copied files from the card, eject the
+1. Detect a mounted memory card, sort its files into capture-date camera
+	folders and prefix each filename with that capture date, verify the copy, delete the copied files from the card, eject the
 	card, and report remaining disk space.
 2. Scan the dated camera folder for short `.mp4` files, run local
 	transcription, and create `.tif` note images with a red frame and centered
@@ -94,7 +94,7 @@ uv run photo-workflow-benchmark-transcription video-test \
 	mlx-community/whisper-medium-mlx
 ```
 
-This workflow requires `ffmpeg` and `ffprobe` to be available on `PATH`.
+This workflow requires `exiftool`, `ffmpeg`, and `ffprobe` to be available on `PATH`.
 
 ## Fonts
 

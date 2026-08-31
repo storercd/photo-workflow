@@ -76,6 +76,18 @@ def open_target_folder(target_dir: Path) -> None:
     subprocess.run(["open", str(target_dir)], check=True)
 
 
+def log_target_folders(target_dirs: tuple[Path, ...]) -> None:
+    """Log each imported target folder on a separate line."""
+    for target_dir in target_dirs:
+        LOGGER.info("target folder: %s", target_dir)
+
+
+def open_single_target_folder(target_dirs: tuple[Path, ...]) -> None:
+    """Open the imported folder only when exactly one target was created."""
+    if len(target_dirs) == 1:
+        open_target_folder(target_dirs[0])
+
+
 def main(argv: list[str] | None = None) -> None:
     """Run the configured workflow steps in order."""
     parsed_args = parse_args(argv)
@@ -86,14 +98,16 @@ def main(argv: list[str] | None = None) -> None:
     )
     config = load_config()
     source_dir = build_today_source_dir(camera_root=config.workflow.camera_root)
-    run_memory_card_import(
-        source_dir,
+    import_result = run_memory_card_import(
+        config.workflow.camera_root,
         config=config.memory_card_copy,
         report_disk_space=False,
     )
+    source_dirs = import_result.target_dirs if import_result is not None else (source_dir,)
     video_notes_start_time = time.perf_counter()
     try:
-        run_video_notes_step(source_dir, config=config.video_notes)
+        for imported_dir in source_dirs:
+            run_video_notes_step(imported_dir, config=config.video_notes)
     finally:
         log_stage_elapsed("video notes", video_notes_start_time)
 
@@ -110,4 +124,5 @@ def main(argv: list[str] | None = None) -> None:
             else rejected_folder_assessment.total_percent_of_disk
         ),
     )
-    open_target_folder(source_dir)
+    log_target_folders(source_dirs)
+    open_single_target_folder(source_dirs)
