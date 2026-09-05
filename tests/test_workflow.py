@@ -61,11 +61,26 @@ def test_open_single_target_folder_opens_only_one_imported_folder(
     """Verify Finder opens when the import contains one capture-date folder."""
     opened_folders: list[Path] = []
     target_dir = tmp_path / "camera" / "2026" / "06" / "20260601"
+    target_dir.mkdir(parents=True)
     monkeypatch.setattr(workflow, "open_target_folder", opened_folders.append)
 
     workflow.open_single_target_folder((target_dir,))
 
     assert opened_folders == [target_dir]
+
+
+def test_open_single_target_folder_skips_missing_folder(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify Finder stays closed when the no-card fallback folder does not exist."""
+    opened_folders: list[Path] = []
+    target_dir = tmp_path / "camera" / "2026" / "06" / "20260601"
+    monkeypatch.setattr(workflow, "open_target_folder", opened_folders.append)
+
+    workflow.open_single_target_folder((target_dir,))
+
+    assert opened_folders == []
 
 
 def test_open_single_target_folder_skips_finder_for_multiple_imported_folders(
@@ -157,7 +172,7 @@ def test_main_runs_memory_card_import_before_video_notes(tmp_path: Path, monkeyp
 
     workflow.main([])
 
-    assert call_order == ["import", "video_notes", "rejected", "disk_space", "open"]
+    assert call_order == ["import", "video_notes", "rejected", "disk_space"]
 
 
 def test_main_passes_purge_rejected_flag_to_rejected_folder_step(

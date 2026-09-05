@@ -84,7 +84,7 @@ def log_target_folders(target_dirs: tuple[Path, ...]) -> None:
 
 def open_single_target_folder(target_dirs: tuple[Path, ...]) -> None:
     """Open the imported folder only when exactly one target was created."""
-    if len(target_dirs) == 1:
+    if len(target_dirs) == 1 and target_dirs[0].is_dir():
         open_target_folder(target_dirs[0])
 
 
