@@ -199,6 +199,28 @@ def test_build_copy_plan_sorts_files_by_capture_date(tmp_path: Path, monkeypatch
     ]
 
 
+def test_build_copy_plan_logs_progress(tmp_path: Path, monkeypatch, caplog) -> None:
+    """Verify copy-plan construction reports first, periodic, and final progress."""
+    source_files = []
+    for index in range(51):
+        source_file = tmp_path / f"AH9A{index:04}.CR3"
+        source_file.write_bytes(b"raw")
+        source_files.append(source_file)
+    monkeypatch.setattr(
+        memory_card_copy,
+        "read_capture_date",
+        lambda source_path: date(2026, 6, 1),
+    )
+
+    with caplog.at_level("INFO"):
+        memory_card_copy.build_copy_plan(source_files, tmp_path / "camera")
+
+    assert "planning import destinations for 51 file(s)" in caplog.text
+    assert "planned 1/51 files" in caplog.text
+    assert "planned 50/51 files" in caplog.text
+    assert "planned 51/51 files" in caplog.text
+
+
 def test_read_capture_date_uses_exiftool_datetime_original(
     tmp_path: Path,
     monkeypatch,

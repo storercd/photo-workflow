@@ -158,8 +158,10 @@ def build_copy_plan(source_files: list[Path], camera_root: Path) -> list[tuple[P
     """
     planned_targets: set[Path] = set()
     copy_plan: list[tuple[Path, Path]] = []
+    total_files = len(source_files)
+    LOGGER.info("planning import destinations for %s file(s)", total_files)
 
-    for source_path in source_files:
+    for index, source_path in enumerate(source_files, start=1):
         capture_date = read_capture_date(source_path)
         capture_dir = build_capture_dir(camera_root, capture_date)
         target_path = capture_dir / build_target_filename(capture_date, source_path)
@@ -169,6 +171,8 @@ def build_copy_plan(source_files: list[Path], camera_root: Path) -> list[tuple[P
             raise FileExistsError(f"Target file already exists: {target_path}")
         planned_targets.add(target_path)
         copy_plan.append((source_path, target_path))
+        if should_log_progress(index, total_files, interval=DEFAULT_COPY_PROGRESS_INTERVAL):
+            LOGGER.info("planned %s/%s files", index, total_files)
 
     return copy_plan
 
