@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -20,6 +21,7 @@ from photo_workflow.config import (
 )
 
 DEFAULT_COPY_PROGRESS_INTERVAL = 50
+METADATA_BATCH_SIZE = 100
 DEFAULT_CARD_MARKER_DIRNAME = "DCIM"
 ANSI_RESET = "\033[0m"
 ANSI_SUCCESS = "\033[1;32m"
@@ -160,9 +162,10 @@ def build_copy_plan(source_files: list[Path], camera_root: Path) -> list[tuple[P
     copy_plan: list[tuple[Path, Path]] = []
     total_files = len(source_files)
     LOGGER.info("planning import destinations for %s file(s)", total_files)
+    capture_dates = read_capture_dates(source_files)
 
-    for index, source_path in enumerate(source_files, start=1):
-        capture_date = read_capture_date(source_path)
+    for source_path in source_files:
+        capture_date = capture_dates[source_path]
         capture_dir = build_capture_dir(camera_root, capture_date)
         target_path = capture_dir / build_target_filename(capture_date, source_path)
         if target_path in planned_targets:
@@ -171,40 +174,70 @@ def build_copy_plan(source_files: list[Path], camera_root: Path) -> list[tuple[P
             raise FileExistsError(f"Target file already exists: {target_path}")
         planned_targets.add(target_path)
         copy_plan.append((source_path, target_path))
-        if should_log_progress(index, total_files, interval=DEFAULT_COPY_PROGRESS_INTERVAL):
-            LOGGER.info("planned %s/%s files", index, total_files)
 
+    LOGGER.info("planned import destinations for %s file(s)", total_files)
     return copy_plan
 
 
-def read_capture_date(source_path: Path) -> date:
+def read_capture_dates(source_files: list[Path]) -> dict[Path, date]:
     """
-    Return the capture date stored in the media file metadata.
+    Return capture dates read from all media files in one ExifTool invocation.
 
     Returns:
-        The calendar date on which the media was captured.
-
-    Raises:
-        ValueError: If the file has no usable capture-date metadata.
+        A mapping from each source file to its capture date.
     """
+    if not source_files:
+        return {}
+
     exiftool_path = require_tool("exiftool")
-    for tag_name in ("DateTimeOriginal", "CreateDate", "MediaCreateDate"):
-        captured_at = read_metadata_timestamp(exiftool_path, tag_name, source_path)
-        if captured_at:
-            return datetime.strptime(captured_at, "%Y:%m:%d %H:%M:%S").date()
+    total_files = len(source_files)
+    capture_dates: dict[Path, date] = {}
+    LOGGER.info("reading capture dates in batches of %s file(s)", METADATA_BATCH_SIZE)
+    for batch_start in range(0, total_files, METADATA_BATCH_SIZE):
+        source_batch = source_files[batch_start : batch_start + METADATA_BATCH_SIZE]
+        capture_dates.update(read_capture_date_batch(exiftool_path, source_batch))
+        processed_files = min(batch_start + len(source_batch), total_files)
+        LOGGER.info("read capture dates for %s/%s files", processed_files, total_files)
+    return capture_dates
 
-    raise ValueError(f"Capture date metadata is missing: {source_path}")
 
-
-def read_metadata_timestamp(exiftool_path: str, tag_name: str, source_path: Path) -> str:
-    """Return a metadata timestamp value for a file, or an empty string when absent."""
+def read_capture_date_batch(exiftool_path: str, source_files: list[Path]) -> dict[Path, date]:
+    """Return capture dates from one ExifTool batch invocation."""
     result = subprocess.run(
-        [exiftool_path, "-s3", f"-{tag_name}", str(source_path)],
+        [
+            exiftool_path,
+            "-j",
+            "-DateTimeOriginal",
+            "-CreateDate",
+            "-MediaCreateDate",
+            *(str(source_path) for source_path in source_files),
+        ],
         capture_output=True,
         check=True,
         text=True,
     )
-    return result.stdout.strip()
+    metadata_records = json.loads(result.stdout)
+    return {
+        Path(metadata["SourceFile"]): extract_capture_date(metadata)
+        for metadata in metadata_records
+    }
+
+
+def extract_capture_date(metadata: dict[str, str]) -> date:
+    """
+    Return the preferred capture date from one ExifTool metadata record.
+
+    Returns:
+        The first available capture date in the configured preference order.
+
+    Raises:
+        ValueError: If the record has no usable capture-date metadata.
+    """
+    for tag_name in ("DateTimeOriginal", "CreateDate", "MediaCreateDate"):
+        if captured_at := metadata.get(tag_name):
+            return datetime.strptime(captured_at, "%Y:%m:%d %H:%M:%S").date()
+
+    raise ValueError(f"Capture date metadata is missing: {metadata['SourceFile']}")
 
 
 def build_capture_dir(camera_root: Path, capture_date: date) -> Path:
