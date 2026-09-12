@@ -43,6 +43,7 @@ def test_load_config_reads_sections_from_toml(tmp_path: Path) -> None:
         '[workflow]\ncamera_root = "~/camera-roll"\n\n'
         '[memory_card_copy]\ncopy_verification = "crc32"\n'
         'halt_on_insufficient_space = false\n'
+        'capture_date_source = "filesystem"\n'
         'ignored_extensions = ["ctg", ".LOG"]\n\n'
         '[video_notes]\nmax_duration_seconds = 7.5\n'
         'transcription_model = "mlx-community/whisper-medium-mlx"\n'
@@ -53,6 +54,7 @@ def test_load_config_reads_sections_from_toml(tmp_path: Path) -> None:
     assert config.workflow.camera_root == Path("~/camera-roll").expanduser()
     assert config.memory_card_copy.copy_verification == "crc32"
     assert config.memory_card_copy.halt_on_insufficient_space is False
+    assert config.memory_card_copy.capture_date_source == "filesystem"
     assert config.memory_card_copy.ignored_extensions == (".ctg", ".log")
     assert config.video_notes.max_duration_seconds == 7.5
     assert config.video_notes.transcription_model == "mlx-community/whisper-medium-mlx"

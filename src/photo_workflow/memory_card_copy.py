@@ -63,9 +63,13 @@ def run_memory_card_import(
     LOGGER.info("found %s importable file(s) on the memory card", len(source_files))
 
     camera_root.mkdir(parents=True, exist_ok=True)
-    copy_plan = build_copy_plan(source_files, camera_root)
     if config.halt_on_insufficient_space:
-        ensure_target_has_sufficient_space(copy_plan, camera_root)
+        ensure_target_has_sufficient_space(source_files, camera_root)
+    copy_plan = build_copy_plan(
+        source_files,
+        camera_root,
+        capture_date_source=config.capture_date_source,
+    )
     copy_start_time = time.perf_counter()
     try:
         copy_files(copy_plan)
@@ -148,7 +152,12 @@ def is_hidden_card_path(path: Path, *, card_root: Path) -> bool:
     return any(part.startswith(".") for part in relative_parts)
 
 
-def build_copy_plan(source_files: list[Path], camera_root: Path) -> list[tuple[Path, Path]]:
+def build_copy_plan(
+    source_files: list[Path],
+    camera_root: Path,
+    *,
+    capture_date_source: str = "exif",
+) -> list[tuple[Path, Path]]:
     """
     Return source and target pairs, failing early on filename collisions.
 
@@ -162,7 +171,7 @@ def build_copy_plan(source_files: list[Path], camera_root: Path) -> list[tuple[P
     copy_plan: list[tuple[Path, Path]] = []
     total_files = len(source_files)
     LOGGER.info("planning import destinations for %s file(s)", total_files)
-    capture_dates = read_capture_dates(source_files)
+    capture_dates = read_capture_dates(source_files, capture_date_source=capture_date_source)
 
     for source_path in source_files:
         capture_date = capture_dates[source_path]
@@ -175,19 +184,30 @@ def build_copy_plan(source_files: list[Path], camera_root: Path) -> list[tuple[P
         planned_targets.add(target_path)
         copy_plan.append((source_path, target_path))
 
-    LOGGER.info("planned import destinations for %s file(s)", total_files)
+    LOGGER.info(
+        "planned import destinations for %s file(s) across %s date(s)",
+        total_files,
+        len(set(capture_dates.values())),
+    )
     return copy_plan
 
 
-def read_capture_dates(source_files: list[Path]) -> dict[Path, date]:
+def read_capture_dates(
+    source_files: list[Path],
+    *,
+    capture_date_source: str,
+) -> dict[Path, date]:
     """
-    Return capture dates read from all media files in one ExifTool invocation.
+    Return capture dates from ExifTool metadata or filesystem timestamps.
 
     Returns:
         A mapping from each source file to its capture date.
     """
     if not source_files:
         return {}
+    if capture_date_source == "filesystem":
+        LOGGER.info("reading capture dates from filesystem timestamps")
+        return read_filesystem_capture_dates(source_files)
 
     exiftool_path = require_tool("exiftool")
     total_files = len(source_files)
@@ -198,6 +218,16 @@ def read_capture_dates(source_files: list[Path]) -> dict[Path, date]:
         capture_dates.update(read_capture_date_batch(exiftool_path, source_batch))
         processed_files = min(batch_start + len(source_batch), total_files)
         LOGGER.info("read capture dates for %s/%s files", processed_files, total_files)
+    return capture_dates
+
+
+def read_filesystem_capture_dates(source_files: list[Path]) -> dict[Path, date]:
+    """Return capture dates from filesystem creation or modification timestamps."""
+    capture_dates: dict[Path, date] = {}
+    for source_path in source_files:
+        file_status = source_path.stat()
+        timestamp = getattr(file_status, "st_birthtime", file_status.st_mtime)
+        capture_dates[source_path] = datetime.fromtimestamp(timestamp).date()
     return capture_dates
 
 
@@ -266,7 +296,7 @@ def copy_files(copy_plan: list[tuple[Path, Path]]) -> None:
 
 
 def ensure_target_has_sufficient_space(
-    copy_plan: list[tuple[Path, Path]],
+    source_files: list[Path],
     target_dir: Path,
 ) -> None:
     """
@@ -275,13 +305,19 @@ def ensure_target_has_sufficient_space(
     Raises:
         OSError: If the target volume lacks space for every planned source file.
     """
-    required_bytes = sum(source_path.stat().st_size for source_path, _ in copy_plan)
+    required_bytes = sum(source_path.stat().st_size for source_path in source_files)
     available_bytes = shutil.disk_usage(target_dir).free
     if required_bytes > available_bytes:
         raise OSError(
             "insufficient free space on target volume: "
-            f"{required_bytes} bytes required, {available_bytes} bytes available"
+            f"{format_gibibytes(required_bytes)} required, "
+            f"{format_gibibytes(available_bytes)} available"
         )
+
+
+def format_gibibytes(bytes_count: int) -> str:
+    """Return a byte count formatted in gibibytes for user-facing output."""
+    return f"{bytes_count / (1024**3):.1f} GB"
 
 
 def should_log_copy_progress(index: int, total_files: int) -> bool:

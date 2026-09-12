@@ -20,12 +20,15 @@ def mock_capture_date(monkeypatch, request) -> None:
     if request.node.name in {
         "test_read_capture_dates_uses_batched_exiftool_output",
         "test_read_capture_dates_logs_completed_batches",
+        "test_read_capture_dates_uses_filesystem_timestamps",
     }:
         return
     monkeypatch.setattr(
         memory_card_copy,
         "read_capture_dates",
-        lambda source_files: {source_path: date(2026, 5, 29) for source_path in source_files},
+        lambda source_files, **kwargs: {
+            source_path: date(2026, 5, 29) for source_path in source_files
+        },
     )
 
 
@@ -193,7 +196,7 @@ def test_build_copy_plan_sorts_files_by_capture_date(tmp_path: Path, monkeypatch
     monkeypatch.setattr(
         memory_card_copy,
         "read_capture_dates",
-        lambda source_files: {source_path: capture_date for source_path in source_files},
+        lambda source_files, **kwargs: {source_path: capture_date for source_path in source_files},
     )
 
     copy_plan = memory_card_copy.build_copy_plan([source_file], camera_root)
@@ -216,14 +219,16 @@ def test_build_copy_plan_logs_completion(tmp_path: Path, monkeypatch, caplog) ->
     monkeypatch.setattr(
         memory_card_copy,
         "read_capture_dates",
-        lambda source_files: {source_path: date(2026, 6, 1) for source_path in source_files},
+        lambda source_files, **kwargs: {
+            source_path: date(2026, 6, 1) for source_path in source_files
+        },
     )
 
     with caplog.at_level("INFO"):
         memory_card_copy.build_copy_plan(source_files, tmp_path / "camera")
 
     assert "planning import destinations for 51 file(s)" in caplog.text
-    assert "planned import destinations for 51 file(s)" in caplog.text
+    assert "planned import destinations for 51 file(s) across 1 date(s)" in caplog.text
 
 
 def test_read_capture_dates_uses_batched_exiftool_output(
@@ -260,7 +265,10 @@ def test_read_capture_dates_uses_batched_exiftool_output(
         run_exiftool,
     )
 
-    capture_dates = memory_card_copy.read_capture_dates([original_file, fallback_file])
+    capture_dates = memory_card_copy.read_capture_dates(
+        [original_file, fallback_file],
+        capture_date_source="exif",
+    )
 
     assert capture_dates == {
         original_file: date(2026, 6, 1),
@@ -305,13 +313,30 @@ def test_read_capture_dates_logs_completed_batches(tmp_path: Path, monkeypatch, 
     monkeypatch.setattr(memory_card_copy.subprocess, "run", run_exiftool)
 
     with caplog.at_level("INFO"):
-        capture_dates = memory_card_copy.read_capture_dates(source_files)
+        capture_dates = memory_card_copy.read_capture_dates(
+            source_files,
+            capture_date_source="exif",
+        )
 
     assert len(commands) == 2
     assert capture_dates == {source_file: date(2026, 6, 1) for source_file in source_files}
     assert "reading capture dates in batches of 2 file(s)" in caplog.text
     assert "read capture dates for 2/3 files" in caplog.text
     assert "read capture dates for 3/3 files" in caplog.text
+
+
+def test_read_capture_dates_uses_filesystem_timestamps(tmp_path: Path) -> None:
+    """Verify filesystem capture-date mode avoids metadata extraction."""
+    source_file = tmp_path / "AH9A9764.CR3"
+    source_file.write_bytes(b"raw")
+    source_file.touch()
+
+    capture_dates = memory_card_copy.read_capture_dates(
+        [source_file],
+        capture_date_source="filesystem",
+    )
+
+    assert capture_dates == {source_file: date.today()}
 
 
 def test_build_copy_plan_rejects_existing_prefixed_target(tmp_path: Path) -> None:
@@ -386,8 +411,16 @@ def test_run_memory_card_import_stops_before_copy_when_target_lacks_space(
         "copy_files",
         lambda copy_plan: copied_files.extend(copy_plan),
     )
+    monkeypatch.setattr(
+        memory_card_copy,
+        "read_capture_dates",
+        lambda *args, **kwargs: pytest.fail("capture dates should not be read"),
+    )
 
-    with pytest.raises(OSError, match="insufficient free space"):
+    with pytest.raises(
+        OSError,
+        match="insufficient free space on target volume: 0.0 GB required, 0.0 GB available",
+    ):
         memory_card_copy.run_memory_card_import(
             camera_root,
             config=app_config.MemoryCardCopyConfig(card_mount_root=mount_root),

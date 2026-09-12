@@ -14,10 +14,12 @@ DEFAULT_LOW_DISK_WARNING_GB = 30.0
 DEFAULT_LOW_DISK_WARNING_PERCENT = 5.0
 DEFAULT_COPY_VERIFICATION = "basic"
 DEFAULT_HALT_ON_INSUFFICIENT_SPACE = True
+DEFAULT_CAPTURE_DATE_SOURCE = "exif"
 DEFAULT_IGNORED_CARD_EXTENSIONS = (".ctg", ".log", ".tmp", ".to3")
 DEFAULT_MAX_DURATION_SECONDS = 10.0
 DEFAULT_TRANSCRIPTION_MODEL = "mlx-community/whisper-tiny-mlx"
 VALID_COPY_VERIFICATION_METHODS = {"basic", "crc32"}
+VALID_CAPTURE_DATE_SOURCES = {"exif", "filesystem"}
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ class MemoryCardCopyConfig:
     low_disk_warning_percent: float = DEFAULT_LOW_DISK_WARNING_PERCENT
     copy_verification: str = DEFAULT_COPY_VERIFICATION
     halt_on_insufficient_space: bool = DEFAULT_HALT_ON_INSUFFICIENT_SPACE
+    capture_date_source: str = DEFAULT_CAPTURE_DATE_SOURCE
     ignored_extensions: tuple[str, ...] = DEFAULT_IGNORED_CARD_EXTENSIONS
 
 
@@ -86,6 +89,16 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             f"{sorted(VALID_COPY_VERIFICATION_METHODS)}"
         )
 
+    capture_date_source = memory_card_copy_config.get(
+        "capture_date_source",
+        DEFAULT_CAPTURE_DATE_SOURCE,
+    )
+    if capture_date_source not in VALID_CAPTURE_DATE_SOURCES:
+        raise ValueError(
+            "memory_card_copy.capture_date_source must be one of "
+            f"{sorted(VALID_CAPTURE_DATE_SOURCES)}"
+        )
+
     ignored_extensions = normalize_ignored_extensions(
         memory_card_copy_config.get(
             "ignored_extensions",
@@ -123,6 +136,7 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             ),
             copy_verification=copy_verification,
             halt_on_insufficient_space=halt_on_insufficient_space,
+            capture_date_source=capture_date_source,
             ignored_extensions=ignored_extensions,
         ),
         video_notes=VideoNotesConfig(

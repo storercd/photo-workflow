@@ -50,6 +50,7 @@ low_disk_warning_gb = 30.0
 low_disk_warning_percent = 5.0
 copy_verification = "basic"
 halt_on_insufficient_space = true
+capture_date_source = "filesystem"
 ignored_extensions = [".ctg", ".log", ".tmp"]
 
 [video_notes]
@@ -62,6 +63,9 @@ to `"crc32"` to read both source and destination and compare CRC32 checksums.
 `ignored_extensions` skips known non-media sidecar files during copy and delete.
 `halt_on_insufficient_space = true` stops an import before copying when the target
 volume has fewer free bytes than the planned source files require.
+`capture_date_source = "filesystem"` uses the card's creation time, falling back to
+modification time, and avoids reading embedded EXIF metadata. Use the default
+`"exif"` mode when capture dates must be taken from the camera metadata.
 
 Run it with:
 
