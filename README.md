@@ -80,6 +80,16 @@ report is logged:
 uv run photo-workflow-run --purge-rejected
 ```
 
+Remove unused `.jpg` camera companion files beneath a root folder with:
+
+```bash
+uv run photo-workflow-purge-jpegs /path/to/photos
+```
+
+The command reports the number of files and disk space recovered. Add
+`--dry-run` to report what would be removed without deleting files. When the
+root is omitted, it uses the configured `workflow.camera_root`.
+
 Run the steps individually with:
 
 ```bash
