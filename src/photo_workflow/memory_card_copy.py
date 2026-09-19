@@ -159,13 +159,17 @@ def build_copy_plan(
     capture_date_source: str = "exif",
 ) -> list[tuple[Path, Path]]:
     """
-    Return source and target pairs, failing early on filename collisions.
+    Return source and target pairs, failing early on unresolvable filename collisions.
+
+    When two source files would share the same target name, the source's parent
+    folder name is inserted to disambiguate them. Files without a collision keep
+    their plain date-prefixed name.
 
     Returns:
         Source and target file pairs for the import operation.
 
     Raises:
-        FileExistsError: If duplicate source names or existing target files would collide.
+        FileExistsError: If a filename collision remains after disambiguation.
     """
     planned_targets: set[Path] = set()
     copy_plan: list[tuple[Path, Path]] = []
@@ -177,6 +181,10 @@ def build_copy_plan(
         capture_date = capture_dates[source_path]
         capture_dir = build_capture_dir(camera_root, capture_date)
         target_path = capture_dir / build_target_filename(capture_date, source_path)
+        if target_path in planned_targets or target_path.exists():
+            target_path = capture_dir / build_target_filename(
+                capture_date, source_path, disambiguator=source_path.parent.name
+            )
         if target_path in planned_targets:
             raise FileExistsError(f"Duplicate filename on memory card: {source_path.name}")
         if target_path.exists():
@@ -280,9 +288,20 @@ def build_capture_dir(camera_root: Path, capture_date: date) -> Path:
     )
 
 
-def build_target_filename(capture_date: date, source_path: Path) -> str:
-    """Return a target filename prefixed with its capture date."""
-    return f"{capture_date:%Y%m%d}_{source_path.name}"
+def build_target_filename(
+    capture_date: date, source_path: Path, *, disambiguator: str | None = None
+) -> str:
+    """Return a target filename prefixed with its capture date.
+
+    Args:
+        disambiguator: An extra path segment (e.g. the source's parent folder
+            name) inserted after the date prefix to separate files that would
+            otherwise share the same capture date and original name.
+    """
+    prefix = f"{capture_date:%Y%m%d}"
+    if disambiguator:
+        prefix = f"{prefix}_{disambiguator}"
+    return f"{prefix}_{source_path.name}"
 
 
 def copy_files(copy_plan: list[tuple[Path, Path]]) -> None:

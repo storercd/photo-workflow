@@ -209,6 +209,40 @@ def test_build_copy_plan_sorts_files_by_capture_date(tmp_path: Path, monkeypatch
     ]
 
 
+def test_build_copy_plan_disambiguates_only_colliding_filenames(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Verify same-named files on the same capture date are disambiguated by source folder."""
+    folder_a = tmp_path / "100EOSR6"
+    folder_b = tmp_path / "101EOSR6"
+    folder_a.mkdir()
+    folder_b.mkdir()
+    colliding_a = folder_a / "CDS19797.CR3"
+    colliding_b = folder_b / "CDS19797.CR3"
+    unique_file = folder_a / "CDS19798.CR3"
+    colliding_a.write_bytes(b"raw-a")
+    colliding_b.write_bytes(b"raw-b")
+    unique_file.write_bytes(b"raw-c")
+    capture_date = date(2026, 6, 1)
+    monkeypatch.setattr(
+        memory_card_copy,
+        "read_capture_dates",
+        lambda source_files, **kwargs: {source_path: capture_date for source_path in source_files},
+    )
+    camera_root = tmp_path / "camera"
+    target_dir = camera_root / "2026" / "06" / "20260601"
+
+    copy_plan = memory_card_copy.build_copy_plan(
+        [colliding_a, colliding_b, unique_file], camera_root
+    )
+
+    assert copy_plan == [
+        (colliding_a, target_dir / "20260601_CDS19797.CR3"),
+        (colliding_b, target_dir / "20260601_101EOSR6_CDS19797.CR3"),
+        (unique_file, target_dir / "20260601_CDS19798.CR3"),
+    ]
+
+
 def test_build_copy_plan_logs_completion(tmp_path: Path, monkeypatch, caplog) -> None:
     """Verify copy-plan construction reports when all destinations are planned."""
     source_files = []
@@ -340,12 +374,15 @@ def test_read_capture_dates_uses_filesystem_timestamps(tmp_path: Path) -> None:
 
 
 def test_build_copy_plan_rejects_existing_prefixed_target(tmp_path: Path) -> None:
-    """Verify ingest fails when the prefixed target filename already exists."""
-    source_file = tmp_path / "AH9A9764.CR3"
+    """Verify ingest fails when both the plain and disambiguated targets already exist."""
+    source_folder = tmp_path / "100EOSR6"
+    source_folder.mkdir()
+    source_file = source_folder / "AH9A9764.CR3"
     source_file.write_bytes(b"raw")
     target_dir = tmp_path / "camera" / "2026" / "05" / "20260529"
     target_dir.mkdir(parents=True)
     (target_dir / "20260529_AH9A9764.CR3").write_bytes(b"existing")
+    (target_dir / "20260529_100EOSR6_AH9A9764.CR3").write_bytes(b"existing-disambiguated")
 
     with pytest.raises(FileExistsError, match="Target file already exists"):
         memory_card_copy.build_copy_plan([source_file], tmp_path / "camera")
