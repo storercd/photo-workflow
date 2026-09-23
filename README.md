@@ -21,9 +21,10 @@ pytest
 
 The workflow now runs in three steps:
 
-1. Detect a mounted memory card, sort its files into capture-date camera
-	folders and prefix each filename with that capture date, verify the copy, delete the copied files from the card, eject the
-	card, and report remaining disk space.
+1. Detect a mounted memory card, copy its files to a temporary staging directory
+	on the target volume, read their capture timestamps, move them into capture-date
+	folders, verify the import, delete the copied files from the card, eject the card,
+	and report remaining disk space.
 2. Scan the dated camera folder for short `.mp4` files, run local
 	transcription, and create `.tif` note images with a red frame and centered
 	speech text.
@@ -50,7 +51,6 @@ low_disk_warning_gb = 30.0
 low_disk_warning_percent = 5.0
 copy_verification = "basic"
 halt_on_insufficient_space = true
-capture_date_source = "filesystem"
 ignored_extensions = [".ctg", ".log", ".tmp"]
 
 [video_notes]
@@ -63,9 +63,14 @@ to `"crc32"` to read both source and destination and compare CRC32 checksums.
 `ignored_extensions` skips known non-media sidecar files during copy and delete.
 `halt_on_insufficient_space = true` stops an import before copying when the target
 volume has fewer free bytes than the planned source files require.
-`capture_date_source = "filesystem"` uses the card's creation time, falling back to
-modification time, and avoids reading embedded EXIF metadata. Use the default
-`"exif"` mode when capture dates must be taken from the camera metadata.
+Imported filenames use `YYYYMMDD_HHMMSS_FF_original-name.ext`, where `FF` is
+hundredths of a second. Capture time comes from `DateTimeOriginal`, `CreateDate`,
+or `MediaCreateDate`, in that order. Files without usable metadata fall back to
+their preserved filesystem modification time and produce a warning. A source
+folder name is added only if two complete destination filenames still collide.
+
+Staging directories are hidden under `camera_root` so final moves stay on the
+same volume. They are removed after the run, including when an import fails.
 
 Run it with:
 

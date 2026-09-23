@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from collections import namedtuple
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -16,18 +16,20 @@ from photo_workflow import memory_card_copy
 
 @pytest.fixture(autouse=True)
 def mock_capture_date(monkeypatch, request) -> None:
-    """Provide a capture date for byte-only media fixtures."""
+    """Provide a capture timestamp for byte-only media fixtures."""
     if request.node.name in {
-        "test_read_capture_dates_uses_batched_exiftool_output",
-        "test_read_capture_dates_logs_completed_batches",
-        "test_read_capture_dates_uses_filesystem_timestamps",
+        "test_read_capture_timestamps_uses_batched_exiftool_output",
+        "test_read_capture_timestamps_logs_completed_batches",
+        "test_read_filesystem_capture_timestamps_uses_modification_time",
+        "test_read_capture_timestamps_falls_back_when_exiftool_is_unavailable",
     }:
         return
     monkeypatch.setattr(
         memory_card_copy,
-        "read_capture_dates",
-        lambda source_files, **kwargs: {
-            source_path: date(2026, 5, 29) for source_path in source_files
+        "read_capture_timestamps",
+        lambda source_files: {
+            source_path: datetime(2026, 5, 29, 14, 30, 0, 830000)
+            for source_path in source_files
         },
     )
 
@@ -77,14 +79,18 @@ def test_run_memory_card_import_copies_flattens_and_cleans_card(
     assert result.imported_files == 2
     assert result.target_dirs == (target_dir,)
     assert sorted(path.name for path in target_dir.iterdir()) == [
-        "20260529_A001.CR3",
-        "20260529_A001.JPG",
+        "20260529_143000_83_A001.CR3",
+        "20260529_143000_83_A001.JPG",
     ]
     assert list(memory_card_copy.iter_memory_card_files(card_root)) == []
     assert "detected memory card" in caplog.text
-    assert "copied 2/2 files" in caplog.text
+    assert "staged 2/2 files" in caplog.text
+    assert "metadata reading completed" in caplog.text
+    assert "finalized 2/2 files" in caplog.text
     assert "verifying 2 copied file(s) using basic verification" in caplog.text
+    assert "removed staging directory" in caplog.text
     assert "ejected memory card" in caplog.text
+    assert not list(camera_root.glob(".photo-workflow-staging-*"))
 
 
 def test_run_memory_card_import_ignores_canon_support_files(tmp_path: Path, monkeypatch) -> None:
@@ -116,7 +122,9 @@ def test_run_memory_card_import_ignores_canon_support_files(tmp_path: Path, monk
 
     assert result is not None
     assert result.imported_files == 1
-    assert sorted(path.name for path in target_dir.iterdir()) == ["20260529_A001.CR3"]
+    assert sorted(path.name for path in target_dir.iterdir()) == [
+        "20260529_143000_83_A001.CR3"
+    ]
     assert ctg_path.exists()
     assert state_path.exists()
 
@@ -154,7 +162,9 @@ def test_run_memory_card_import_uses_configured_ignored_extensions(
 
     assert result is not None
     assert result.imported_files == 1
-    assert sorted(path.name for path in target_dir.iterdir()) == ["20260529_A001.CR3"]
+    assert sorted(path.name for path in target_dir.iterdir()) == [
+        "20260529_143000_83_A001.CR3"
+    ]
     assert ignored_path.exists()
 
 
@@ -170,7 +180,9 @@ def test_run_memory_card_import_logs_copy_and_verification_elapsed_time(
     dcim_root.mkdir(parents=True)
     (dcim_root / "A001.CR3").write_bytes(b"raw")
     camera_root = tmp_path / "camera"
-    timing_values = iter([10.0, 12.5, 20.0, 23.25, 30.0, 31.0, 40.0, 40.5])
+    timing_values = iter(
+        [10.0, 12.5, 20.0, 23.25, 30.0, 31.0, 40.0, 43.25, 50.0, 51.0, 60.0, 60.5]
+    )
 
     monkeypatch.setattr(memory_card_copy, "delete_memory_card_files", lambda *args, **kwargs: None)
     monkeypatch.setattr(memory_card_copy, "eject_memory_card", lambda card_root: None)
@@ -183,7 +195,9 @@ def test_run_memory_card_import_logs_copy_and_verification_elapsed_time(
             report_disk_space=False,
         )
 
-    assert "import completed in 2.50s" in caplog.text
+    assert "staging copy completed in 2.50s" in caplog.text
+    assert "metadata reading completed in 3.25s" in caplog.text
+    assert "finalization completed in 1.00s" in caplog.text
     assert "verification completed in 3.25s" in caplog.text
 
 
@@ -192,19 +206,20 @@ def test_build_copy_plan_sorts_files_by_capture_date(tmp_path: Path, monkeypatch
     source_file = tmp_path / "AH9A9764.CR3"
     source_file.write_bytes(b"raw")
     camera_root = tmp_path / "camera"
-    capture_date = date(2026, 6, 1)
-    monkeypatch.setattr(
-        memory_card_copy,
-        "read_capture_dates",
-        lambda source_files, **kwargs: {source_path: capture_date for source_path in source_files},
-    )
+    captured_at = datetime(2026, 6, 1, 14, 30, 0, 830000)
 
-    copy_plan = memory_card_copy.build_copy_plan([source_file], camera_root)
+    copy_plan = memory_card_copy.build_copy_plan(
+        [source_file], camera_root, {source_file: captured_at}
+    )
 
     assert copy_plan == [
         (
             source_file,
-            camera_root / "2026" / "06" / "20260601" / "20260601_AH9A9764.CR3",
+            camera_root
+            / "2026"
+            / "06"
+            / "20260601"
+            / "20260601_143000_83_AH9A9764.CR3",
         ),
     ]
 
@@ -223,23 +238,24 @@ def test_build_copy_plan_disambiguates_only_colliding_filenames(
     colliding_a.write_bytes(b"raw-a")
     colliding_b.write_bytes(b"raw-b")
     unique_file.write_bytes(b"raw-c")
-    capture_date = date(2026, 6, 1)
-    monkeypatch.setattr(
-        memory_card_copy,
-        "read_capture_dates",
-        lambda source_files, **kwargs: {source_path: capture_date for source_path in source_files},
-    )
+    captured_at = datetime(2026, 6, 1, 14, 30, 0, 830000)
     camera_root = tmp_path / "camera"
     target_dir = camera_root / "2026" / "06" / "20260601"
 
     copy_plan = memory_card_copy.build_copy_plan(
-        [colliding_a, colliding_b, unique_file], camera_root
+        [colliding_a, colliding_b, unique_file],
+        camera_root,
+        {
+            colliding_a: captured_at,
+            colliding_b: captured_at,
+            unique_file: captured_at,
+        },
     )
 
     assert copy_plan == [
-        (colliding_a, target_dir / "20260601_CDS19797.CR3"),
-        (colliding_b, target_dir / "20260601_101EOSR6_CDS19797.CR3"),
-        (unique_file, target_dir / "20260601_CDS19798.CR3"),
+        (colliding_a, target_dir / "20260601_143000_83_CDS19797.CR3"),
+        (colliding_b, target_dir / "20260601_143000_83_101EOSR6_CDS19797.CR3"),
+        (unique_file, target_dir / "20260601_143000_83_CDS19798.CR3"),
     ]
 
 
@@ -250,22 +266,20 @@ def test_build_copy_plan_logs_completion(tmp_path: Path, monkeypatch, caplog) ->
         source_file = tmp_path / f"AH9A{index:04}.CR3"
         source_file.write_bytes(b"raw")
         source_files.append(source_file)
-    monkeypatch.setattr(
-        memory_card_copy,
-        "read_capture_dates",
-        lambda source_files, **kwargs: {
-            source_path: date(2026, 6, 1) for source_path in source_files
-        },
-    )
+    capture_timestamps = {
+        source_path: datetime(2026, 6, 1, 14, 30) for source_path in source_files
+    }
 
     with caplog.at_level("INFO"):
-        memory_card_copy.build_copy_plan(source_files, tmp_path / "camera")
+        memory_card_copy.build_copy_plan(
+            source_files, tmp_path / "camera", capture_timestamps
+        )
 
     assert "planning import destinations for 51 file(s)" in caplog.text
     assert "planned import destinations for 51 file(s) across 1 date(s)" in caplog.text
 
 
-def test_read_capture_dates_uses_batched_exiftool_output(
+def test_read_capture_timestamps_uses_batched_exiftool_output(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -274,7 +288,7 @@ def test_read_capture_dates_uses_batched_exiftool_output(
     fallback_file = tmp_path / "AH9A9765.MP4"
     original_file.write_bytes(b"raw")
     fallback_file.write_bytes(b"video")
-    monkeypatch.setattr(memory_card_copy, "require_tool", lambda name: "/usr/local/bin/exiftool")
+    monkeypatch.setattr(memory_card_copy.shutil, "which", lambda name: "/usr/local/bin/exiftool")
     commands: list[list[str]] = []
 
     def run_exiftool(*args, **kwargs) -> subprocess.CompletedProcess:
@@ -287,6 +301,7 @@ def test_read_capture_dates_uses_batched_exiftool_output(
                     {
                         "SourceFile": str(original_file),
                         "DateTimeOriginal": "2026:06:01 14:30:00",
+                            "SubSecTimeOriginal": "83",
                     },
                     {"SourceFile": str(fallback_file), "CreateDate": "2026:06:02 10:00:00"},
                 ]
@@ -299,21 +314,23 @@ def test_read_capture_dates_uses_batched_exiftool_output(
         run_exiftool,
     )
 
-    capture_dates = memory_card_copy.read_capture_dates(
-        [original_file, fallback_file],
-        capture_date_source="exif",
+    capture_timestamps = memory_card_copy.read_capture_timestamps(
+        [original_file, fallback_file]
     )
 
-    assert capture_dates == {
-        original_file: date(2026, 6, 1),
-        fallback_file: date(2026, 6, 2),
+    assert capture_timestamps == {
+        original_file: datetime(2026, 6, 1, 14, 30, 0, 830000),
+        fallback_file: datetime(2026, 6, 2, 10, 0),
     }
     assert commands == [
         [
             "/usr/local/bin/exiftool",
+            "-fast2",
             "-j",
             "-DateTimeOriginal",
+            "-SubSecTimeOriginal",
             "-CreateDate",
+            "-SubSecCreateDate",
             "-MediaCreateDate",
             str(original_file),
             str(fallback_file),
@@ -321,12 +338,14 @@ def test_read_capture_dates_uses_batched_exiftool_output(
     ]
 
 
-def test_read_capture_dates_logs_completed_batches(tmp_path: Path, monkeypatch, caplog) -> None:
-    """Verify capture-date extraction reports each completed ExifTool batch."""
+def test_read_capture_timestamps_logs_completed_batches(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    """Verify capture-timestamp extraction reports each completed ExifTool batch."""
     source_files = [tmp_path / f"AH9A{index:04}.CR3" for index in range(3)]
     for source_file in source_files:
         source_file.write_bytes(b"raw")
-    monkeypatch.setattr(memory_card_copy, "require_tool", lambda name: "/usr/local/bin/exiftool")
+    monkeypatch.setattr(memory_card_copy.shutil, "which", lambda name: "/usr/local/bin/exiftool")
     monkeypatch.setattr(memory_card_copy, "METADATA_BATCH_SIZE", 2)
     commands: list[list[str]] = []
 
@@ -339,7 +358,7 @@ def test_read_capture_dates_logs_completed_batches(tmp_path: Path, monkeypatch, 
             json.dumps(
                 [
                     {"SourceFile": source_file, "DateTimeOriginal": "2026:06:01 14:30:00"}
-                    for source_file in command[5:]
+                        for source_file in command[8:]
                 ]
             ),
         )
@@ -347,30 +366,83 @@ def test_read_capture_dates_logs_completed_batches(tmp_path: Path, monkeypatch, 
     monkeypatch.setattr(memory_card_copy.subprocess, "run", run_exiftool)
 
     with caplog.at_level("INFO"):
-        capture_dates = memory_card_copy.read_capture_dates(
-            source_files,
-            capture_date_source="exif",
-        )
+        capture_timestamps = memory_card_copy.read_capture_timestamps(source_files)
 
     assert len(commands) == 2
-    assert capture_dates == {source_file: date(2026, 6, 1) for source_file in source_files}
-    assert "reading capture dates in batches of 2 file(s)" in caplog.text
-    assert "read capture dates for 2/3 files" in caplog.text
-    assert "read capture dates for 3/3 files" in caplog.text
+    assert capture_timestamps == {
+        source_file: datetime(2026, 6, 1, 14, 30) for source_file in source_files
+    }
+    assert "reading capture timestamps in batches of 2 file(s)" in caplog.text
+    assert "read capture timestamps for 2/3 files" in caplog.text
+    assert "read capture timestamps for 3/3 files" in caplog.text
 
 
-def test_read_capture_dates_uses_filesystem_timestamps(tmp_path: Path) -> None:
-    """Verify filesystem capture-date mode avoids metadata extraction."""
+def test_read_filesystem_capture_timestamps_uses_modification_time(tmp_path: Path) -> None:
+    """Verify filesystem fallback uses the copy-preserved modification timestamp."""
     source_file = tmp_path / "AH9A9764.CR3"
     source_file.write_bytes(b"raw")
+    expected_timestamp = datetime(2026, 6, 1, 14, 30, 0, 120000)
+    timestamp = expected_timestamp.timestamp()
     source_file.touch()
+    memory_card_copy.os.utime(source_file, (timestamp, timestamp))
 
-    capture_dates = memory_card_copy.read_capture_dates(
-        [source_file],
-        capture_date_source="filesystem",
+    capture_timestamps = memory_card_copy.read_filesystem_capture_timestamps([source_file])
+
+    assert capture_timestamps == {source_file: expected_timestamp}
+
+
+def test_read_capture_timestamps_falls_back_when_exiftool_is_unavailable(
+    tmp_path: Path, monkeypatch, caplog
+) -> None:
+    """Verify missing ExifTool falls back for all files and emits a warning."""
+    source_file = tmp_path / "AH9A9764.CR3"
+    source_file.write_bytes(b"raw")
+    expected_timestamp = datetime(2026, 6, 1, 14, 30)
+    timestamp = expected_timestamp.timestamp()
+    memory_card_copy.os.utime(source_file, (timestamp, timestamp))
+    monkeypatch.setattr(memory_card_copy.shutil, "which", lambda name: None)
+
+    with caplog.at_level("WARNING"):
+        capture_timestamps = memory_card_copy.read_capture_timestamps([source_file])
+
+    assert capture_timestamps == {source_file: expected_timestamp}
+    assert "ExifTool unavailable; using filesystem timestamps for all files" in caplog.text
+
+
+def test_extract_capture_timestamp_uses_subseconds_and_filesystem_fallback(
+    tmp_path: Path,
+) -> None:
+    """Verify EXIF timestamps retain subseconds and missing metadata falls back."""
+    source_file = tmp_path / "AH9A9764.CR3"
+    source_file.write_bytes(b"raw")
+    fallback_timestamp = datetime(2026, 6, 1, 14, 29, 59, 120000)
+
+    captured_at, used_fallback = memory_card_copy.extract_capture_timestamp(
+        {
+            "SourceFile": str(source_file),
+            "DateTimeOriginal": "2026:06:01 14:30:00",
+            "SubSecTimeOriginal": 83,
+        },
+        fallback_timestamp=fallback_timestamp,
+    )
+    fallback_at, fallback_used = memory_card_copy.extract_capture_timestamp(
+        {"SourceFile": str(source_file)},
+        fallback_timestamp=fallback_timestamp,
+    )
+    malformed_at, malformed_used = memory_card_copy.extract_capture_timestamp(
+        {
+            "SourceFile": str(source_file),
+            "DateTimeOriginal": "not-a-timestamp",
+        },
+        fallback_timestamp=fallback_timestamp,
     )
 
-    assert capture_dates == {source_file: date.today()}
+    assert captured_at == datetime(2026, 6, 1, 14, 30, 0, 830000)
+    assert used_fallback is False
+    assert fallback_at == fallback_timestamp
+    assert fallback_used is True
+    assert malformed_at == fallback_timestamp
+    assert malformed_used is True
 
 
 def test_build_copy_plan_rejects_existing_prefixed_target(tmp_path: Path) -> None:
@@ -381,11 +453,13 @@ def test_build_copy_plan_rejects_existing_prefixed_target(tmp_path: Path) -> Non
     source_file.write_bytes(b"raw")
     target_dir = tmp_path / "camera" / "2026" / "05" / "20260529"
     target_dir.mkdir(parents=True)
-    (target_dir / "20260529_AH9A9764.CR3").write_bytes(b"existing")
-    (target_dir / "20260529_100EOSR6_AH9A9764.CR3").write_bytes(b"existing-disambiguated")
+    captured_at = datetime(2026, 5, 29, 14, 30, 0, 830000)
+    (target_dir / "20260529_143000_83_AH9A9764.CR3").write_bytes(b"existing")
 
     with pytest.raises(FileExistsError, match="Target file already exists"):
-        memory_card_copy.build_copy_plan([source_file], tmp_path / "camera")
+        memory_card_copy.build_copy_plan(
+            [source_file], tmp_path / "camera", {source_file: captured_at}
+        )
 
 
 def test_run_memory_card_import_stops_before_delete_when_verification_fails(
@@ -450,8 +524,8 @@ def test_run_memory_card_import_stops_before_copy_when_target_lacks_space(
     )
     monkeypatch.setattr(
         memory_card_copy,
-        "read_capture_dates",
-        lambda *args, **kwargs: pytest.fail("capture dates should not be read"),
+        "read_capture_timestamps",
+        lambda *args, **kwargs: pytest.fail("capture timestamps should not be read"),
     )
 
     with pytest.raises(

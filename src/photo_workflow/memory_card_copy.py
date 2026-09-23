@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import zlib
 from dataclasses import dataclass
@@ -65,22 +66,17 @@ def run_memory_card_import(
     camera_root.mkdir(parents=True, exist_ok=True)
     if config.halt_on_insufficient_space:
         ensure_target_has_sufficient_space(source_files, camera_root)
-    copy_plan = build_copy_plan(
-        source_files,
-        camera_root,
-        capture_date_source=config.capture_date_source,
-    )
-    copy_start_time = time.perf_counter()
+    staging_root = Path(tempfile.mkdtemp(prefix=".photo-workflow-staging-", dir=camera_root))
     try:
-        copy_files(copy_plan)
+        copy_plan = stage_and_plan_import(source_files, card_root, camera_root, staging_root)
+        verification_start_time = time.perf_counter()
+        try:
+            verify_copied_files(copy_plan, verification_method=config.copy_verification)
+        finally:
+            log_stage_elapsed("verification", verification_start_time)
     finally:
-        log_stage_elapsed("import", copy_start_time)
-
-    verification_start_time = time.perf_counter()
-    try:
-        verify_copied_files(copy_plan, verification_method=config.copy_verification)
-    finally:
-        log_stage_elapsed("verification", verification_start_time)
+        shutil.rmtree(staging_root, ignore_errors=True)
+        LOGGER.info("removed staging directory %s", staging_root)
 
     LOGGER.info("deleting %s file(s) from memory card", len(source_files))
     delete_start_time = time.perf_counter()
@@ -103,6 +99,50 @@ def run_memory_card_import(
         free_space_gb=free_space_gb,
         free_space_percent=free_space_percent,
     )
+
+
+def stage_and_plan_import(
+    source_files: list[Path],
+    card_root: Path,
+    camera_root: Path,
+    staging_root: Path,
+) -> list[tuple[Path, Path]]:
+    """
+    Stage card files, resolve capture timestamps, and move them into place.
+
+    Returns:
+        Original source paths paired with their final target paths.
+    """
+    staging_plan = build_staging_plan(source_files, card_root, staging_root)
+    LOGGER.info("copying %s file(s) to staging at %s", len(source_files), staging_root)
+    stage_start_time = time.perf_counter()
+    copy_files(staging_plan, progress_verb="staged")
+    log_stage_elapsed("staging copy", stage_start_time)
+
+    staged_files = [staged_path for _, staged_path in staging_plan]
+    metadata_start_time = time.perf_counter()
+    capture_timestamps = read_capture_timestamps(staged_files)
+    log_stage_elapsed("metadata reading", metadata_start_time)
+
+    final_plan = build_copy_plan(staged_files, camera_root, capture_timestamps)
+    LOGGER.info("moving %s staged file(s) to final destinations", len(final_plan))
+    finalize_start_time = time.perf_counter()
+    move_files(final_plan)
+    log_stage_elapsed("finalization", finalize_start_time)
+    return [
+        (source_path, target_path)
+        for (source_path, _), (_, target_path) in zip(staging_plan, final_plan)
+    ]
+
+
+def build_staging_plan(
+    source_files: list[Path], card_root: Path, staging_root: Path
+) -> list[tuple[Path, Path]]:
+    """Return source and staging paths while preserving card-relative directories."""
+    return [
+        (source_path, staging_root / source_path.relative_to(card_root))
+        for source_path in source_files
+    ]
 
 
 def find_memory_card_mount(mount_root: Path) -> Path | None:
@@ -155,15 +195,13 @@ def is_hidden_card_path(path: Path, *, card_root: Path) -> bool:
 def build_copy_plan(
     source_files: list[Path],
     camera_root: Path,
-    *,
-    capture_date_source: str = "exif",
+    capture_timestamps: dict[Path, datetime],
 ) -> list[tuple[Path, Path]]:
     """
     Return source and target pairs, failing early on unresolvable filename collisions.
 
-    When two source files would share the same target name, the source's parent
-    folder name is inserted to disambiguate them. Files without a collision keep
-    their plain date-prefixed name.
+    When two source files would share the same timestamped target name, the
+    source's parent folder name is inserted to disambiguate them.
 
     Returns:
         Source and target file pairs for the import operation.
@@ -175,15 +213,14 @@ def build_copy_plan(
     copy_plan: list[tuple[Path, Path]] = []
     total_files = len(source_files)
     LOGGER.info("planning import destinations for %s file(s)", total_files)
-    capture_dates = read_capture_dates(source_files, capture_date_source=capture_date_source)
 
     for source_path in source_files:
-        capture_date = capture_dates[source_path]
-        capture_dir = build_capture_dir(camera_root, capture_date)
-        target_path = capture_dir / build_target_filename(capture_date, source_path)
-        if target_path in planned_targets or target_path.exists():
+        captured_at = capture_timestamps[source_path]
+        capture_dir = build_capture_dir(camera_root, captured_at.date())
+        target_path = capture_dir / build_target_filename(captured_at, source_path)
+        if target_path in planned_targets:
             target_path = capture_dir / build_target_filename(
-                capture_date, source_path, disambiguator=source_path.parent.name
+                captured_at, source_path, disambiguator=source_path.parent.name
             )
         if target_path in planned_targets:
             raise FileExistsError(f"Duplicate filename on memory card: {source_path.name}")
@@ -195,58 +232,64 @@ def build_copy_plan(
     LOGGER.info(
         "planned import destinations for %s file(s) across %s date(s)",
         total_files,
-        len(set(capture_dates.values())),
+        len({captured_at.date() for captured_at in capture_timestamps.values()}),
     )
     return copy_plan
 
 
-def read_capture_dates(
-    source_files: list[Path],
-    *,
-    capture_date_source: str,
-) -> dict[Path, date]:
-    """
-    Return capture dates from ExifTool metadata or filesystem timestamps.
-
-    Returns:
-        A mapping from each source file to its capture date.
-    """
+def read_capture_timestamps(source_files: list[Path]) -> dict[Path, datetime]:
+    """Return EXIF capture timestamps with per-file filesystem fallbacks."""
     if not source_files:
         return {}
-    if capture_date_source == "filesystem":
-        LOGGER.info("reading capture dates from filesystem timestamps")
-        return read_filesystem_capture_dates(source_files)
 
-    exiftool_path = require_tool("exiftool")
+    exiftool_path = shutil.which("exiftool")
+    if exiftool_path is None:
+        LOGGER.warning("ExifTool unavailable; using filesystem timestamps for all files")
+        return read_filesystem_capture_timestamps(source_files)
+
     total_files = len(source_files)
-    capture_dates: dict[Path, date] = {}
-    LOGGER.info("reading capture dates in batches of %s file(s)", METADATA_BATCH_SIZE)
+    capture_timestamps: dict[Path, datetime] = {}
+    fallback_count = 0
+    LOGGER.info("reading capture timestamps in batches of %s file(s)", METADATA_BATCH_SIZE)
     for batch_start in range(0, total_files, METADATA_BATCH_SIZE):
         source_batch = source_files[batch_start : batch_start + METADATA_BATCH_SIZE]
-        capture_dates.update(read_capture_date_batch(exiftool_path, source_batch))
+        batch_timestamps, batch_fallbacks = read_capture_timestamp_batch(
+            exiftool_path, source_batch
+        )
+        capture_timestamps.update(batch_timestamps)
+        fallback_count += batch_fallbacks
         processed_files = min(batch_start + len(source_batch), total_files)
-        LOGGER.info("read capture dates for %s/%s files", processed_files, total_files)
-    return capture_dates
+        LOGGER.info("read capture timestamps for %s/%s files", processed_files, total_files)
+    if fallback_count:
+        LOGGER.warning(
+            "used filesystem timestamps for %s/%s file(s) without usable metadata",
+            fallback_count,
+            total_files,
+        )
+    return capture_timestamps
 
 
-def read_filesystem_capture_dates(source_files: list[Path]) -> dict[Path, date]:
-    """Return capture dates from filesystem creation or modification timestamps."""
-    capture_dates: dict[Path, date] = {}
-    for source_path in source_files:
-        file_status = source_path.stat()
-        timestamp = getattr(file_status, "st_birthtime", file_status.st_mtime)
-        capture_dates[source_path] = datetime.fromtimestamp(timestamp).date()
-    return capture_dates
+def read_filesystem_capture_timestamps(source_files: list[Path]) -> dict[Path, datetime]:
+    """Return preserved filesystem modification timestamps."""
+    return {
+        source_path: datetime.fromtimestamp(source_path.stat().st_mtime)
+        for source_path in source_files
+    }
 
 
-def read_capture_date_batch(exiftool_path: str, source_files: list[Path]) -> dict[Path, date]:
-    """Return capture dates from one ExifTool batch invocation."""
+def read_capture_timestamp_batch(
+    exiftool_path: str, source_files: list[Path]
+) -> tuple[dict[Path, datetime], int]:
+    """Return capture timestamps and fallback count from one ExifTool batch."""
     result = subprocess.run(
         [
             exiftool_path,
+            "-fast2",
             "-j",
             "-DateTimeOriginal",
+            "-SubSecTimeOriginal",
             "-CreateDate",
+            "-SubSecCreateDate",
             "-MediaCreateDate",
             *(str(source_path) for source_path in source_files),
         ],
@@ -255,27 +298,42 @@ def read_capture_date_batch(exiftool_path: str, source_files: list[Path]) -> dic
         text=True,
     )
     metadata_records = json.loads(result.stdout)
-    return {
-        Path(metadata["SourceFile"]): extract_capture_date(metadata)
-        for metadata in metadata_records
-    }
+    metadata_by_path = {Path(record["SourceFile"]): record for record in metadata_records}
+    capture_timestamps: dict[Path, datetime] = {}
+    fallback_count = 0
+    for source_path in source_files:
+        fallback_timestamp = datetime.fromtimestamp(source_path.stat().st_mtime)
+        captured_at, used_fallback = extract_capture_timestamp(
+            metadata_by_path.get(source_path, {}), fallback_timestamp=fallback_timestamp
+        )
+        capture_timestamps[source_path] = captured_at
+        fallback_count += used_fallback
+    return capture_timestamps, fallback_count
 
 
-def extract_capture_date(metadata: dict[str, str]) -> date:
-    """
-    Return the preferred capture date from one ExifTool metadata record.
-
-    Returns:
-        The first available capture date in the configured preference order.
-
-    Raises:
-        ValueError: If the record has no usable capture-date metadata.
-    """
-    for tag_name in ("DateTimeOriginal", "CreateDate", "MediaCreateDate"):
-        if captured_at := metadata.get(tag_name):
-            return datetime.strptime(captured_at, "%Y:%m:%d %H:%M:%S").date()
-
-    raise ValueError(f"Capture date metadata is missing: {metadata['SourceFile']}")
+def extract_capture_timestamp(
+    metadata: dict[str, object],
+    *,
+    fallback_timestamp: datetime,
+) -> tuple[datetime, bool]:
+    """Return the best available capture timestamp and whether fallback was used."""
+    timestamp_tags = (
+        ("DateTimeOriginal", "SubSecTimeOriginal"),
+        ("CreateDate", "SubSecCreateDate"),
+        ("MediaCreateDate", None),
+    )
+    for timestamp_tag, subsecond_tag in timestamp_tags:
+        captured_at = metadata.get(timestamp_tag)
+        if isinstance(captured_at, str):
+            try:
+                timestamp = datetime.strptime(captured_at[:19], "%Y:%m:%d %H:%M:%S")
+            except ValueError:
+                continue
+            subsecond_value = metadata.get(subsecond_tag, "") if subsecond_tag else ""
+            subseconds = str(subsecond_value)
+            microseconds = int((subseconds + "000000")[:6]) if subseconds.isdigit() else 0
+            return timestamp.replace(microsecond=microseconds), False
+    return fallback_timestamp, True
 
 
 def build_capture_dir(camera_root: Path, capture_date: date) -> Path:
@@ -289,29 +347,47 @@ def build_capture_dir(camera_root: Path, capture_date: date) -> Path:
 
 
 def build_target_filename(
-    capture_date: date, source_path: Path, *, disambiguator: str | None = None
+    captured_at: datetime, source_path: Path, *, disambiguator: str | None = None
 ) -> str:
-    """Return a target filename prefixed with its capture date.
+    """
+    Return a target filename prefixed with its capture timestamp.
 
     Args:
+        captured_at: The best available timestamp for the captured media.
+        source_path: The staged media file retaining its original filename.
         disambiguator: An extra path segment (e.g. the source's parent folder
-            name) inserted after the date prefix to separate files that would
-            otherwise share the same capture date and original name.
+            name) inserted before the original name to resolve a collision.
+
+    Returns:
+        The chronologically sortable destination filename.
     """
-    prefix = f"{capture_date:%Y%m%d}"
+    hundredths = captured_at.microsecond // 10_000
+    prefix = f"{captured_at:%Y%m%d_%H%M%S}_{hundredths:02d}"
     if disambiguator:
         prefix = f"{prefix}_{disambiguator}"
     return f"{prefix}_{source_path.name}"
 
 
-def copy_files(copy_plan: list[tuple[Path, Path]]) -> None:
+def copy_files(
+    copy_plan: list[tuple[Path, Path]], *, progress_verb: str = "copied"
+) -> None:
     """Copy source files into the target directory and log progress."""
     total_files = len(copy_plan)
     for index, (source_path, target_path) in enumerate(copy_plan, start=1):
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, target_path)
         if should_log_copy_progress(index, total_files):
-            LOGGER.info("copied %s/%s files", index, total_files)
+            LOGGER.info("%s %s/%s files", progress_verb, index, total_files)
+
+
+def move_files(move_plan: list[tuple[Path, Path]]) -> None:
+    """Move staged files to final destinations and log progress."""
+    total_files = len(move_plan)
+    for index, (source_path, target_path) in enumerate(move_plan, start=1):
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.replace(target_path)
+        if should_log_copy_progress(index, total_files):
+            LOGGER.info("finalized %s/%s files", index, total_files)
 
 
 def ensure_target_has_sufficient_space(
