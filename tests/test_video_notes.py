@@ -178,6 +178,112 @@ def test_process_short_videos_skips_long_mp4_files(
     assert not (tmp_path / "long.tif").exists()
 
 
+def test_process_long_videos_creates_contact_card_for_long_mp4(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify long clips generate contact cards with copied timestamps."""
+    video_path = tmp_path / "long.MP4"
+    video_path.write_bytes(b"video")
+    expected_timestamp = 1_717_171_717_000_000_000
+    video_notes.os.utime(video_path, ns=(expected_timestamp, expected_timestamp))
+
+    monkeypatch.setattr(video_notes, "probe_video_duration_seconds", lambda _: 35.5)
+
+    def fake_create_video_contact_card(
+        source_path: Path,
+        output_path: Path,
+        duration_seconds: float,
+    ) -> None:
+        output_path.write_text(f"{source_path.name}: {duration_seconds}")
+
+    monkeypatch.setattr(
+        video_notes,
+        "create_video_contact_card",
+        fake_create_video_contact_card,
+    )
+
+    processed = video_notes.process_long_videos(
+        tmp_path,
+        output_dir=tmp_path,
+        min_duration_seconds=15.0,
+    )
+
+    output_path = tmp_path / "long.tif"
+    assert [item.output_path for item in processed] == [output_path]
+    assert output_path.read_text() == "long.MP4: 35.5"
+    assert output_path.stat().st_mtime_ns == expected_timestamp
+
+
+def test_process_long_videos_skips_short_mp4_files(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify clips below the duration limit do not generate contact cards."""
+    (tmp_path / "short.MP4").write_bytes(b"video")
+    monkeypatch.setattr(video_notes, "probe_video_duration_seconds", lambda _: 14.9)
+    monkeypatch.setattr(
+        video_notes,
+        "create_video_contact_card",
+        lambda *args, **kwargs: None,
+    )
+
+    processed = video_notes.process_long_videos(
+        tmp_path,
+        output_dir=tmp_path,
+        min_duration_seconds=15.0,
+    )
+
+    assert processed == []
+    assert not (tmp_path / "short.tif").exists()
+
+
+def test_build_frame_sample_times_avoids_video_endpoints() -> None:
+    """Verify frame samples are evenly distributed away from unstable endpoints."""
+    sample_times = video_notes.build_frame_sample_times(60.0, frame_count=5)
+
+    assert sample_times == [6.0, 18.0, 30.0, 42.0, 54.0]
+
+
+def test_build_video_contact_caption_returns_three_readable_lines() -> None:
+    """Verify the contact caption separates its command, filename, and duration."""
+    caption_lines = video_notes.build_video_contact_caption(
+        Path("20260920_CDS19855.MP4"),
+        duration_seconds=59.49,
+    )
+
+    assert caption_lines == (
+        "VIDEO TO EDIT",
+        "20260920_CDS19855.MP4",
+        "00:59",
+    )
+
+
+def test_create_video_contact_card_places_five_frames_below_caption(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify the long-video card has the standard size and visible frame strip."""
+    frame_colors = ["red", "green", "blue", "yellow", "magenta"]
+    frames = [video_notes.Image.new("RGB", (1920, 1080), color) for color in frame_colors]
+    monkeypatch.setattr(video_notes, "extract_video_frames", lambda *args, **kwargs: frames)
+    output_path = tmp_path / "long.tif"
+
+    video_notes.create_video_contact_card(
+        tmp_path / "long.MP4",
+        output_path,
+        duration_seconds=35.5,
+    )
+
+    with video_notes.Image.open(output_path) as card:
+        assert card.size == (video_notes.DEFAULT_NOTE_WIDTH, video_notes.DEFAULT_NOTE_HEIGHT)
+        assert card.getpixel((400, 2200)) == (255, 0, 0)
+        assert card.getpixel((1200, 2200)) == (0, 128, 0)
+        assert card.getpixel((2000, 2200)) == (0, 0, 255)
+        assert card.getpixel((2800, 2200)) == (255, 255, 0)
+        assert card.getpixel((3600, 2200)) == (255, 0, 255)
+
+
 def test_process_short_videos_uses_configured_max_duration_when_not_provided(
     tmp_path: Path,
     monkeypatch,
@@ -266,6 +372,11 @@ def test_main_reports_when_no_short_videos_are_processed(
         lambda source_dir=None, output_dir=None, max_duration_seconds=None,
         transcription_model=None: [],
     )
+    monkeypatch.setattr(
+        video_notes,
+        "process_long_videos",
+        lambda source_dir, output_dir, min_duration_seconds: [],
+    )
     (tmp_path / "long.MP4").write_bytes(b"video")
 
     with caplog.at_level("INFO"):
@@ -329,6 +440,11 @@ def test_run_video_notes_step_moves_videos_before_processing(
         lambda source_dir=None, output_dir=None, max_duration_seconds=None,
         transcription_model=None: captured_calls.append((source_dir, output_dir))
         or [],
+    )
+    monkeypatch.setattr(
+        video_notes,
+        "process_long_videos",
+        lambda source_dir, output_dir, min_duration_seconds: [],
     )
 
     video_notes.run_video_notes_step(

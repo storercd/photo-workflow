@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import mlx_whisper
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from photo_workflow.config import (
     DEFAULT_TRANSCRIPTION_MODEL,
@@ -43,6 +43,13 @@ DEFAULT_DOWNLOADED_FONT_URL = (
 DEFAULT_NOTE_WIDTH = 4032
 DEFAULT_NOTE_HEIGHT = 3024
 DEFAULT_NOTE_BORDER_WIDTH = 80
+DEFAULT_CONTACT_FRAME_COUNT = 5
+DEFAULT_CONTACT_FRAME_GAP = 32
+DEFAULT_CONTACT_SIDE_MARGIN = 160
+DEFAULT_CONTACT_CAPTION_HEIGHT = 1500
+DEFAULT_CONTACT_FRAME_TOP = 1800
+DEFAULT_CONTACT_TITLE_FONT_SIZE = 260
+DEFAULT_CONTACT_DETAIL_FONT_SIZE = 150
 DEFAULT_TEXT_MARGIN_MULTIPLIER = 6
 DEFAULT_MAX_FONT_SIZE = 600
 DEFAULT_MIN_FONT_SIZE = 120
@@ -65,6 +72,15 @@ class ProcessedVideoNote:
     output_path: Path
     duration_seconds: float
     transcription: str
+
+
+@dataclass(frozen=True)
+class ProcessedVideoContactCard:
+    """Result for a long video that produced a visual reference card."""
+
+    video_path: Path
+    output_path: Path
+    duration_seconds: float
 
 
 @dataclass(frozen=True)
@@ -129,6 +145,38 @@ def process_short_videos(
         )
 
     return processed_notes
+
+
+def process_long_videos(
+    source_dir: Path,
+    *,
+    output_dir: Path,
+    min_duration_seconds: float,
+) -> list[ProcessedVideoContactCard]:
+    """
+    Create visual reference cards for clips at or above the duration threshold.
+
+    Returns:
+        The processed contact-card results for long clips.
+    """
+    processed_cards: list[ProcessedVideoContactCard] = []
+    for video_path in iter_mp4_files(source_dir):
+        duration_seconds = probe_video_duration_seconds(video_path)
+        if duration_seconds < min_duration_seconds:
+            continue
+
+        output_path = output_dir / f"{video_path.stem}{DEFAULT_OUTPUT_EXTENSION}"
+        create_video_contact_card(video_path, output_path, duration_seconds)
+        copy_file_timestamp(video_path, output_path)
+        processed_cards.append(
+            ProcessedVideoContactCard(
+                video_path=video_path,
+                output_path=output_path,
+                duration_seconds=duration_seconds,
+            )
+        )
+
+    return processed_cards
 
 
 def iter_mp4_files(source_dir: Path) -> list[Path]:
@@ -260,6 +308,119 @@ def create_note_image(output_path: Path, transcription: str) -> None:
     )
 
     image.save(output_path, format="TIFF", compression="tiff_lzw")
+
+
+def build_frame_sample_times(duration_seconds: float, *, frame_count: int) -> list[float]:
+    """
+    Return evenly spaced sample times that avoid the video endpoints.
+
+    Returns:
+        Sample times in seconds.
+    """
+    interval_seconds = duration_seconds / frame_count
+    return [interval_seconds * (index + 0.5) for index in range(frame_count)]
+
+
+def extract_video_frames(
+    video_path: Path,
+    *,
+    duration_seconds: float,
+    frame_count: int = DEFAULT_CONTACT_FRAME_COUNT,
+) -> list[Image.Image]:
+    """
+    Extract evenly spaced video frames with one ffmpeg process.
+
+    Returns:
+        Detached Pillow images in chronological order.
+    """
+    ffmpeg_path = require_tool("ffmpeg")
+    sample_times = build_frame_sample_times(duration_seconds, frame_count=frame_count)
+    with tempfile.TemporaryDirectory(prefix="photo-workflow-frames-") as tmp_dir:
+        frame_paths = [Path(tmp_dir) / f"frame-{index}.png" for index in range(frame_count)]
+        command = [ffmpeg_path, "-y"]
+        for sample_time in sample_times:
+            command.extend(["-ss", f"{sample_time:.3f}", "-i", str(video_path)])
+        for index, frame_path in enumerate(frame_paths):
+            command.extend(
+                ["-map", f"{index}:v:0", "-frames:v", "1", "-an", str(frame_path)]
+            )
+        subprocess.run(command, capture_output=True, check=True, text=True)
+        return [load_detached_image(frame_path) for frame_path in frame_paths]
+
+
+def load_detached_image(image_path: Path) -> Image.Image:
+    """
+    Load an image without retaining an open file handle.
+
+    Returns:
+        A fully loaded RGB image.
+    """
+    with Image.open(image_path) as image:
+        return image.convert("RGB")
+
+
+def create_video_contact_card(
+    video_path: Path,
+    output_path: Path,
+    duration_seconds: float,
+) -> None:
+    """Render a video reminder card with a caption and five sampled frames."""
+    frames = extract_video_frames(video_path, duration_seconds=duration_seconds)
+    image = Image.new("RGB", (DEFAULT_NOTE_WIDTH, DEFAULT_NOTE_HEIGHT), "black")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle(
+        (0, 0, DEFAULT_NOTE_WIDTH - 1, DEFAULT_NOTE_HEIGHT - 1),
+        outline="red",
+        width=DEFAULT_NOTE_BORDER_WIDTH,
+    )
+    caption_lines = build_video_contact_caption(video_path, duration_seconds)
+    draw_contact_caption(draw, caption_lines)
+    paste_contact_frames(image, frames)
+    image.save(output_path, format="TIFF", compression="tiff_lzw")
+
+
+def build_video_contact_caption(
+    video_path: Path,
+    duration_seconds: float,
+) -> tuple[str, str, str]:
+    """
+    Return the three display lines for a video contact card.
+
+    Returns:
+        The action label, filename, and clock-formatted duration.
+    """
+    total_seconds = int(duration_seconds)
+    minutes, seconds = divmod(total_seconds, 60)
+    return "VIDEO TO EDIT", video_path.name, f"{minutes:02d}:{seconds:02d}"
+
+
+def draw_contact_caption(
+    draw: ImageDraw.ImageDraw,
+    caption_lines: tuple[str, str, str],
+) -> None:
+    """Draw a centered caption in the upper portion of a contact card."""
+    title, filename, duration = caption_lines
+    center_x = DEFAULT_NOTE_WIDTH / 2
+    title_font = load_note_font(DEFAULT_CONTACT_TITLE_FONT_SIZE)
+    detail_font = load_note_font(DEFAULT_CONTACT_DETAIL_FONT_SIZE)
+    draw.text((center_x, 420), title, fill="white", font=title_font, anchor="mm")
+    draw.text((center_x, 820), filename, fill="white", font=detail_font, anchor="mm")
+    draw.text((center_x, 1150), duration, fill="white", font=detail_font, anchor="mm")
+
+
+def paste_contact_frames(image: Image.Image, frames: list[Image.Image]) -> None:
+    """Paste contact frames in one evenly spaced row beneath the caption."""
+    available_width = DEFAULT_NOTE_WIDTH - (2 * DEFAULT_CONTACT_SIDE_MARGIN)
+    total_gap_width = DEFAULT_CONTACT_FRAME_GAP * (len(frames) - 1)
+    frame_width = (available_width - total_gap_width) // len(frames)
+    frame_height = DEFAULT_NOTE_HEIGHT - DEFAULT_CONTACT_FRAME_TOP - DEFAULT_NOTE_BORDER_WIDTH
+    for index, frame in enumerate(frames):
+        thumbnail = ImageOps.contain(frame, (frame_width, frame_height))
+        frame_left = DEFAULT_CONTACT_SIDE_MARGIN + index * (
+            frame_width + DEFAULT_CONTACT_FRAME_GAP
+        )
+        frame_top = DEFAULT_CONTACT_FRAME_TOP + (frame_height - thumbnail.height) // 2
+        image.paste(thumbnail, (frame_left, frame_top))
 
 
 def build_center_text_layout(
@@ -504,7 +665,12 @@ def run_video_notes_step(source_dir: Path, *, config: VideoNotesConfig) -> None:
         max_duration_seconds=config.max_duration_seconds,
         transcription_model=config.transcription_model,
     )
-    if not processed_notes:
+    processed_contact_cards = process_long_videos(
+        video_source_dir,
+        output_dir=source_dir,
+        min_duration_seconds=config.max_duration_seconds,
+    )
+    if not processed_notes and not processed_contact_cards:
         if total_videos == 0:
             LOGGER.info("no .mp4 files found in %s", source_dir)
         else:
@@ -522,6 +688,12 @@ def run_video_notes_step(source_dir: Path, *, config: VideoNotesConfig) -> None:
             note.output_path.name,
             note.video_path.name,
             note.transcription,
+        )
+    for card in processed_contact_cards:
+        LOGGER.info(
+            "created video contact card %s from %s",
+            card.output_path.name,
+            card.video_path.name,
         )
 
 

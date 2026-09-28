@@ -119,8 +119,11 @@ def test_log_target_folders_writes_each_imported_folder_on_its_own_line(
     ]
 
 
-def test_main_runs_memory_card_import_before_video_notes(tmp_path: Path, monkeypatch) -> None:
-    """Verify the full workflow runs card import before video note generation."""
+def test_main_runs_rejected_folder_step_before_memory_card_import(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify rejected-folder cleanup runs before memory-card import."""
     source_dir = tmp_path / "camera" / "20260529"
     call_order: list[str] = []
 
@@ -172,7 +175,7 @@ def test_main_runs_memory_card_import_before_video_notes(tmp_path: Path, monkeyp
 
     workflow.main([])
 
-    assert call_order == ["import", "video_notes", "rejected", "disk_space"]
+    assert call_order == ["rejected", "import", "video_notes", "disk_space"]
 
 
 def test_main_passes_purge_rejected_flag_to_rejected_folder_step(
@@ -277,9 +280,9 @@ def test_main_defers_disk_space_report_until_after_rejected_step(
     workflow.main([])
 
     assert call_order == [
+        "rejected",
         "import:False",
         "video_notes",
-        "rejected",
         "resolve_disk",
         "disk_space",
     ]

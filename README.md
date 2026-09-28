@@ -25,9 +25,10 @@ The workflow now runs in three steps:
 	on the target volume, read their capture timestamps, move them into capture-date
 	folders, verify the import, delete the copied files from the card, eject the card,
 	and report remaining disk space.
-2. Scan the dated camera folder for short `.mp4` files, run local
-	transcription, and create `.tif` note images with a red frame and centered
-	speech text.
+2. Scan the dated camera folder for `.mp4` files. Short clips produce `.tif`
+	transcription notes; longer clips produce `.tif` reminder cards containing
+	five evenly spaced video frames. Generated cards are placed with the photos,
+	and the videos are moved into the dated folder's `videos` subfolder.
 3. Assess any `_Rejected` folders under the configured camera root, report the
 	reclaimable disk space for each folder and the total, and optionally purge
 	them.

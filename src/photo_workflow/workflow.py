@@ -98,6 +98,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     config = load_config()
     source_dir = build_today_source_dir(camera_root=config.workflow.camera_root)
+    rejected_folder_assessment = run_rejected_folder_step(
+        config.workflow.camera_root,
+        purge_rejected=parsed_args.purge_rejected,
+    )
     import_result = run_memory_card_import(
         config.workflow.camera_root,
         config=config.memory_card_copy,
@@ -111,10 +115,6 @@ def main(argv: list[str] | None = None) -> None:
     finally:
         log_stage_elapsed("video notes", video_notes_start_time)
 
-    rejected_folder_assessment = run_rejected_folder_step(
-        config.workflow.camera_root,
-        purge_rejected=parsed_args.purge_rejected,
-    )
     report_target_disk_space(
         resolve_disk_usage_path(config.workflow.camera_root),
         config=config.memory_card_copy,
