@@ -87,6 +87,7 @@ def test_read_photo_metadata_swaps_dimensions_for_rotated_orientation(
     metadata = crop_metadata.read_photo_metadata(tmp_path / "photo.cr3", xmp_path)
 
     assert (metadata.image_width, metadata.image_height) == (4000, 6000)
+    assert metadata.orientation == 6
 
 
 def test_write_photo_crop_creates_a_minimal_sidecar(

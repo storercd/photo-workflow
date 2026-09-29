@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from PIL import Image
 from PySide6.QtCore import (
     QBuffer,
     QByteArray,
@@ -243,6 +244,48 @@ def test_decode_preview_bounds_large_images() -> None:
     preview = decode_preview(bytes(data))
 
     assert (preview.width(), preview.height()) == (2560, 1706)
+
+
+@pytest.mark.parametrize("orientation", [6, 8])
+def test_decode_preview_applies_raw_portrait_orientation(orientation: int) -> None:
+    """Rotate an untagged embedded landscape preview using the RAW orientation."""
+    source = QImage(QSize(600, 400), QImage.Format.Format_RGB32)
+    source.fill(0)
+    data = QByteArray()
+    buffer = QBuffer(data)
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    assert source.save(buffer, "JPEG")
+
+    preview = decode_preview(bytes(data), fallback_orientation=orientation)
+
+    assert (preview.width(), preview.height()) == (400, 600)
+
+
+def test_decode_preview_does_not_rotate_normal_orientation() -> None:
+    """Leave an untagged preview unchanged when RAW orientation is normal."""
+    source = QImage(QSize(600, 400), QImage.Format.Format_RGB32)
+    source.fill(0)
+    data = QByteArray()
+    buffer = QBuffer(data)
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    assert source.save(buffer, "JPEG")
+
+    preview = decode_preview(bytes(data), fallback_orientation=1)
+
+    assert (preview.width(), preview.height()) == (600, 400)
+
+
+def test_decode_preview_does_not_apply_raw_fallback_twice(tmp_path: Path) -> None:
+    """Trust embedded JPEG orientation metadata instead of applying RAW fallback twice."""
+    source = Image.new("RGB", (600, 400), "white")
+    exif = Image.Exif()
+    exif[274] = 6
+    preview_path = tmp_path / "oriented.jpg"
+    source.save(preview_path, exif=exif)
+
+    preview = decode_preview(preview_path.read_bytes(), fallback_orientation=8)
+
+    assert (preview.width(), preview.height()) == (400, 600)
 
 
 def test_saved_crop_updates_cached_metadata_for_revisit(tmp_path: Path) -> None:

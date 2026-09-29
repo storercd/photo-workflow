@@ -33,6 +33,7 @@ class PhotoMetadata:
     image_height: int
     crop: CropRect
     crop_angle: float = 0
+    orientation: int = 1
 
 
 def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
@@ -69,6 +70,7 @@ def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
         image_height=image_height,
         crop=CropRect(**coordinates),
         crop_angle=float(crop_data.get("CropAngle", 0)),
+        orientation=orientation,
     )
 
 

@@ -21,7 +21,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QImage, QImageReader, QKeySequence, QShortcut
+from PySide6.QtGui import QImage, QImageIOHandler, QImageReader, QKeySequence, QShortcut, QTransform
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -198,19 +198,24 @@ class PhotoLoadTask(QRunnable):
     def run(self) -> None:
         """Load metadata, then emit quick and higher-quality preview images."""
         xmp_path = self.raw_path.with_suffix(".xmp")
+        orientation = 1
         try:
             metadata = read_photo_metadata(self.raw_path, xmp_path)
+            orientation = metadata.orientation
             self.signals.metadata.emit(str(self.raw_path), metadata)
         except Exception as error:
             self.signals.error.emit(str(self.raw_path), str(error))
-        self._emit_previews()
+        self._emit_previews(orientation)
         self.signals.finished.emit(str(self.raw_path))
 
-    def _emit_previews(self) -> None:
+    def _emit_previews(self, orientation: int) -> None:
         """Emit decoded previews in quality order, ignoring unavailable tags."""
         for preview_index, tag in enumerate(PREVIEW_TAGS):
             try:
-                image = decode_preview(extract_preview(self.raw_path, tag))
+                image = decode_preview(
+                    extract_preview(self.raw_path, tag),
+                    fallback_orientation=orientation,
+                )
             except Exception as error:
                 if preview_index == len(PREVIEW_TAGS) - 1:
                     self.signals.error.emit(str(self.raw_path), str(error))
@@ -705,9 +710,9 @@ class CropWindow(QMainWindow):
         event.accept()
 
 
-def decode_preview(image_bytes: bytes) -> QImage:
+def decode_preview(image_bytes: bytes, *, fallback_orientation: int = 1) -> QImage:
     """
-    Decode embedded JPEG bytes with EXIF orientation applied.
+    Decode an embedded JPEG and fall back to the RAW orientation when needed.
 
     Returns:
         A Qt image, null if the bytes are not a supported image.
@@ -717,6 +722,7 @@ def decode_preview(image_bytes: bytes) -> QImage:
     buffer.open(QIODevice.OpenModeFlag.ReadOnly)
     reader = QImageReader(buffer)
     reader.setAutoTransform(True)
+    embedded_orientation = reader.transformation()
     source_size = reader.size()
     if max(source_size.width(), source_size.height()) > PREVIEW_MAX_DIMENSION:
         reader.setScaledSize(
@@ -725,7 +731,37 @@ def decode_preview(image_bytes: bytes) -> QImage:
                 Qt.AspectRatioMode.KeepAspectRatio,
             )
         )
-    return reader.read()
+    image = reader.read()
+    if (
+        not image.isNull()
+        and embedded_orientation == QImageIOHandler.Transformation.TransformationNone
+    ):
+        image = apply_exif_orientation(image, fallback_orientation)
+    return image
+
+
+def apply_exif_orientation(image: QImage, orientation: int) -> QImage:
+    """
+    Apply an EXIF orientation when an embedded preview lacks its own tag.
+
+    Returns:
+        The image transformed to match the RAW file's display orientation.
+    """
+    if orientation == 2:
+        return image.mirrored(True, False)
+    if orientation == 3:
+        return image.transformed(QTransform().rotate(180))
+    if orientation == 4:
+        return image.mirrored(False, True)
+    if orientation == 5:
+        return image.transformed(QTransform(0, 1, 1, 0, 0, 0))
+    if orientation == 6:
+        return image.transformed(QTransform().rotate(90))
+    if orientation == 7:
+        return image.transformed(QTransform(0, 1, 1, 0, 0, 0)).mirrored(True, True)
+    if orientation == 8:
+        return image.transformed(QTransform().rotate(-90))
+    return image
 
 
 def update_saved_crop_cache(
