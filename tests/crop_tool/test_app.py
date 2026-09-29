@@ -18,12 +18,16 @@ from PySide6.QtGui import QDragEnterEvent, QDropEvent, QImage
 from PySide6.QtWidgets import QApplication
 
 from photo_workflow.crop_tool.app import (
+    PREFETCH_FORWARD_COUNT,
+    PREFETCH_REVERSE_COUNT,
+    PREVIEW_CACHE_SIZE,
     CropDropArea,
     CropWindow,
     decode_preview,
     find_photo_index,
     load_crop_settings,
     parse_aspect_ratios,
+    prefetch_indices,
     resolve_drop_path,
     update_saved_crop_cache,
 )
@@ -64,6 +68,49 @@ def test_find_photo_index_selects_requested_photo(tmp_path: Path) -> None:
     assert find_photo_index(photos, None) == 0
 
 
+def test_prefetch_window_favors_current_navigation_direction() -> None:
+    """Keep current first, then bias the eight-frame window in travel direction."""
+    forward = prefetch_indices(30, 10, 1)
+    reverse = prefetch_indices(30, 10, -1)
+
+    assert forward == [10, 11, 12, 13, 14, 15, 16, 17, 9, 8, 7, 6]
+    assert reverse == [10, 9, 8, 7, 6, 5, 4, 3, 11, 12, 13, 14]
+    assert len(forward) == PREVIEW_CACHE_SIZE == PREFETCH_FORWARD_COUNT + PREFETCH_REVERSE_COUNT
+
+
+def test_prefetch_window_clips_to_folder_edges_without_duplicates() -> None:
+    """Directional windows stay within the folder and contain no repeated indices."""
+    indices = prefetch_indices(5, 0, -1)
+
+    assert indices == [0, 1, 2, 3, 4]
+    assert len(indices) == len(set(indices))
+
+
+def test_prefetch_scheduler_reprioritizes_when_navigation_reverses() -> None:
+    """A direction change makes the new travel direction the next queued work."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    window._photos = [Path(f"{index:02}.cr3") for index in range(30)]
+    window._current_index = 10
+    started: list[Path] = []
+
+    def start_load(path: Path) -> None:
+        started.append(path)
+        window._loading.add(path)
+
+    window._start_photo_load = start_load
+    window._schedule_prefetch(10)
+    assert started == window._photos[10:13]
+
+    window._loading.remove(window._photos[11])
+    window._navigation_direction = -1
+    window._schedule_prefetch(10)
+
+    assert started[-1] == window._photos[9]
+    window.close()
+    app.quit()
+
+
 def test_open_folder_starts_on_selected_photo(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -75,8 +122,7 @@ def test_open_folder_starts_on_selected_photo(
     first_photo.touch()
     selected_photo.touch()
     window = CropWindow()
-    monkeypatch.setattr(window, "_queue_load", lambda path: None)
-    monkeypatch.setattr(window, "_prefetch_neighbors", lambda index: None)
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda index: None)
 
     window.open_folder(tmp_path, selected_photo)
 
@@ -94,8 +140,7 @@ def test_uncached_photo_keeps_previous_frame_while_loading(
     app = QApplication.instance() or QApplication([])
     photos = [tmp_path / "first.cr3", tmp_path / "second.cr3"]
     window = CropWindow()
-    monkeypatch.setattr(window, "_queue_load", lambda path: None)
-    monkeypatch.setattr(window, "_prefetch_neighbors", lambda index: None)
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda index: None)
     previous_image = QImage(QSize(640, 480), QImage.Format.Format_RGB32)
     previous_image.fill(Qt.GlobalColor.white)
     window._photos = photos

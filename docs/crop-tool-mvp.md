@@ -11,7 +11,7 @@ The first release should prove two things: the folder can be navigated without w
 - **Platform/UI:** macOS desktop app using Python and PySide6/Qt.
 - **Input:** One folder at a time; initially support Canon CR3 files, matching XMP sidecars, and the current Canon camera's embedded JPEG preview. Keep file discovery isolated so additional RAW formats can be added later.
 - **Preview:** Extract and display an embedded JPEG preview. Decode/extract work runs off the UI thread. Show the best available preview immediately, then replace it only if a better preview becomes available. Do not demosaic RAW files in the MVP.
-- **Preview memory:** Downsample decoded previews to at most 2560 pixels on the longest side and keep a six-image LRU cache; tune these limits from measured use.
+- **Preview memory:** Downsample decoded previews to at most 2560 pixels on the longest side and keep a 12-image LRU cache; tune these limits from measured use.
 - **Persistence:** Read and write Adobe Camera Raw `crs:CropTop`, `CropLeft`, `CropBottom`, `CropRight`, and `CropAngle` as normalized crop metadata. Preserve all unrelated XMP metadata. Use ExifTool for the initial implementation, and validate the exact result in Lightroom Classic before treating the format as settled.
 - **Crop flag:** Set `crs:HasCrop=True` when writing crop bounds, matching Lightroom-authored sidecars.
 - **Safety:** Do not modify RAW files. Write sidecars through a serialized background writer. Flush the current photo's pending change before changing photos and before orderly app close. Report write failures visibly and do not silently discard pending changes.
@@ -48,7 +48,8 @@ The first release should prove two things: the folder can be navigated without w
 
 - Image extraction/decoding must never block painting or keyboard input.
 - On folder open, show a placeholder and start loading the selected photo immediately.
-- Prefetch the next and previous photo in the background, with a bounded memory cache. Cancel or ignore stale results when the selection changes.
+- Keep the selected photo first in a bounded prefetch window of 8 photos in the current navigation direction (including the current photo) and 4 photos in the reverse direction. Rebuild pending priorities when navigation changes direction.
+- Keep no more than three preview loads active at a time and retain at most 12 decoded previews in an LRU cache. Cancel or ignore stale results when the selection changes; tune these limits from measured use.
 - Prefer the embedded JPEG over RAW development for the initial display. Keep the preview pipeline replaceable so faster or higher-quality decoders can be evaluated later.
 - Measure navigation latency on a representative folder. The initial usability target is that a prefetched next/previous photo appears within one UI frame; a cache miss must keep the interface responsive and show loading feedback.
 - Avoid loading full-resolution RAW pixels unless a later feature demonstrates that the embedded preview is insufficient.

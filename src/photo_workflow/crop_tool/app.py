@@ -56,8 +56,10 @@ from photo_workflow.crop_tool.view import CropView
 
 RAW_SUFFIXES = {".cr3"}
 DropTarget = tuple[Path, Path | None]
-PREVIEW_CACHE_SIZE = 6
+PREVIEW_CACHE_SIZE = 12
 MAX_IN_FLIGHT_PREVIEWS = 3
+PREFETCH_FORWARD_COUNT = 8
+PREFETCH_REVERSE_COUNT = 4
 SAVE_DELAY_MS = 350
 PREVIEW_MAX_DIMENSION = 2560
 RATIO_MATCH_TOLERANCE = 0.005
@@ -101,6 +103,42 @@ def find_photo_index(photos: list[Path], selected_photo: Path | None) -> int:
         (index for index, photo in enumerate(photos) if photo.resolve() == selected_path),
         0,
     )
+
+
+def prefetch_indices(
+    photo_count: int,
+    current_index: int,
+    direction: int,
+    *,
+    forward_count: int = PREFETCH_FORWARD_COUNT,
+    reverse_count: int = PREFETCH_REVERSE_COUNT,
+) -> list[int]:
+    """
+    Return current-first indices; the forward count includes the current photo.
+
+    Returns:
+        The current index followed by bounded forward and reverse indices.
+
+    Raises:
+        ValueError: If the navigation direction is not -1 or 1.
+    """
+    if photo_count <= 0 or not 0 <= current_index < photo_count:
+        return []
+    if direction not in {-1, 1}:
+        raise ValueError("Prefetch direction must be -1 or 1")
+
+    indices = [current_index]
+    indices.extend(
+        candidate
+        for step in range(1, forward_count)
+        if 0 <= (candidate := current_index + direction * step) < photo_count
+    )
+    indices.extend(
+        candidate
+        for step in range(1, reverse_count + 1)
+        if 0 <= (candidate := current_index - direction * step) < photo_count
+    )
+    return list(dict.fromkeys(indices))
 
 
 class CropDropArea(QWidget):
@@ -226,6 +264,7 @@ class CropWindow(QMainWindow):
         self._ratios, self._snap_tolerance = load_crop_settings()
         self._photos: list[Path] = []
         self._current_index = -1
+        self._navigation_direction = 1
         self._current_metadata: PhotoMetadata | None = None
         self._current_crop: CropRect | None = None
         self._locked_ratio: AspectRatio | None = None
@@ -245,6 +284,7 @@ class CropWindow(QMainWindow):
         self._save_pool = QThreadPool(self)
         self._save_pool.setMaxThreadCount(1)
         self._loading: set[Path] = set()
+        self._queued_loads: set[Path] = set()
         self._metadata_cache: dict[Path, PhotoMetadata] = {}
         self._preview_cache: OrderedDict[Path, QImage] = OrderedDict()
         self._save_timer = QTimer(self)
@@ -338,6 +378,8 @@ class CropWindow(QMainWindow):
             else []
         )
         self._load_failures.clear()
+        self._queued_loads.clear()
+        self._navigation_direction = 1
         self._current_index = -1
         self._current_path = None
         if not self._photos:
@@ -355,6 +397,7 @@ class CropWindow(QMainWindow):
         target_index = min(max(self._current_index + offset, 0), len(self._photos) - 1)
         if target_index == self._current_index:
             return
+        self._navigation_direction = 1 if target_index > self._current_index else -1
         if self._dirty or self._save_busy:
             self._pending_navigation = target_index - self._current_index
             self._start_save()
@@ -381,17 +424,51 @@ class CropWindow(QMainWindow):
             self._show_image(cached_image)
         if self._current_metadata is not None:
             self._apply_metadata(self._current_path, self._current_metadata)
-        self._queue_load(self._current_path)
-        self._prefetch_neighbors(index)
+        self._schedule_prefetch(index)
 
-    def _queue_load(self, raw_path: Path) -> None:
-        """Submit a photo load once and connect its worker signals."""
-        if raw_path in self._loading or raw_path in self._load_failures:
+    def _schedule_prefetch(self, index: int) -> None:
+        """Rebuild pending work in current-photo and travel-direction priority order."""
+        ordered_paths = [
+            self._photos[photo_index]
+            for photo_index in prefetch_indices(
+                len(self._photos),
+                index,
+                self._navigation_direction,
+            )
+        ]
+        self._queued_loads = set(ordered_paths)
+        self._pump_loads(ordered_paths)
+
+    def _pump_loads(self, ordered_paths: list[Path] | None = None) -> None:
+        """Start queued jobs in priority order without exceeding worker capacity."""
+        if ordered_paths is None and self._current_index >= 0:
+            ordered_paths = [
+                self._photos[photo_index]
+                for photo_index in prefetch_indices(
+                    len(self._photos),
+                    self._current_index,
+                    self._navigation_direction,
+                )
+            ]
+        if ordered_paths is None:
             return
-        if raw_path in self._metadata_cache and raw_path in self._preview_cache:
-            return
-        if len(self._loading) >= MAX_IN_FLIGHT_PREVIEWS:
-            return
+
+        available_slots = MAX_IN_FLIGHT_PREVIEWS - len(self._loading)
+        for raw_path in ordered_paths:
+            if available_slots <= 0:
+                break
+            if raw_path not in self._queued_loads:
+                continue
+            self._queued_loads.discard(raw_path)
+            if raw_path in self._loading or raw_path in self._load_failures:
+                continue
+            if raw_path in self._metadata_cache and raw_path in self._preview_cache:
+                continue
+            self._start_photo_load(raw_path)
+            available_slots -= 1
+
+    def _start_photo_load(self, raw_path: Path) -> None:
+        """Submit one selected load task to the bounded thread pool."""
         task = PhotoLoadTask(raw_path)
         task.signals.metadata.connect(self._metadata_loaded)
         task.signals.preview.connect(self._preview_loaded)
@@ -399,12 +476,6 @@ class CropWindow(QMainWindow):
         task.signals.finished.connect(self._load_finished)
         self._loading.add(raw_path)
         self._load_pool.start(task)
-
-    def _prefetch_neighbors(self, index: int) -> None:
-        """Queue previews for the adjacent photos in both directions."""
-        for neighbor in (index - 1, index + 1):
-            if 0 <= neighbor < len(self._photos):
-                self._queue_load(self._photos[neighbor])
 
     def _metadata_loaded(self, path_text: str, metadata: PhotoMetadata) -> None:
         """Cache metadata and apply it if its photo is currently selected."""
@@ -462,8 +533,7 @@ class CropWindow(QMainWindow):
         """Release the in-flight marker for a completed photo load."""
         self._loading.discard(Path(path_text))
         if self._current_index >= 0:
-            self._queue_load(self._photos[self._current_index])
-            self._prefetch_neighbors(self._current_index)
+            self._schedule_prefetch(self._current_index)
 
     def _crop_edited(self, crop: CropRect) -> None:
         """Mark the current photo dirty and debounce its XMP write."""
