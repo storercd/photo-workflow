@@ -55,6 +55,7 @@ from photo_workflow.crop_tool.model import (
 from photo_workflow.crop_tool.view import CropView
 
 RAW_SUFFIXES = {".cr3"}
+DropTarget = tuple[Path, Path | None]
 PREVIEW_CACHE_SIZE = 6
 MAX_IN_FLIGHT_PREVIEWS = 3
 SAVE_DELAY_MS = 350
@@ -70,6 +71,81 @@ class WorkerSignals(QObject):
     error = Signal(str, str)
     finished = Signal(str)
     saved = Signal(str, int, object, str)
+
+
+def resolve_drop_path(path: Path) -> DropTarget | None:
+    """
+    Resolve a dropped folder or supported RAW file to folder and selection.
+
+    Returns:
+        The folder and optional photo to select, or `None` for unsupported paths.
+    """
+    if path.is_dir():
+        return path, None
+    if path.is_file() and path.suffix.lower() in RAW_SUFFIXES:
+        return path.parent, path
+    return None
+
+
+def find_photo_index(photos: list[Path], selected_photo: Path | None) -> int:
+    """
+    Find the selected photo in a folder listing, defaulting to the first photo.
+
+    Returns:
+        The matching index or zero when no requested photo is found.
+    """
+    if selected_photo is None:
+        return 0
+    selected_path = selected_photo.resolve()
+    return next(
+        (index for index, photo in enumerate(photos) if photo.resolve() == selected_path),
+        0,
+    )
+
+
+class CropDropArea(QWidget):
+    """Central app surface that accepts a folder or one RAW photo drop."""
+
+    path_dropped = Signal(object)
+
+    def __init__(self) -> None:
+        """Enable drag-and-drop handling on the central window surface."""
+        super().__init__()
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event: object) -> None:
+        """Accept local URLs that resolve to a folder or supported RAW photo."""
+        if self._dropped_path(event) is not None:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: object) -> None:
+        """Emit the first supported folder or RAW photo from the drop."""
+        resolved_path = self._dropped_path(event)
+        if resolved_path is None:
+            event.ignore()
+        else:
+            self.path_dropped.emit(resolved_path)
+            event.acceptProposedAction()
+
+    @staticmethod
+    def _dropped_path(event: object) -> DropTarget | None:
+        """
+        Resolve the first supported local-file URL in a drag event.
+
+        Returns:
+            The resolved folder and optional photo, or `None` if unsupported.
+        """
+        mime_data = event.mimeData()
+        if not mime_data.hasUrls():
+            return None
+        for url in mime_data.urls():
+            if url.isLocalFile():
+                resolved = resolve_drop_path(Path(url.toLocalFile()))
+                if resolved is not None:
+                    return resolved
+        return None
 
 
 class PhotoLoadTask(QRunnable):
@@ -161,6 +237,7 @@ class CropWindow(QMainWindow):
         self._saving_version = 0
         self._pending_navigation = 0
         self._pending_folder: Path | None = None
+        self._pending_photo: Path | None = None
         self._close_requested = False
         self._load_pool = QThreadPool(self)
         self._load_pool.setMaxThreadCount(3)
@@ -180,7 +257,7 @@ class CropWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         """Construct the compact navigation bar and crop canvas."""
-        container = QWidget()
+        container = CropDropArea()
         layout = QVBoxLayout(container)
         toolbar = QHBoxLayout()
         self.open_button = QPushButton("Open Folder")
@@ -206,6 +283,7 @@ class CropWindow(QMainWindow):
         layout.addLayout(toolbar)
         layout.addWidget(self.view, 1)
         self.setCentralWidget(container)
+        container.path_dropped.connect(self._open_dropped_path)
         self._populate_ratios()
         self.open_button.clicked.connect(self._choose_folder)
         self.previous_button.clicked.connect(lambda: self.navigate(-1))
@@ -242,10 +320,11 @@ class CropWindow(QMainWindow):
         shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         shortcut.activated.connect(callback)
 
-    def open_folder(self, folder: Path) -> None:
-        """Load supported RAW filenames from one folder."""
+    def open_folder(self, folder: Path, selected_photo: Path | None = None) -> None:
+        """Load supported RAW files and optionally start on one selected photo."""
         if self._dirty or self._save_busy:
             self._pending_folder = folder
+            self._pending_photo = selected_photo
             self._pending_navigation = 0
             self._start_save()
             return
@@ -266,7 +345,7 @@ class CropWindow(QMainWindow):
             self.view.set_image(QImage(), 1, 1)
             self.view.set_crop(None)
             return
-        self._show_photo(0)
+        self._show_photo(find_photo_index(self._photos, selected_photo))
 
     def navigate(self, offset: int) -> None:
         """Move to the adjacent photo after pending edits are safely written."""
@@ -436,8 +515,10 @@ class CropWindow(QMainWindow):
             self._start_save()
         elif self._pending_folder is not None:
             folder = self._pending_folder
+            selected_photo = self._pending_photo
             self._pending_folder = None
-            self.open_folder(folder)
+            self._pending_photo = None
+            self.open_folder(folder, selected_photo)
         elif self._pending_navigation:
             target = self._current_index + self._pending_navigation
             self._pending_navigation = 0
@@ -532,6 +613,11 @@ class CropWindow(QMainWindow):
         folder_text = QFileDialog.getExistingDirectory(self, "Open photo folder")
         if folder_text:
             self.open_folder(Path(folder_text))
+
+    def _open_dropped_path(self, resolved_path: DropTarget) -> None:
+        """Open a dropped folder or its selected RAW photo."""
+        folder, selected_photo = resolved_path
+        self.open_folder(folder, selected_photo)
 
     def closeEvent(self, event: object) -> None:
         """Wait for dirty crop data to be written before closing the window."""

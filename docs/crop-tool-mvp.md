@@ -18,13 +18,14 @@ The first release should prove two things: the folder can be navigated without w
 
 ## MVP User Workflow
 
-1. Open a folder through a folder chooser.
-2. See an ordered list/count of supported RAW files and the selected photo's preview.
-3. Move to the previous/next photo with keyboard shortcuts; buttons are available as a fallback.
-4. Draw or adjust a crop with the mouse.
-5. Choose freeform or a locked aspect ratio. In freeform mode, optional snapping uses the configured list of acceptable ratios.
-6. See the saved/pending state. Crop edits are debounced while dragging; pending changes begin writing when interaction settles, and are flushed before navigation or close.
-7. Close and inspect the edited files in Lightroom Classic.
+1. Open a folder through a folder chooser or drop a folder onto the app.
+2. Drop a supported RAW photo onto the app to open its folder at that photo.
+3. See an ordered list/count of supported RAW files and the selected photo's preview.
+4. Move to the previous/next photo with keyboard shortcuts; buttons are available as a fallback.
+5. Draw or adjust a crop with the mouse.
+6. Choose freeform or a locked aspect ratio. In freeform mode, optional snapping uses the configured list of acceptable ratios.
+7. See the saved/pending state. Crop edits are debounced while dragging; pending changes begin writing when interaction settles, and are flushed before navigation or close.
+8. Close and inspect the edited files in Lightroom Classic.
 
 ## Crop Interaction
 
@@ -105,7 +106,9 @@ The current prototype applies EXIF orientation to embedded previews and uses dis
 
 ## Follow-Up TODOs
 
-- [ ] Accept a folder dropped onto the window and open it.
-- [ ] Accept an individual supported photo dropped onto the window, open its parent folder, and select that photo.
+- [ ] Add manual image rotation and let users adjust the horizon angle.
+- [ ] Explore automatic horizon leveling after manual rotation is supported.
+- [ ] Add an optional side-by-side view with the full image and crop boundaries on one side and the cropped preview on the other.
 - [ ] Experiment with a smoother Lightroom Classic refresh workflow so users do not need to manually force metadata rereading after an XMP update.
-- [ ] Up/down to grow/shrink the crop window by degrees?
+- [ ] Measure navigation latency on a representative larger folder and tune preview extraction, prefetch, and cache limits based on the results.
+- [ ] Add image pan and zoom controls (move and grow/shrink the crop window, not literally panning and zooming the view) without conflicting with crop creation or adjustment gestures.

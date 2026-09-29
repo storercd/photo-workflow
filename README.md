@@ -124,6 +124,9 @@ Launch the folder-oriented crop editor with an optional starting folder:
 uv run photo-workflow-crop /path/to/photo/folder
 ```
 
+Folders and individual `.CR3` photos can also be dropped onto the app window. A
+dropped photo opens its parent folder with that photo selected.
+
 The app currently supports Canon `.CR3` files and uses their embedded JPEG
 previews, loading a small preview before the larger `JpgFromRaw` preview.
 Previous/next are `Left`/`Right`; `L` toggles ratio lock, `S` toggles snapping,
