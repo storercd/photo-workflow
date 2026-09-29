@@ -86,6 +86,31 @@ def test_open_folder_starts_on_selected_photo(
     app.quit()
 
 
+def test_uncached_photo_keeps_previous_frame_while_loading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cache miss shows loading state without clearing the previous frame."""
+    app = QApplication.instance() or QApplication([])
+    photos = [tmp_path / "first.cr3", tmp_path / "second.cr3"]
+    window = CropWindow()
+    monkeypatch.setattr(window, "_queue_load", lambda path: None)
+    monkeypatch.setattr(window, "_prefetch_neighbors", lambda index: None)
+    previous_image = QImage(QSize(640, 480), QImage.Format.Format_RGB32)
+    previous_image.fill(Qt.GlobalColor.white)
+    window._photos = photos
+    window.view.set_image(previous_image, 640, 480)
+    image_key = window.view._image.cacheKey()
+
+    window._show_photo(1)
+
+    assert window.view.is_loading
+    assert window.view._image.cacheKey() == image_key
+    assert window.view._crop is None
+    window.close()
+    app.quit()
+
+
 def test_crop_drop_area_accepts_and_emits_folder_drop(tmp_path: Path) -> None:
     """The Qt drop target accepts a local folder and emits its resolved path."""
     app = QApplication.instance() or QApplication([])

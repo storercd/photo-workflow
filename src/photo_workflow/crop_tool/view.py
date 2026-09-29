@@ -30,6 +30,7 @@ class CropView(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setStyleSheet("background: #17191b;")
         self._image = QImage()
+        self._loading = False
         self._crop: CropRect | None = None
         self._image_width = 1
         self._image_height = 1
@@ -46,6 +47,20 @@ class CropView(QWidget):
         self._image = image
         self._image_width = max(1, image_width)
         self._image_height = max(1, image_height)
+        self.update()
+
+    @property
+    def is_loading(self) -> bool:
+        """Return whether the selected photo is still loading."""
+        return self._loading
+
+    def set_loading(self, loading: bool) -> None:
+        """Show a static loading veil and disable crop gestures while loading."""
+        self._loading = loading
+        if loading:
+            self._drag_kind = None
+            self._initial_crop = None
+            self.unsetCursor()
         self.update()
 
     def set_crop(self, crop: CropRect | None) -> None:
@@ -73,11 +88,17 @@ class CropView(QWidget):
         painter.fillRect(self.rect(), QColor("#17191b"))
         if self._image.isNull():
             painter.setPen(QColor("#a7acb2"))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Open a folder to begin")
+            message = "Loading preview..." if self._loading else "Open a folder to begin"
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, message)
             return
 
         image_rect = self._image_rect()
         painter.drawImage(image_rect, self._image)
+        if self._loading:
+            painter.fillRect(image_rect, QColor(0, 0, 0, 120))
+            painter.setPen(QColor("#f4f2ec"))
+            painter.drawText(image_rect, Qt.AlignmentFlag.AlignCenter, "Loading preview...")
+            return
         crop_rect = self._crop_rect(image_rect)
         if crop_rect is None:
             return
@@ -117,6 +138,9 @@ class CropView(QWidget):
 
     def mousePressEvent(self, event: object) -> None:
         """Start a new crop or begin moving/resizing the current crop."""
+        if self._loading:
+            event.ignore()
+            return
         if event.button() != Qt.MouseButton.LeftButton:
             return
         image_rect = self._image_rect()
@@ -140,6 +164,8 @@ class CropView(QWidget):
 
     def mouseMoveEvent(self, event: object) -> None:
         """Update the crop while dragging or show the appropriate cursor."""
+        if self._loading:
+            return
         image_rect = self._image_rect()
         point = event.position()
         if self._drag_kind is None:

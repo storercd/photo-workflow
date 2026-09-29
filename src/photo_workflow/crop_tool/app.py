@@ -342,6 +342,7 @@ class CropWindow(QMainWindow):
         self._current_path = None
         if not self._photos:
             self.position_label.setText("No CR3 files in folder")
+            self.view.set_loading(False)
             self.view.set_image(QImage(), 1, 1)
             self.view.set_crop(None)
             return
@@ -373,11 +374,10 @@ class CropWindow(QMainWindow):
         self.position_label.setText(
             f"{index + 1} / {len(self._photos)}    {self._current_path.name}"
         )
+        self.view.set_loading(True)
+        self.view.set_crop(None)
         cached_image = self._preview_cache.get(self._current_path)
-        if cached_image is None:
-            self.view.set_image(QImage(), 1, 1)
-            self.view.set_crop(None)
-        else:
+        if cached_image is not None:
             self._show_image(cached_image)
         if self._current_metadata is not None:
             self._apply_metadata(self._current_path, self._current_metadata)
@@ -419,12 +419,14 @@ class CropWindow(QMainWindow):
             return
         self._current_metadata = metadata
         self._current_crop = metadata.crop
-        self.view.set_image(
-            self._preview_cache.get(path, QImage()),
-            metadata.image_width,
-            metadata.image_height,
-        )
-        self.view.set_crop(metadata.crop)
+        image = self._preview_cache.get(path)
+        if image is not None:
+            self.view.set_image(image, metadata.image_width, metadata.image_height)
+            self.view.set_crop(metadata.crop)
+            self.view.set_loading(False)
+        else:
+            self.view.set_crop(None)
+            self.view.set_loading(True)
         self._select_crop_ratio(metadata.crop)
         self._update_crop_mode()
 
@@ -438,6 +440,9 @@ class CropWindow(QMainWindow):
                 self._preview_cache.popitem(last=False)
         if path == self._current_path:
             self._show_image(image)
+            if self._current_metadata is not None:
+                self.view.set_crop(self._current_metadata.crop)
+                self.view.set_loading(False)
 
     def _show_image(self, image: QImage) -> None:
         """Set the visible preview using current source dimensions when known."""
@@ -450,6 +455,7 @@ class CropWindow(QMainWindow):
         path = Path(path_text)
         self._load_failures.add(path)
         if path == self._current_path:
+            self.view.set_loading(False)
             self.save_label.setText(f"Load error: {message}")
 
     def _load_finished(self, path_text: str) -> None:
