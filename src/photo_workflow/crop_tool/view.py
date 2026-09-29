@@ -1,0 +1,427 @@
+"""Qt image surface with mouse-driven crop interaction."""
+
+from __future__ import annotations
+
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QWidget
+
+from photo_workflow.crop_tool.model import (
+    AspectRatio,
+    CropRect,
+    closest_aspect_ratio,
+    resize_from_anchor,
+)
+
+EDGE_HIT_PIXELS = 24
+MIN_CROP_PIXELS = 2
+
+
+class CropView(QWidget):
+    """Display a photo and emit normalized crop changes from mouse gestures."""
+
+    crop_changed = Signal(object)
+
+    def __init__(self) -> None:
+        """Initialize an empty image surface."""
+        super().__init__()
+        self.setMinimumSize(480, 360)
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setStyleSheet("background: #17191b;")
+        self._image = QImage()
+        self._crop: CropRect | None = None
+        self._image_width = 1
+        self._image_height = 1
+        self._locked_ratio: AspectRatio | None = None
+        self._snap_ratios: tuple[AspectRatio, ...] = ()
+        self._snap_tolerance = 0.025
+        self._drag_kind: str | None = None
+        self._drag_anchor = QPointF()
+        self._drag_origin = QPointF()
+        self._initial_crop: CropRect | None = None
+
+    def set_image(self, image: QImage, image_width: int, image_height: int) -> None:
+        """Set the displayed preview and source dimensions."""
+        self._image = image
+        self._image_width = max(1, image_width)
+        self._image_height = max(1, image_height)
+        self.update()
+
+    def set_crop(self, crop: CropRect | None) -> None:
+        """Set the active normalized crop without emitting an edit."""
+        self._crop = crop
+        self.update()
+
+    def set_crop_mode(
+        self,
+        *,
+        locked_ratio: AspectRatio | None,
+        snap_ratios: tuple[AspectRatio, ...],
+        snap_tolerance: float,
+    ) -> None:
+        """Set the resize constraint and freeform snap configuration."""
+        self._locked_ratio = locked_ratio
+        self._snap_ratios = snap_ratios
+        self._snap_tolerance = snap_tolerance
+
+    def paintEvent(self, event: object) -> None:
+        """Paint the preview, shaded crop mask, and crop guides."""
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.fillRect(self.rect(), QColor("#17191b"))
+        if self._image.isNull():
+            painter.setPen(QColor("#a7acb2"))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Open a folder to begin")
+            return
+
+        image_rect = self._image_rect()
+        painter.drawImage(image_rect, self._image)
+        crop_rect = self._crop_rect(image_rect)
+        if crop_rect is None:
+            return
+
+        mask = QPainterPath()
+        mask.addRect(image_rect)
+        cutout = QPainterPath()
+        cutout.addRect(crop_rect)
+        painter.fillPath(mask.subtracted(cutout), QColor(0, 0, 0, 145))
+        painter.setPen(QPen(QColor("#f4f2ec"), 1.5))
+        painter.drawRect(crop_rect)
+        painter.setPen(QPen(QColor(244, 242, 236, 110), 1))
+        painter.drawLine(
+            crop_rect.left() + crop_rect.width() / 3,
+            crop_rect.top(),
+            crop_rect.left() + crop_rect.width() / 3,
+            crop_rect.bottom(),
+        )
+        painter.drawLine(
+            crop_rect.left() + crop_rect.width() * 2 / 3,
+            crop_rect.top(),
+            crop_rect.left() + crop_rect.width() * 2 / 3,
+            crop_rect.bottom(),
+        )
+        painter.drawLine(
+            crop_rect.left(),
+            crop_rect.top() + crop_rect.height() / 3,
+            crop_rect.right(),
+            crop_rect.top() + crop_rect.height() / 3,
+        )
+        painter.drawLine(
+            crop_rect.left(),
+            crop_rect.top() + crop_rect.height() * 2 / 3,
+            crop_rect.right(),
+            crop_rect.top() + crop_rect.height() * 2 / 3,
+        )
+
+    def mousePressEvent(self, event: object) -> None:
+        """Start a new crop or begin moving/resizing the current crop."""
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        image_rect = self._image_rect()
+        point = event.position()
+        if not image_rect.contains(point):
+            return
+        normalized = self._to_normalized(point, image_rect)
+        crop_rect = self._crop_rect(image_rect)
+        if self._crop is None or self._is_full_crop(self._crop):
+            self._drag_kind = "draw"
+            self._drag_anchor = normalized
+        else:
+            self._drag_kind = self._hit_test(point, crop_rect)
+            if self._drag_kind is None:
+                self._drag_kind = "draw"
+                self._drag_anchor = normalized
+        self._drag_origin = normalized
+        self._initial_crop = self._crop
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        event.accept()
+
+    def mouseMoveEvent(self, event: object) -> None:
+        """Update the crop while dragging or show the appropriate cursor."""
+        image_rect = self._image_rect()
+        point = event.position()
+        if self._drag_kind is None:
+            self._update_hover_cursor(point, image_rect)
+            return
+        if not image_rect.contains(point):
+            point = QPointF(
+                min(max(point.x(), image_rect.left()), image_rect.right()),
+                min(max(point.y(), image_rect.top()), image_rect.bottom()),
+            )
+        normalized = self._to_normalized(point, image_rect)
+        if self._drag_kind == "draw":
+            self._resize_from_anchor(self._drag_anchor, normalized)
+        elif self._drag_kind == "move":
+            self._move_crop(normalized)
+        else:
+            self._resize_existing(normalized)
+        event.accept()
+
+    def mouseReleaseEvent(self, event: object) -> None:
+        """Finish the active crop gesture."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_kind = None
+            self._initial_crop = None
+            self.unsetCursor()
+            event.accept()
+
+    def _image_rect(self) -> QRectF:
+        """Return the preview's aspect-preserving display rectangle."""
+        if self._image.isNull():
+            return QRectF()
+        scale = min(self.width() / self._image.width(), self.height() / self._image.height())
+        width = self._image.width() * scale
+        height = self._image.height() * scale
+        return QRectF((self.width() - width) / 2, (self.height() - height) / 2, width, height)
+
+    def _crop_rect(self, image_rect: QRectF) -> QRectF | None:
+        """
+        Map normalized crop bounds into widget coordinates.
+
+        Returns:
+            The crop rectangle, or `None` when no crop is active.
+        """
+        if self._crop is None:
+            return None
+        return QRectF(
+            image_rect.left() + self._crop.left * image_rect.width(),
+            image_rect.top() + self._crop.top * image_rect.height(),
+            self._crop.width * image_rect.width(),
+            self._crop.height * image_rect.height(),
+        )
+
+    def _to_normalized(self, point: QPointF, image_rect: QRectF) -> QPointF:
+        """
+        Map widget coordinates to clamped normalized image coordinates.
+
+        Returns:
+            The image-relative point with both coordinates in [0, 1].
+        """
+        return QPointF(
+            min(max((point.x() - image_rect.left()) / image_rect.width(), 0), 1),
+            min(max((point.y() - image_rect.top()) / image_rect.height(), 0), 1),
+        )
+
+    def _hit_test(self, point: QPointF, crop_rect: QRectF | None) -> str | None:
+        """
+        Return the edge, corner, or interior drag mode under the pointer.
+
+        Returns:
+            The drag mode name, or `None` when outside the crop.
+        """
+        if crop_rect is None:
+            return None
+        hit_rect = crop_rect.adjusted(
+            -EDGE_HIT_PIXELS,
+            -EDGE_HIT_PIXELS,
+            EDGE_HIT_PIXELS,
+            EDGE_HIT_PIXELS,
+        )
+        if not hit_rect.contains(point):
+            return None
+        near_left = abs(point.x() - crop_rect.left()) <= EDGE_HIT_PIXELS
+        near_right = abs(point.x() - crop_rect.right()) <= EDGE_HIT_PIXELS
+        near_top = abs(point.y() - crop_rect.top()) <= EDGE_HIT_PIXELS
+        near_bottom = abs(point.y() - crop_rect.bottom()) <= EDGE_HIT_PIXELS
+        return self._classify_grip(near_left, near_right, near_top, near_bottom)
+
+    @staticmethod
+    def _classify_grip(
+        near_left: bool,
+        near_right: bool,
+        near_top: bool,
+        near_bottom: bool,
+    ) -> str:
+        """
+        Choose the closest matching corner or edge grip.
+
+        Returns:
+            A grip name or `move` for the crop interior.
+        """
+        vertical = "top" if near_top else "bottom" if near_bottom else ""
+        horizontal = "left" if near_left else "right" if near_right else ""
+        if vertical and horizontal:
+            return f"{vertical}-{horizontal}"
+        return vertical or horizontal or "move"
+
+    def _resize_from_anchor(self, anchor: QPointF, point: QPointF) -> None:
+        """Create or resize a crop from its fixed opposite point."""
+        try:
+            crop = resize_from_anchor(
+                anchor.x(),
+                anchor.y(),
+                point.x(),
+                point.y(),
+                self._image_width,
+                self._image_height,
+                locked_ratio=self._locked_ratio,
+                snap_ratios=self._snap_ratios,
+                snap_tolerance=self._snap_tolerance,
+            )
+        except ValueError:
+            return
+        self._set_edited_crop(crop)
+
+    def _move_crop(self, point: QPointF) -> None:
+        """Move the existing crop while preserving its size and image bounds."""
+        if self._initial_crop is None:
+            return
+        delta_x = point.x() - self._drag_origin.x()
+        delta_y = point.y() - self._drag_origin.y()
+        left = min(max(self._initial_crop.left + delta_x, 0), 1 - self._initial_crop.width)
+        top = min(max(self._initial_crop.top + delta_y, 0), 1 - self._initial_crop.height)
+        self._set_edited_crop(
+            CropRect(left, top, left + self._initial_crop.width, top + self._initial_crop.height)
+        )
+
+    def _resize_existing(self, point: QPointF) -> None:
+        """Resize the selected edge or corner of the original crop."""
+        if self._initial_crop is None or self._drag_kind is None:
+            return
+        if self._drag_kind in {"left", "right", "top", "bottom"}:
+            crop = self._resize_edge(point)
+        else:
+            crop = self._resize_corner(point)
+        if crop is not None:
+            self._set_edited_crop(crop)
+
+    def _resize_corner(self, point: QPointF) -> CropRect | None:
+        """
+        Resize from the opposite corner, applying lock or snap settings.
+
+        Returns:
+            The updated crop, or `None` if the new geometry is invalid.
+        """
+        assert self._initial_crop is not None and self._drag_kind is not None
+        anchor_x = (
+            self._initial_crop.left if "right" in self._drag_kind else self._initial_crop.right
+        )
+        anchor_y = (
+            self._initial_crop.top if "bottom" in self._drag_kind else self._initial_crop.bottom
+        )
+        try:
+            return resize_from_anchor(
+                anchor_x,
+                anchor_y,
+                point.x(),
+                point.y(),
+                self._image_width,
+                self._image_height,
+                locked_ratio=self._locked_ratio,
+                snap_ratios=self._snap_ratios,
+                snap_tolerance=self._snap_tolerance,
+            )
+        except ValueError:
+            return None
+
+    def _resize_edge(self, point: QPointF) -> CropRect | None:
+        """
+        Resize one edge, centering any ratio-constrained secondary dimension.
+
+        Returns:
+            The updated crop, or `None` if the new geometry is invalid.
+        """
+        assert self._initial_crop is not None and self._drag_kind is not None
+        crop = self._initial_crop
+        if self._drag_kind in {"left", "right"}:
+            left = point.x() if self._drag_kind == "left" else crop.left
+            right = crop.right if self._drag_kind == "left" else point.x()
+            width = abs(right - left)
+            height = crop.height
+        else:
+            top = point.y() if self._drag_kind == "top" else crop.top
+            bottom = crop.bottom if self._drag_kind == "top" else point.y()
+            height = abs(bottom - top)
+            width = crop.width
+
+        if width <= 0 or height <= 0:
+            return None
+        ratio = self._locked_ratio
+        if ratio is None:
+            ratio = closest_ratio_for_edge(
+                width,
+                height,
+                self._image_width,
+                self._image_height,
+                self._snap_ratios,
+                self._snap_tolerance,
+            )
+        if ratio is not None:
+            target = ratio.value * self._image_height / self._image_width
+            if self._drag_kind in {"left", "right"}:
+                height = width / target
+            else:
+                width = height * target
+
+        if self._drag_kind in {"left", "right"}:
+            center_y = (crop.top + crop.bottom) / 2
+            top = min(max(center_y - height / 2, 0), 1 - height)
+            bottom = top + height
+            left = min(max(left, 0), 1 - width)
+            right = left + width
+        else:
+            center_x = (crop.left + crop.right) / 2
+            left = min(max(center_x - width / 2, 0), 1 - width)
+            right = left + width
+            top = min(max(top, 0), 1 - height)
+            bottom = top + height
+        try:
+            return CropRect(left, top, right, bottom)
+        except ValueError:
+            return None
+
+    def _update_hover_cursor(self, point: QPointF, image_rect: QRectF) -> None:
+        """Set a resize or move cursor when hovering over crop controls."""
+        crop_rect = self._crop_rect(image_rect)
+        drag_kind = self._hit_test(point, crop_rect)
+        cursors = {
+            "move": Qt.CursorShape.SizeAllCursor,
+            "left": Qt.CursorShape.SizeHorCursor,
+            "right": Qt.CursorShape.SizeHorCursor,
+            "top": Qt.CursorShape.SizeVerCursor,
+            "bottom": Qt.CursorShape.SizeVerCursor,
+            "top-left": Qt.CursorShape.SizeFDiagCursor,
+            "bottom-right": Qt.CursorShape.SizeFDiagCursor,
+            "top-right": Qt.CursorShape.SizeBDiagCursor,
+            "bottom-left": Qt.CursorShape.SizeBDiagCursor,
+        }
+        self.setCursor(cursors.get(drag_kind, Qt.CursorShape.CrossCursor))
+
+    @staticmethod
+    def _is_full_crop(crop: CropRect) -> bool:
+        """Return whether the crop still selects the complete image."""
+        return crop.left == 0 and crop.top == 0 and crop.right == 1 and crop.bottom == 1
+
+    def _set_edited_crop(self, crop: CropRect) -> None:
+        """Update the crop and notify the application that it needs saving."""
+        if crop == self._crop:
+            return
+        self._crop = crop
+        self.update()
+        self.crop_changed.emit(crop)
+
+
+def closest_ratio_for_edge(
+    width: float,
+    height: float,
+    image_width: int,
+    image_height: int,
+    ratios: tuple[AspectRatio, ...],
+    tolerance: float,
+) -> AspectRatio | None:
+    """
+    Resolve a snap ratio for a crop edge gesture.
+
+    Returns:
+        The closest ratio within tolerance, or `None` when no ratio is close.
+    """
+    return closest_aspect_ratio(
+        width,
+        height,
+        image_width,
+        image_height,
+        ratios,
+        tolerance=tolerance,
+    )

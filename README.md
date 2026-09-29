@@ -116,6 +116,33 @@ uv run photo-workflow-benchmark-transcription video-test \
 
 This workflow requires `exiftool`, `ffmpeg`, and `ffprobe` to be available on `PATH`.
 
+## Rapid Crop Tool
+
+Launch the folder-oriented crop editor with an optional starting folder:
+
+```bash
+uv run photo-workflow-crop /path/to/photo/folder
+```
+
+The app currently supports Canon `.CR3` files and uses their embedded JPEG
+previews, loading a small preview before the larger `JpgFromRaw` preview.
+Previous/next are `Left`/`Right`; `L` toggles ratio lock, `S` toggles snapping,
+`1`-`8` select a configured ratio, `Command+O` opens a folder, and `Command+S`
+saves the current crop. Crop changes are written to the matching XMP sidecar;
+RAW files are not modified. The app requires ExifTool on `PATH`.
+
+Configure ratios and the relative snap tolerance in `photo-workflow.toml`:
+
+```toml
+[crop_tool]
+aspect_ratios = ["1:1", "4:5", "5:4", "3:2", "2:3", "4:3", "3:4", "16:9"]
+snap_tolerance = 0.025
+```
+
+See [docs/crop-tool-mvp.md](docs/crop-tool-mvp.md) for the MVP scope and
+validation checklist. Lightroom round-trip validation is still required before
+using the prototype on a large folder.
+
 ## Fonts
 
 The note renderer resolves fonts in this order:

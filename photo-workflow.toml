@@ -13,3 +13,7 @@ ignored_extensions = [".ctg", ".log", ".tmp", ".fir", ".to3"]
 [video_notes]
 max_duration_seconds = 15.0
 transcription_model = "mlx-community/whisper-medium-mlx"
+
+[crop_tool]
+aspect_ratios = ["1:1", "4:5", "1.91:1"]
+snap_tolerance = 0.025
