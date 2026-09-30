@@ -110,5 +110,3 @@ The current prototype applies EXIF orientation to embedded previews and uses dis
 ## Follow-Up TODOs
 
 - [ ] Experiment with a smoother Lightroom Classic refresh workflow so users do not need to manually force metadata rereading after an XMP update.
-- [ ] Measure navigation latency on a representative larger folder and tune preview extraction, prefetch, and cache limits based on the results.
-- [ ] Something like a reset button to undo any work performed while on the current picture.  Don't need to maintain history for this, just a reset to a specific position.  Greyed out when not applicable.

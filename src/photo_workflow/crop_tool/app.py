@@ -353,6 +353,8 @@ class CropWindow(QMainWindow):
         self._current_metadata: PhotoMetadata | None = None
         self._current_crop: CropRect | None = None
         self._current_rotation = 0.0
+        self._starting_crop: CropRect | None = None
+        self._starting_rotation: float | None = None
         self._horizon_candidates: tuple[HorizonCandidate, ...] = ()
         self._selected_horizon_candidate = -1
         self._locked_ratio: AspectRatio | None = None
@@ -471,6 +473,13 @@ class CropWindow(QMainWindow):
         self.side_by_side_button.setCheckable(True)
         self.side_by_side_button.setFixedSize(28, 28)
         self.side_by_side_button.setAutoRaise(True)
+        self.revert_button = QToolButton()
+        self.revert_button.setIcon(qta.icon("fa5s.undo", color="#f4f2ec"))
+        self.revert_button.setToolTip("Revert crop and angle to when this photo was opened")
+        self.revert_button.setAccessibleName("Revert this photo's crop and angle")
+        self.revert_button.setFixedSize(28, 28)
+        self.revert_button.setAutoRaise(True)
+        self.revert_button.setEnabled(False)
         self.lock_checkbox = QToolButton()
         self.lock_checkbox.setCheckable(True)
         self.lock_checkbox.setToolTip("Lock crop ratio (L)")
@@ -499,6 +508,7 @@ class CropWindow(QMainWindow):
         toolbar.addWidget(self.position_label, 1)
         toolbar.addWidget(self.angle_group)
         toolbar.addWidget(self.side_by_side_button)
+        toolbar.addWidget(self.revert_button)
         toolbar.addWidget(self.aspect_group)
         toolbar.addWidget(self.save_label)
         self.view = CropView()
@@ -529,6 +539,7 @@ class CropWindow(QMainWindow):
         self.auto_level_button.clicked.connect(self._auto_level_clicked)
         self.show_horizon_button.clicked.connect(self._toggle_horizon_visibility)
         self.side_by_side_button.toggled.connect(self._set_side_by_side_visible)
+        self.revert_button.clicked.connect(self._revert_current_photo)
         self.view.horizon_candidate_selected.connect(self._horizon_guide_selected)
         self.cropped_preview.crop_changed.connect(self._crop_edited)
         self.lock_checkbox.toggled.connect(self._update_crop_mode)
@@ -575,17 +586,30 @@ class CropWindow(QMainWindow):
         Returns:
             Metadata containing the crop shown in the image panes.
         """
+        if self._starting_crop is not None and self._current_crop is not None:
+            self._set_preview_crop(self._current_crop)
+            return self._current_metadata or metadata
         crop = self._set_preview_crop(metadata.crop)
         if crop is None or crop == metadata.crop:
             self._current_crop = crop
+            self._capture_starting_state(crop)
             return metadata
         corrected_metadata = replace(metadata, crop=crop)
         self._metadata_cache[path] = corrected_metadata
         if path == self._current_path:
             self._current_crop = crop
             self._current_metadata = corrected_metadata
+            self._capture_starting_state(crop)
             self._mark_dirty()
         return corrected_metadata
+
+    def _capture_starting_state(self, crop: CropRect | None) -> None:
+        """Cache the first displayable crop and angle for the current photo visit."""
+        if self._starting_crop is not None or crop is None:
+            return
+        self._starting_crop = crop
+        self._starting_rotation = round(self._current_rotation, 1)
+        self._update_revert_button()
 
     def _set_preview_rotation(self, angle: float) -> None:
         """Update rotation in both image panes."""
@@ -676,6 +700,9 @@ class CropWindow(QMainWindow):
         self._current_crop = None
         self._current_metadata = self._metadata_cache.get(self._current_path)
         self._current_rotation = 0.0
+        self._starting_crop = None
+        self._starting_rotation = None
+        self.revert_button.setEnabled(False)
         self._set_preview_rotation(0)
         self.rotation_slider.blockSignals(True)
         self.rotation_slider.setValue(0)
@@ -839,6 +866,27 @@ class CropWindow(QMainWindow):
         self._mark_dirty()
         self._select_crop_ratio(constrained_crop)
 
+    def _revert_current_photo(self) -> None:
+        """Restore this photo's starting crop and angle and queue them for saving."""
+        if (
+            self._starting_crop is None
+            or self._starting_rotation is None
+            or self._current_path is None
+            or self._current_metadata is None
+        ):
+            return
+        self._save_timer.stop()
+        self.rotation_slider.setValue(round(self._starting_rotation * 10))
+        self.rotation_value.setText(f"{self._starting_rotation:.1f}°")
+        self._current_rotation = self._starting_rotation
+        self._set_preview_rotation(self._starting_rotation)
+        crop = self._set_preview_crop(self._starting_crop)
+        if crop is None:
+            return
+        self._current_crop = crop
+        self._select_crop_ratio(crop)
+        self._mark_dirty()
+
     def _rotation_slider_changed(self, slider_value: int) -> None:
         """Convert the slider's tenths-degree value into a rotation edit."""
         angle = slider_value / 10
@@ -975,8 +1023,21 @@ class CropWindow(QMainWindow):
         """Mark the current photo changed and debounce its XMP write."""
         self._version += 1
         self._dirty = True
+        self._update_revert_button()
         self.save_label.setText("Unsaved")
         self._save_timer.start(SAVE_DELAY_MS)
+
+    def _update_revert_button(self) -> None:
+        """Enable Revert only when crop or angle differs from its starting state."""
+        changed = (
+            self._starting_crop is not None
+            and self._starting_rotation is not None
+            and (
+                self._current_crop != self._starting_crop
+                or round(self._current_rotation, 1) != self._starting_rotation
+            )
+        )
+        self.revert_button.setEnabled(changed)
 
     def _start_save(self) -> None:
         """Start writing the latest crop snapshot if the current photo is dirty."""

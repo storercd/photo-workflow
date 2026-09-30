@@ -571,6 +571,53 @@ def test_loaded_rotated_crop_is_constrained_and_marked_for_save(
     app.quit()
 
 
+def test_revert_restores_current_photos_starting_crop_and_rotation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Revert restores the selected photo's starting crop and angle and queues a save."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    raw_path = Path("revert.cr3")
+    original_crop = CropRect(0.15, 0.12, 0.82, 0.86)
+    metadata = PhotoMetadata(640, 480, original_crop, crop_angle=-2.3)
+    preview = QImage(QSize(640, 480), QImage.Format.Format_RGB32)
+    preview.fill(Qt.GlobalColor.black)
+    window._current_path = raw_path
+    window._preview_cache[raw_path] = preview
+    monkeypatch.setattr(window, "_select_crop_ratio", lambda crop: None)
+    monkeypatch.setattr(window, "_update_crop_mode", lambda *args: None)
+
+    window._apply_metadata(raw_path, metadata)
+    window._save_timer.stop()
+    assert not window.revert_button.isEnabled()
+    assert window._starting_crop is not None
+    assert window._starting_crop.left == pytest.approx(original_crop.left)
+    assert window._starting_rotation == pytest.approx(2.3)
+
+    edited_crop = CropRect(0.25, 0.2, 0.75, 0.8)
+    window._crop_edited(edited_crop)
+    window.rotation_slider.setValue(47)
+    window._save_timer.stop()
+    assert window.revert_button.isEnabled()
+
+    window.revert_button.click()
+    window._save_timer.stop()
+
+    assert window._current_crop is not None
+    assert window.view._crop == window.cropped_preview._crop == window._current_crop
+    assert window._current_crop.left == pytest.approx(original_crop.left)
+    assert window._current_crop.top == pytest.approx(original_crop.top)
+    assert window._current_crop.right == pytest.approx(original_crop.right)
+    assert window._current_crop.bottom == pytest.approx(original_crop.bottom)
+    assert window._current_rotation == pytest.approx(2.3)
+    assert window.rotation_slider.value() == 23
+    assert window._dirty
+    assert not window.revert_button.isEnabled()
+    window._dirty = False
+    window.close()
+    app.quit()
+
+
 def test_auto_level_applies_best_candidate_and_clicking_alternate_updates_angle() -> None:
     """Auto-level applies the strongest line suggestion and retains alternatives."""
     app = QApplication.instance() or QApplication([])
