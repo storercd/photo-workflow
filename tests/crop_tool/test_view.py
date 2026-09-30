@@ -89,6 +89,60 @@ def test_rotation_fit_keeps_rotated_image_inside_viewport() -> None:
     app.quit()
 
 
+def test_drawing_crop_clamps_to_actual_rotated_photo_polygon() -> None:
+    """Drawing toward an empty rotated corner cannot include the canvas behind it."""
+    app = QApplication.instance() or QApplication([])
+    view = CropView()
+    view.resize(500, 400)
+    image = QImage(QSize(400, 300), QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.black)
+    view.set_image(image, 400, 300)
+    view.set_rotation(30)
+    image_rect = view._image_rect()
+    rotated_bounds = view._rotated_bounds_rect(image_rect)
+    start = image_rect.center().toPoint()
+    blank_corner = rotated_bounds.topLeft().toPoint()
+
+    QTest.mousePress(view, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(view, blank_corner)
+
+    crop_rect = view._crop_rect(image_rect)
+    polygon = view._rotated_image_polygon(image_rect)
+    assert crop_rect is not None
+    polygon_points = [(point.x(), point.y()) for point in polygon]
+    area = sum(
+        x1 * y2 - x2 * y1
+        for (x1, y1), (x2, y2) in zip(
+            polygon_points,
+            (*polygon_points[1:], polygon_points[0]),
+            strict=True,
+        )
+    )
+    orientation = 1 if area > 0 else -1
+    for corner in (
+        crop_rect.topLeft(),
+        crop_rect.topRight(),
+        crop_rect.bottomRight(),
+        crop_rect.bottomLeft(),
+    ):
+        assert all(
+            orientation
+            * (
+                (x2 - x1) * (corner.y() - y1)
+                - (y2 - y1) * (corner.x() - x1)
+            )
+            >= -1e-5
+            for (x1, y1), (x2, y2) in zip(
+                polygon_points,
+                (*polygon_points[1:], polygon_points[0]),
+                strict=True,
+            )
+        )
+    QTest.mouseRelease(view, Qt.MouseButton.LeftButton, pos=blank_corner)
+    view.close()
+    app.quit()
+
+
 def test_rotated_image_uses_neutral_gray_canvas_outside_photo() -> None:
     """The corners outside a rotated preview show the Lightroom-like gray canvas."""
     app = QApplication.instance() or QApplication([])

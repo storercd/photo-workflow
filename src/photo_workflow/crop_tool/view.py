@@ -13,6 +13,7 @@ from photo_workflow.crop_tool.model import (
     AspectRatio,
     CropRect,
     closest_aspect_ratio,
+    constrain_crop_to_rotated_image,
     resize_from_anchor,
 )
 
@@ -74,15 +75,25 @@ class CropView(QWidget):
             self.unsetCursor()
         self.update()
 
-    def set_crop(self, crop: CropRect | None) -> None:
-        """Set the active normalized crop without emitting an edit."""
-        self._crop = crop
-        self._snap_ratio = self._matching_snap_ratio(crop) if crop is not None else None
+    def set_crop(self, crop: CropRect | None) -> CropRect | None:
+        """
+        Set a crop constrained to the rotated image without emitting an edit.
+
+        Returns:
+            The constrained crop, or `None` when no crop is active.
+        """
+        self._crop = self._constrain_crop(crop) if crop is not None else None
+        self._snap_ratio = (
+            self._matching_snap_ratio(self._crop) if self._crop is not None else None
+        )
         self.update()
+        return self._crop
 
     def set_rotation(self, angle_degrees: float) -> None:
         """Rotate the photo beneath the upright crop frame."""
         self._rotation_angle = angle_degrees
+        if self._crop is not None:
+            self._set_edited_crop(self._crop)
         self.update()
 
     def set_horizon_candidates(
@@ -307,10 +318,12 @@ class CropView(QWidget):
             self.horizon_candidate_selected.emit(candidate_index)
             event.accept()
             return
-        crop_plane = self._rotated_bounds_rect(image_rect)
         point = event.position()
-        if not crop_plane.contains(point):
+        if not self._rotated_image_polygon(image_rect).containsPoint(
+            point, Qt.FillRule.WindingFill
+        ):
             return
+        crop_plane = self._rotated_bounds_rect(image_rect)
         normalized = self._to_normalized(point, crop_plane)
         crop_rect = self._crop_rect(image_rect)
         if self._crop is None or self._is_full_crop(self._crop):
@@ -339,11 +352,9 @@ class CropView(QWidget):
             else:
                 self._update_hover_cursor(point, image_rect)
             return
-        if not crop_plane.contains(point):
-            point = QPointF(
-                min(max(point.x(), crop_plane.left()), crop_plane.right()),
-                min(max(point.y(), crop_plane.top()), crop_plane.bottom()),
-            )
+        polygon = self._rotated_image_polygon(image_rect)
+        if not polygon.containsPoint(point, Qt.FillRule.WindingFill):
+            point = self._closest_point_on_polygon(point, polygon)
         normalized = self._to_normalized(point, crop_plane)
         if self._drag_kind == "draw":
             self._resize_from_anchor(self._drag_anchor, normalized)
@@ -403,6 +414,39 @@ class CropView(QWidget):
     def _rotated_bounds_rect(self, image_rect: QRectF) -> QRectF:
         """Return the upright crop-plane bounds around the rotated image."""
         return self._rotated_image_polygon(image_rect).boundingRect()
+
+    @staticmethod
+    def _closest_point_on_polygon(point: QPointF, polygon: QPolygonF) -> QPointF:
+        """
+        Project an outside pointer to the nearest point on the photo boundary.
+
+        Returns:
+            The nearest point on the polygon boundary.
+        """
+        closest_point = polygon.first()
+        closest_distance = float("inf")
+        for index, start in enumerate(polygon):
+            end = polygon[(index + 1) % len(polygon)]
+            edge_x = end.x() - start.x()
+            edge_y = end.y() - start.y()
+            edge_length_squared = edge_x * edge_x + edge_y * edge_y
+            if edge_length_squared == 0:
+                projected = start
+            else:
+                amount = (
+                    (point.x() - start.x()) * edge_x
+                    + (point.y() - start.y()) * edge_y
+                ) / edge_length_squared
+                amount = min(max(amount, 0), 1)
+                projected = QPointF(
+                    start.x() + amount * edge_x,
+                    start.y() + amount * edge_y,
+                )
+            distance = hypot(point.x() - projected.x(), point.y() - projected.y())
+            if distance < closest_distance:
+                closest_point = projected
+                closest_distance = distance
+        return closest_point
 
     def _crop_rect(self, image_rect: QRectF) -> QRectF | None:
         """
@@ -625,12 +669,30 @@ class CropView(QWidget):
 
     def _set_edited_crop(self, crop: CropRect) -> None:
         """Update the crop and notify the application that it needs saving."""
+        crop = self._constrain_crop(crop)
         if crop == self._crop:
             return
         self._crop = crop
         self._snap_ratio = self._matching_snap_ratio(crop)
         self.update()
         self.crop_changed.emit(crop)
+
+    def _constrain_crop(self, crop: CropRect) -> CropRect:
+        """
+        Constrain a normalized crop to the rotated source image.
+
+        Returns:
+            A crop whose corners remain within the source image polygon.
+        """
+        image_rect = self._image_rect()
+        if self._image.isNull() or not image_rect.isValid():
+            return crop
+        return constrain_crop_to_rotated_image(
+            crop,
+            image_rect.width(),
+            image_rect.height(),
+            self._rotation_angle,
+        )
 
     def _matching_snap_ratio(self, crop: CropRect) -> AspectRatio | None:
         if self._locked_ratio is not None or not self._snap_ratios:

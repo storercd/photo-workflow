@@ -92,6 +92,192 @@ def rotated_image_size(
     )
 
 
+def constrain_crop_to_rotated_image(
+    crop: CropRect,
+    image_width: float,
+    image_height: float,
+    angle_degrees: float,
+) -> CropRect:
+    """
+    Fit an upright crop rectangle inside the actual rotated image polygon.
+
+    The crop is translated by the least distance needed when its size fits. If
+    no placement fits at the requested size, it is uniformly reduced while
+    preserving its aspect ratio.
+
+    Returns:
+        A crop whose four corners lie on or inside the rotated image boundary.
+    """
+    if angle_degrees == 0:
+        return crop
+    rotated_width, rotated_height = rotated_image_size(
+        image_width, image_height, angle_degrees
+    )
+    polygon = _rotated_image_polygon(
+        image_width, image_height, rotated_width, rotated_height, angle_degrees
+    )
+    desired_center = ((crop.left + crop.right) / 2, (crop.top + crop.bottom) / 2)
+    center = _nearest_crop_center(
+        desired_center,
+        crop.width / 2,
+        crop.height / 2,
+        polygon,
+    )
+    if center is not None:
+        return _crop_at_center(center, crop.width, crop.height)
+
+    minimum_scale = 0.0
+    maximum_scale = 1.0
+    for _ in range(48):
+        scale = (minimum_scale + maximum_scale) / 2
+        center = _nearest_crop_center(
+            desired_center,
+            crop.width * scale / 2,
+            crop.height * scale / 2,
+            polygon,
+        )
+        if center is None:
+            maximum_scale = scale
+        else:
+            minimum_scale = scale
+    scale = max(minimum_scale, 1e-9)
+    center = _nearest_crop_center(
+        desired_center,
+        crop.width * scale / 2,
+        crop.height * scale / 2,
+        polygon,
+    )
+    assert center is not None
+    return _crop_at_center(center, crop.width * scale, crop.height * scale)
+
+
+def _rotated_image_polygon(
+    image_width: float,
+    image_height: float,
+    rotated_width: float,
+    rotated_height: float,
+    angle_degrees: float,
+) -> list[tuple[float, float]]:
+    angle = radians(angle_degrees)
+    cosine = cos(angle)
+    sine = sin(angle)
+    polygon = []
+    for x, y in (
+        (-image_width / 2, -image_height / 2),
+        (image_width / 2, -image_height / 2),
+        (image_width / 2, image_height / 2),
+        (-image_width / 2, image_height / 2),
+    ):
+        rotated_x = x * cosine - y * sine
+        rotated_y = x * sine + y * cosine
+        polygon.append(
+            (
+                (rotated_x + rotated_width / 2) / rotated_width,
+                (rotated_y + rotated_height / 2) / rotated_height,
+            )
+        )
+    return polygon
+
+
+def _nearest_crop_center(
+    desired_center: tuple[float, float],
+    half_width: float,
+    half_height: float,
+    polygon: list[tuple[float, float]],
+) -> tuple[float, float] | None:
+    constraints = _crop_center_constraints(half_width, half_height, polygon)
+    if _satisfies_constraints(desired_center, constraints):
+        return desired_center
+    candidates = _projected_constraint_points(desired_center, constraints)
+    candidates.extend(_constraint_intersections(constraints))
+    valid = [point for point in candidates if _satisfies_constraints(point, constraints)]
+    if not valid:
+        return None
+    return min(
+        valid,
+        key=lambda point: (point[0] - desired_center[0]) ** 2
+        + (point[1] - desired_center[1]) ** 2,
+    )
+
+
+def _crop_center_constraints(
+    half_width: float,
+    half_height: float,
+    polygon: list[tuple[float, float]],
+) -> list[tuple[float, float, float]]:
+    centroid_x = sum(x for x, _ in polygon) / len(polygon)
+    centroid_y = sum(y for _, y in polygon) / len(polygon)
+    constraints = []
+    for start, end in zip(polygon, (*polygon[1:], polygon[0]), strict=True):
+        edge_x = end[0] - start[0]
+        edge_y = end[1] - start[1]
+        normal_x = edge_y
+        normal_y = -edge_x
+        bound = normal_x * start[0] + normal_y * start[1]
+        if normal_x * centroid_x + normal_y * centroid_y > bound:
+            normal_x = -normal_x
+            normal_y = -normal_y
+            bound = -bound
+        bound -= abs(normal_x) * half_width + abs(normal_y) * half_height
+        constraints.append((normal_x, normal_y, bound))
+    return constraints
+
+
+def _satisfies_constraints(
+    point: tuple[float, float],
+    constraints: list[tuple[float, float, float]],
+) -> bool:
+    return all(
+        normal_x * point[0] + normal_y * point[1] <= bound + 1e-10
+        for normal_x, normal_y, bound in constraints
+    )
+
+
+def _projected_constraint_points(
+    point: tuple[float, float],
+    constraints: list[tuple[float, float, float]],
+) -> list[tuple[float, float]]:
+    projections = []
+    for normal_x, normal_y, bound in constraints:
+        norm_squared = normal_x * normal_x + normal_y * normal_y
+        amount = (normal_x * point[0] + normal_y * point[1] - bound) / norm_squared
+        projections.append(
+            (point[0] - amount * normal_x, point[1] - amount * normal_y)
+        )
+    return projections
+
+
+def _constraint_intersections(
+    constraints: list[tuple[float, float, float]],
+) -> list[tuple[float, float]]:
+    intersections = []
+    for index, first in enumerate(constraints):
+        for second in constraints[index + 1 :]:
+            determinant = first[0] * second[1] - second[0] * first[1]
+            if abs(determinant) < 1e-12:
+                continue
+            intersections.append(
+                (
+                    (first[2] * second[1] - second[2] * first[1]) / determinant,
+                    (first[0] * second[2] - second[0] * first[2]) / determinant,
+                )
+            )
+    return intersections
+
+
+def _crop_at_center(
+    center: tuple[float, float],
+    width: float,
+    height: float,
+) -> CropRect:
+    return CropRect(
+        center[0] - width / 2,
+        center[1] - height / 2,
+        center[0] + width / 2,
+        center[1] + height / 2,
+    )
+
+
 def lightroom_crop_to_display(
     crop: CropRect,
     image_width: int,

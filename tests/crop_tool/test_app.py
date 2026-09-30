@@ -542,6 +542,35 @@ def test_lightroom_crop_angle_is_shown_with_opposite_user_facing_sign(
     app.quit()
 
 
+def test_loaded_rotated_crop_is_constrained_and_marked_for_save(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An existing crop outside the rotated photo is corrected before display/save."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    raw_path = Path("rotated.cr3")
+    original_crop = CropRect(0.05, 0.05, 0.95, 0.95)
+    metadata = PhotoMetadata(400, 300, original_crop, crop_angle=-30)
+    image = QImage(QSize(400, 300), QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.black)
+    window._current_path = raw_path
+    window._preview_cache[raw_path] = image
+    monkeypatch.setattr(window, "_select_crop_ratio", lambda crop: None)
+    monkeypatch.setattr(window, "_update_crop_mode", lambda *args: None)
+
+    window._apply_metadata(raw_path, metadata)
+    window._save_timer.stop()
+
+    assert window._current_crop is not None
+    assert window._current_crop != original_crop
+    assert window._current_metadata is not None
+    assert window._current_metadata.crop == window._current_crop
+    assert window.view._crop == window.cropped_preview._crop == window._current_crop
+    assert window._dirty
+    window.close()
+    app.quit()
+
+
 def test_auto_level_applies_best_candidate_and_clicking_alternate_updates_angle() -> None:
     """Auto-level applies the strongest line suggestion and retains alternatives."""
     app = QApplication.instance() or QApplication([])

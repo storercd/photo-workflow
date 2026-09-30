@@ -31,7 +31,7 @@ The first release should prove two things: the folder can be navigated without w
 
 - Display the full preview with a crop overlay.
 - Drag inside the crop to reposition it; drag an edge or corner to resize it; drag outside the crop to start a new crop.
-- Keep the crop within image bounds.
+- Keep all four crop corners inside the actual photo boundary, including when the photo is rotated; do not allow the crop to include the blank corners of the rotated image's rectangular bounds.
 - Use a generous 24-pixel edge/corner hit zone for crop resizing.
 - Rotate the photo beneath the upright crop frame with the angle control; display angle uses Lightroom's user-facing sign, while XMP `CropAngle` is stored with the inverse sign.
 - Support three modes:
@@ -109,7 +109,6 @@ The current prototype applies EXIF orientation to embedded previews and uses dis
 
 ## Follow-Up TODOs
 
-- [ ] Crop boundaries are allowed outside the actual image border; this should be adjusted to fall inside the bounds?  Except, sometimes it's useful to drag/pan outside knowing that it won't work long-term, but we can't save it that way.  Not sure how to handle that.
 - [ ] Experiment with a smoother Lightroom Classic refresh workflow so users do not need to manually force metadata rereading after an XMP update.
 - [ ] Measure navigation latency on a representative larger folder and tune preview extraction, prefetch, and cache limits based on the results.
 - [ ] Something like a reset button to undo any work performed while on the current picture.  Don't need to maintain history for this, just a reset to a specific position.  Greyed out when not applicable.

@@ -549,10 +549,35 @@ class CropWindow(QMainWindow):
         self.view.set_image(image, image_width, image_height)
         self.cropped_preview.set_image(image)
 
-    def _set_preview_crop(self, crop: CropRect | None) -> None:
-        """Update crop geometry in both image panes."""
-        self.view.set_crop(crop)
+    def _set_preview_crop(self, crop: CropRect | None) -> CropRect | None:
+        """
+        Update crop geometry in both panes and return its bounded value.
+
+        Returns:
+            The bounded crop, or `None` when no crop is active.
+        """
+        crop = self.view.set_crop(crop)
         self.cropped_preview.set_crop(crop)
+        return crop
+
+    def _set_loaded_crop(self, path: Path, metadata: PhotoMetadata) -> PhotoMetadata:
+        """
+        Constrain loaded crop metadata and queue a save if bounds needed correction.
+
+        Returns:
+            Metadata containing the crop shown in the image panes.
+        """
+        crop = self._set_preview_crop(metadata.crop)
+        if crop is None or crop == metadata.crop:
+            self._current_crop = crop
+            return metadata
+        corrected_metadata = replace(metadata, crop=crop)
+        self._metadata_cache[path] = corrected_metadata
+        if path == self._current_path:
+            self._current_crop = crop
+            self._current_metadata = corrected_metadata
+            self._mark_dirty()
+        return corrected_metadata
 
     def _set_preview_rotation(self, angle: float) -> None:
         """Update rotation in both image panes."""
@@ -745,7 +770,7 @@ class CropWindow(QMainWindow):
         image = self._preview_cache.get(path)
         if image is not None:
             self._set_preview_image(image, display_width, display_height)
-            self._set_preview_crop(metadata.crop)
+            metadata = self._set_loaded_crop(path, metadata)
             self._set_preview_loading(False)
             self.auto_level_button.setEnabled(True)
             self.show_horizon_button.setEnabled(True)
@@ -768,7 +793,9 @@ class CropWindow(QMainWindow):
             self.auto_level_button.setEnabled(True)
             self.show_horizon_button.setEnabled(True)
             if self._current_metadata is not None:
-                self._set_preview_crop(self._current_metadata.crop)
+                self._current_metadata = self._set_loaded_crop(
+                    path, self._current_metadata
+                )
                 self._set_preview_loading(False)
 
     def _show_image(self, image: QImage) -> None:
@@ -797,10 +824,12 @@ class CropWindow(QMainWindow):
         """Mark the current photo dirty and debounce its XMP write."""
         if self._current_path is None or self._current_metadata is None:
             return
-        self._current_crop = crop
-        self._set_preview_crop(crop)
+        constrained_crop = self._set_preview_crop(crop)
+        if constrained_crop is None:
+            return
+        self._current_crop = constrained_crop
         self._mark_dirty()
-        self._select_crop_ratio(crop)
+        self._select_crop_ratio(constrained_crop)
 
     def _rotation_slider_changed(self, slider_value: int) -> None:
         """Convert the slider's tenths-degree value into a rotation edit."""

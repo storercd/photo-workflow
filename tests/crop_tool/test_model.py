@@ -1,5 +1,7 @@
 """Tests for UI-independent crop geometry."""
 
+from math import cos, radians, sin
+
 import pytest
 
 from photo_workflow.crop_tool.model import (
@@ -7,11 +9,13 @@ from photo_workflow.crop_tool.model import (
     CropRect,
     aspect_ratio_for_crop,
     closest_aspect_ratio,
+    constrain_crop_to_rotated_image,
     crop_aspect_ratio,
     display_crop_to_lightroom,
     fit_crop_to_ratio,
     lightroom_crop_to_display,
     resize_from_anchor,
+    rotated_image_size,
 )
 
 
@@ -58,6 +62,40 @@ def test_fit_crop_to_ratio_changes_bounds_immediately_and_keeps_center() -> None
     assert updated.right <= crop.right + 1e-9
     assert updated.top == pytest.approx(crop.top)
     assert updated.bottom == pytest.approx(crop.bottom)
+
+
+@pytest.mark.parametrize("angle", [10, 30, -22])
+def test_crop_constraint_keeps_all_corners_inside_rotated_image(angle: float) -> None:
+    """Constrained crop corners remain over source pixels, not rotated AABB corners."""
+    crop = CropRect(0.05, 0.05, 0.95, 0.95)
+    width = 1000
+    height = 800
+
+    constrained = constrain_crop_to_rotated_image(crop, width, height, angle)
+
+    angle_radians = radians(-angle)
+    rotated_width, rotated_height = rotated_image_size(width, height, angle)
+    for x, y in (
+        (constrained.left, constrained.top),
+        (constrained.right, constrained.top),
+        (constrained.right, constrained.bottom),
+        (constrained.left, constrained.bottom),
+    ):
+        rotated_x = (x - 0.5) * rotated_width
+        rotated_y = (y - 0.5) * rotated_height
+        source_x = rotated_x * cos(angle_radians) - rotated_y * sin(angle_radians)
+        source_y = rotated_x * sin(angle_radians) + rotated_y * cos(angle_radians)
+        assert abs(source_x) <= width / 2 + 1e-6
+        assert abs(source_y) <= height / 2 + 1e-6
+    assert constrained.width / constrained.height == pytest.approx(crop.width / crop.height)
+    assert constrained.width < crop.width
+
+
+def test_crop_constraint_leaves_zero_angle_crop_unchanged() -> None:
+    """With no rotation, the actual image and its bounds are the same rectangle."""
+    crop = CropRect(0.05, 0.1, 0.9, 0.8)
+
+    assert constrain_crop_to_rotated_image(crop, 1000, 800, 0) == crop
 
 
 @pytest.mark.parametrize(

@@ -8,11 +8,11 @@ When the optional side-by-side view is enabled, dragging inside the cropped-resu
 
 1. **Loading state:** While the selected preview is loading, image-window clicks do not start crop gestures or select guides.
 2. **Auto-angle guide:** A detected candidate line within 10 screen pixels of the pointer is selected first. Its angle is applied through the rotation slider, and the matching candidate is highlighted. This takes priority over crop handles and crop creation when they overlap.
-3. **Crop plane:** If no guide was hit, clicks outside the rotated image's axis-aligned crop plane are ignored.
-4. **New crop:** If there is no active crop, or the current crop covers the full image, clicking within the crop plane starts drawing a crop.
+3. **Photo boundary:** If no guide was hit, clicks outside the actual rotated photo polygon are ignored, including the empty corners inside its axis-aligned bounds.
+4. **New crop:** If there is no active crop, or the current crop covers the full image, clicking inside the photo polygon starts drawing a crop.
 5. **Crop edge or corner:** For a partial crop, the 24-pixel edge hit zones are checked. A nearby corner selects its corner grip; otherwise a nearby edge selects that edge for resizing.
 6. **Crop interior:** A click within the crop but outside all edge hit zones moves the crop.
-7. **Empty crop-plane area:** Clicking outside the partial crop starts drawing a replacement crop.
+7. **Empty photo area:** Clicking inside the photo polygon but outside the partial crop starts drawing a replacement crop.
 
 ## Overlapping Targets
 
