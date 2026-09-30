@@ -85,7 +85,11 @@ from photo_workflow.crop_tool.model import (
 )
 from photo_workflow.crop_tool.view import CroppedPreview, CropView
 
-RAW_SUFFIXES = {".cr3"}
+PREVIEW_TAGS_BY_SUFFIX = {
+    ".cr2": ("PreviewImage",),
+    ".cr3": PREVIEW_TAGS,
+}
+RAW_SUFFIXES = set(PREVIEW_TAGS_BY_SUFFIX)
 DropTarget = tuple[Path, Path | None]
 PREVIEW_CACHE_SIZE = 12
 MAX_IN_FLIGHT_PREVIEWS = 3
@@ -306,18 +310,20 @@ class PhotoLoadTask(QRunnable):
 
     def _emit_previews(self, orientation: int) -> None:
         """Emit decoded previews in quality order, ignoring unavailable tags."""
-        for preview_index, tag in enumerate(PREVIEW_TAGS):
+        preview_tags = PREVIEW_TAGS_BY_SUFFIX[self.raw_path.suffix.lower()]
+        for preview_index, tag in enumerate(preview_tags):
             try:
                 image = decode_preview(
                     extract_preview(self.raw_path, tag),
                     fallback_orientation=orientation,
                 )
             except Exception as error:
-                if preview_index == len(PREVIEW_TAGS) - 1:
+                if preview_index == len(preview_tags) - 1:
                     self.signals.error.emit(str(self.raw_path), str(error))
                 continue
             if not image.isNull():
-                self.signals.preview.emit(str(self.raw_path), image, preview_index > 0)
+                is_final_preview = preview_index == len(preview_tags) - 1
+                self.signals.preview.emit(str(self.raw_path), image, is_final_preview)
 
 
 class PhotoSaveTask(QRunnable):
@@ -1008,7 +1014,7 @@ class CropWindow(QMainWindow):
             self._rating_scan_generation += 1
             self._ratings_loaded = False
             self._photo_ratings = {}
-            self.position_count_label.setText("No CR3 files in folder")
+            self.position_count_label.setText("No CR2 or CR3 files in folder")
             self.position_label.setText("")
             self._set_preview_loading(False)
             self._set_preview_image(QImage(), 1, 1)
@@ -1584,7 +1590,7 @@ class CropWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
 
     def _choose_folder(self) -> None:
-        """Prompt for a folder and open its CR3 files."""
+        """Prompt for a folder and open its supported RAW files."""
         folder_text = QFileDialog.getExistingDirectory(self, "Open photo folder")
         if folder_text:
             self.open_folder(Path(folder_text))

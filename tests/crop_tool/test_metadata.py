@@ -249,9 +249,11 @@ def test_write_photo_crop_transforms_display_crop_back_to_sensor_coordinates(
     assert "-XMP-crs:CropAngle=-10.0000000000" in write_args
 
 
+@pytest.mark.parametrize("raw_suffix", ["cr2", "cr3"])
 def test_write_photo_crop_creates_a_minimal_sidecar(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    raw_suffix: str,
 ) -> None:
     """A first crop edit creates a standalone XMP sidecar without editing RAW."""
     monkeypatch.setattr(crop_metadata, "require_exiftool", lambda: "/usr/bin/exiftool")
@@ -264,7 +266,7 @@ def test_write_photo_crop_creates_a_minimal_sidecar(
             json.dumps([{"ImageWidth": 6000, "ImageHeight": 4000}]),
         ),
     )
-    raw_path = tmp_path / "photo.cr3"
+    raw_path = tmp_path / f"photo.{raw_suffix}"
     xmp_path = tmp_path / "photo.xmp"
     crop = CropRect(left=0.2, top=0, right=0.8, bottom=1)
 
@@ -275,7 +277,7 @@ def test_write_photo_crop_creates_a_minimal_sidecar(
     assert description is not None
     assert description.get(f"{{{crop_metadata.CRS_NS}}}CropLeft") == "0.2000000000"
     assert description.get(f"{{{crop_metadata.CRS_NS}}}HasCrop") == "True"
-    assert description.get(f"{{{crop_metadata.CRS_NS}}}RawFileName") == "photo.cr3"
+    assert description.get(f"{{{crop_metadata.CRS_NS}}}RawFileName") == raw_path.name
     assert not raw_path.exists()
 
 

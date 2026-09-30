@@ -124,19 +124,24 @@ Launch the folder-oriented crop editor with an optional starting folder:
 uv run photo-workflow-crop /path/to/photo/folder
 ```
 
-Folders and individual `.CR3` photos can also be dropped onto the app window. A
+Folders and individual `.CR2` or `.CR3` photos can also be dropped onto the app window. A
 dropped photo opens its parent folder with that photo selected.
 
-The app currently supports Canon `.CR3` files and uses their embedded JPEG
-previews, loading a small preview before the larger `JpgFromRaw` preview.
-Star-rating and Lightroom color-label filters can be combined; the photo count
-indicates when the visible list is filtered.
-Previous/next are `Left`/`Right`; `L` toggles ratio lock, `S` toggles snapping,
-`1`-`8` select a configured ratio, `Command+O` opens a folder, and `Command+S`
-saves the current crop. The angle control rotates the photo beneath the upright
-crop frame and saves Lightroom-compatible `CropAngle` metadata. Crop and rotation
-changes are written to the matching XMP sidecar; RAW files are not modified. The
-app requires ExifTool on `PATH`.
+The app supports Canon `.CR2` and `.CR3` files and uses embedded JPEG previews.
+For CR3, it loads a small preview before the larger `JpgFromRaw` preview; for
+CR2, it uses the embedded `PreviewImage`. Star-rating thresholds and
+Lightroom color-label filters can be combined; the photo count indicates when
+the visible list is filtered. Use the angle slider to rotate the image beneath
+the crop, Auto to apply a detected horizon, or Show to select a suggested line.
+The optional side-by-side pane previews the cropped result. Revert restores the
+crop and angle from when the current photo was opened.
+
+Use `Left`/`Right` to navigate, `L` to toggle ratio lock, `S` to toggle
+snapping, and `1`-`8` to select a configured ratio. `A` auto-levels and `H`
+shows horizon candidates. `Command+O` opens a folder and `Command+S` saves
+the current crop. Crop and rotation changes are written to Lightroom-compatible
+XMP sidecars, creating one on the first edit when needed; RAW files are not
+modified. ExifTool must be on `PATH`.
 
 Configure ratios and the relative snap tolerance in `photo-workflow.toml`:
 
@@ -145,10 +150,6 @@ Configure ratios and the relative snap tolerance in `photo-workflow.toml`:
 aspect_ratios = ["1:1", "4:5", "5:4", "3:2", "2:3", "4:3", "3:4", "16:9"]
 snap_tolerance = 0.05
 ```
-
-See [docs/crop-tool-mvp.md](docs/crop-tool-mvp.md) for the MVP scope and
-validation checklist. Lightroom round-trip validation is still required before
-using the prototype on a large folder.
 
 ## Fonts
 

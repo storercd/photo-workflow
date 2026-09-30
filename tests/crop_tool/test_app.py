@@ -56,6 +56,66 @@ def test_resolve_drop_path_opens_supported_photo_parent_and_selects_photo(
     assert resolve_drop_path(photo_path) == (tmp_path, photo_path)
 
 
+def test_resolve_drop_path_accepts_cr2(tmp_path: Path) -> None:
+    """A dropped CR2 selects its parent folder and the selected photo."""
+    photo_path = tmp_path / "backup.CR2"
+    photo_path.touch()
+
+    assert resolve_drop_path(photo_path) == (tmp_path, photo_path)
+
+
+def test_cr2_preview_does_not_require_jpg_from_raw(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CR2 PreviewImage is final and does not trigger a missing-tag error."""
+    task = crop_app.PhotoLoadTask(Path("backup.CR2"))
+    previews: list[tuple[str, bool]] = []
+    errors: list[str] = []
+    tags: list[str] = []
+    task.signals.preview.connect(lambda path, image, high: previews.append((path, high)))
+    task.signals.error.connect(lambda path, error: errors.append(error))
+
+    def extract_preview(path: Path, tag: str) -> bytes:
+        tags.append(tag)
+        if tag != "PreviewImage":
+            raise RuntimeError("missing JpgFromRaw")
+        return b"preview"
+
+    monkeypatch.setattr(crop_app, "extract_preview", extract_preview)
+    monkeypatch.setattr(
+        crop_app,
+        "decode_preview",
+        lambda data, **kwargs: QImage(8, 8, QImage.Format.Format_RGB32),
+    )
+    task._emit_previews(1)
+
+    assert tags == ["PreviewImage"]
+    assert previews == [("backup.CR2", True)]
+    assert errors == []
+
+
+def test_cr3_preview_loads_both_tags_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CR3 emits the quick preview before its final JpgFromRaw image."""
+    task = crop_app.PhotoLoadTask(Path("primary.CR3"))
+    tags: list[str] = []
+    previews: list[bool] = []
+    task.signals.preview.connect(lambda path, image, final: previews.append(final))
+
+    def extract_preview(path: Path, tag: str) -> bytes:
+        tags.append(tag)
+        return b"preview"
+
+    monkeypatch.setattr(crop_app, "extract_preview", extract_preview)
+    monkeypatch.setattr(
+        crop_app,
+        "decode_preview",
+        lambda data, **kwargs: QImage(8, 8, QImage.Format.Format_RGB32),
+    )
+
+    task._emit_previews(1)
+
+    assert tags == ["PreviewImage", "JpgFromRaw"]
+    assert previews == [False, True]
+
+
 def test_resolve_drop_path_rejects_unsupported_files(tmp_path: Path) -> None:
     """Non-RAW files are not treated as photo drops."""
     unsupported_path = tmp_path / "notes.txt"
@@ -160,6 +220,23 @@ def test_open_folder_starts_on_selected_photo(
 
     assert window._current_index == 1
     assert window._current_path == selected_photo
+    window.close()
+    app.quit()
+
+
+def test_open_folder_lists_cr2_and_cr3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mixed folder lists both Canon RAW formats without including other files."""
+    app = QApplication.instance() or QApplication([])
+    cr2_path = tmp_path / "first.CR2"
+    cr3_path = tmp_path / "second.cr3"
+    for path in (cr2_path, cr3_path, tmp_path / "notes.txt"):
+        path.touch()
+    window = CropWindow()
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda index: None)
+
+    window.open_folder(tmp_path)
+
+    assert window._all_photos == [cr2_path, cr3_path]
     window.close()
     app.quit()
 
