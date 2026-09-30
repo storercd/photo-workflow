@@ -23,6 +23,7 @@ XMP_TAGS = {
     "CropAngle": "crop_angle",
 }
 PREVIEW_TAGS = ("PreviewImage", "JpgFromRaw")
+INVERSE_ORIENTATIONS = {2: 2, 3: 3, 4: 4, 5: 5, 6: 8, 7: 7, 8: 6}
 
 
 @dataclass(frozen=True)
@@ -44,7 +45,14 @@ def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
         The image dimensions and current Lightroom crop.
     """
     exiftool = require_exiftool()
-    raw_data = _read_json(exiftool, raw_path, "-n", "-ImageWidth", "-ImageHeight", "-Orientation")
+    raw_data = _read_json(
+        exiftool,
+        raw_path,
+        "-n",
+        "-ImageWidth",
+        "-ImageHeight",
+        "-Orientation",
+    )
     image_width = int(raw_data["ImageWidth"])
     image_height = int(raw_data["ImageHeight"])
     orientation = int(raw_data.get("Orientation", 1))
@@ -56,19 +64,21 @@ def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
         else {}
     )
 
-    coordinates = {
-        key: float(crop_data.get(tag, default))
-        for tag, key, default in (
-            ("CropTop", "top", 0),
-            ("CropLeft", "left", 0),
-            ("CropBottom", "bottom", 1),
-            ("CropRight", "right", 1),
-        )
-    }
+    sensor_crop = CropRect(
+        **{
+            key: float(crop_data.get(tag, default))
+            for tag, key, default in (
+                ("CropTop", "top", 0),
+                ("CropLeft", "left", 0),
+                ("CropBottom", "bottom", 1),
+                ("CropRight", "right", 1),
+            )
+        }
+    )
     return PhotoMetadata(
         image_width=image_width,
         image_height=image_height,
-        crop=CropRect(**coordinates),
+        crop=transform_crop(sensor_crop, orientation),
         crop_angle=float(crop_data.get("CropAngle", 0)),
         orientation=orientation,
     )
@@ -106,6 +116,9 @@ def write_photo_crop(
 ) -> None:
     """Write crop metadata without modifying the RAW; preserve existing XMP data."""
     exiftool = require_exiftool()
+    raw_metadata = _read_json(exiftool, raw_path, "-n", "-Orientation")
+    orientation = int(raw_metadata.get("Orientation", 1))
+    sensor_crop = transform_crop(crop, INVERSE_ORIENTATIONS.get(orientation, 1))
     if not xmp_path.exists():
         metadata = _read_json(exiftool, raw_path, "-ImageWidth", "-ImageHeight")
         _create_sidecar(
@@ -113,16 +126,16 @@ def write_photo_crop(
             raw_path,
             int(metadata["ImageWidth"]),
             int(metadata["ImageHeight"]),
-            crop,
+            sensor_crop,
             crop_angle,
         )
         return
 
     values = {
-        "CropTop": f"{crop.top:.10f}",
-        "CropLeft": f"{crop.left:.10f}",
-        "CropBottom": f"{crop.bottom:.10f}",
-        "CropRight": f"{crop.right:.10f}",
+        "CropTop": f"{sensor_crop.top:.10f}",
+        "CropLeft": f"{sensor_crop.left:.10f}",
+        "CropBottom": f"{sensor_crop.bottom:.10f}",
+        "CropRight": f"{sensor_crop.right:.10f}",
         "CropAngle": f"{crop_angle:.10f}",
     }
     subprocess.run(
@@ -136,6 +149,50 @@ def write_photo_crop(
         check=True,
         text=True,
     )
+
+
+def transform_crop(crop: CropRect, orientation: int) -> CropRect:
+    """
+    Transform normalized crop bounds according to an EXIF orientation.
+
+    Args:
+        crop: Crop bounds in the source coordinate space.
+        orientation: EXIF orientation from 1 through 8.
+
+    Returns:
+        The same crop transformed into the oriented coordinate space.
+    """
+    if orientation == 1 or orientation not in range(2, 9):
+        return crop
+
+    corners = (
+        (crop.left, crop.top),
+        (crop.right, crop.top),
+        (crop.left, crop.bottom),
+        (crop.right, crop.bottom),
+    )
+    transformed = [_transform_point(x, y, orientation) for x, y in corners]
+    x_values, y_values = zip(*transformed, strict=True)
+    return CropRect(min(x_values), min(y_values), max(x_values), max(y_values))
+
+
+def _transform_point(x: float, y: float, orientation: int) -> tuple[float, float]:
+    """
+    Map one normalized source point into EXIF-oriented coordinates.
+
+    Returns:
+        The transformed normalized x and y coordinates.
+    """
+    transforms = {
+        2: (1 - x, y),
+        3: (1 - x, 1 - y),
+        4: (x, 1 - y),
+        5: (y, x),
+        6: (1 - y, x),
+        7: (1 - y, 1 - x),
+        8: (y, 1 - x),
+    }
+    return transforms[orientation]
 
 
 def require_exiftool() -> str:

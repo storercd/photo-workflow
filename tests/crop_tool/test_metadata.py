@@ -90,6 +90,70 @@ def test_read_photo_metadata_swaps_dimensions_for_rotated_orientation(
     assert metadata.orientation == 6
 
 
+def test_read_photo_metadata_transforms_portrait_crop_into_display_coordinates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Orientation 8 maps Lightroom sensor-space left/right crop to display top/bottom."""
+    outputs = [
+        json.dumps([{"ImageWidth": 6000, "ImageHeight": 4000, "Orientation": 8}]),
+        json.dumps(
+            [
+                {
+                    "CropTop": 0,
+                    "CropLeft": 0,
+                    "CropBottom": 1,
+                    "CropRight": 0.744022,
+                }
+            ]
+        ),
+    ]
+    monkeypatch.setattr(crop_metadata, "require_exiftool", lambda: "/usr/bin/exiftool")
+    monkeypatch.setattr(
+        crop_metadata.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, outputs.pop(0)),
+    )
+    xmp_path = tmp_path / "photo.xmp"
+    xmp_path.touch()
+
+    metadata = crop_metadata.read_photo_metadata(tmp_path / "photo.cr3", xmp_path)
+
+    assert metadata.crop.left == pytest.approx(0)
+    assert metadata.crop.top == pytest.approx(0.255978)
+    assert metadata.crop.right == pytest.approx(1)
+    assert metadata.crop.bottom == pytest.approx(1)
+
+
+def test_write_photo_crop_transforms_display_crop_back_to_sensor_coordinates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A portrait display crop is written back in Lightroom's sensor coordinate space."""
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        is_orientation_query = "-XMP-crs:CropTop=0.0000000000" not in command
+        output = json.dumps([{"Orientation": 8}]) if is_orientation_query else "updated"
+        return subprocess.CompletedProcess(command, 0, output)
+
+    monkeypatch.setattr(crop_metadata, "require_exiftool", lambda: "/usr/bin/exiftool")
+    monkeypatch.setattr(crop_metadata.subprocess, "run", run)
+    raw_path = tmp_path / "photo.cr3"
+    xmp_path = tmp_path / "photo.xmp"
+    xmp_path.touch()
+    display_crop = CropRect(0, 0.255978, 1, 1)
+
+    crop_metadata.write_photo_crop(raw_path, xmp_path, display_crop)
+
+    write_args = commands[-1]
+    assert "-XMP-crs:CropTop=0.0000000000" in write_args
+    assert "-XMP-crs:CropLeft=0.0000000000" in write_args
+    assert "-XMP-crs:CropBottom=1.0000000000" in write_args
+    assert "-XMP-crs:CropRight=0.7440220000" in write_args
+
+
 def test_write_photo_crop_creates_a_minimal_sidecar(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -129,7 +193,8 @@ def test_write_photo_crop_sets_lightroom_crop_flag_on_existing_sidecar(
 
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(command)
-        return subprocess.CompletedProcess(command, 0, "1 image files updated")
+        output = '[{"Orientation":1}]' if "-j" in command else "1 image files updated"
+        return subprocess.CompletedProcess(command, 0, output)
 
     monkeypatch.setattr(crop_metadata, "require_exiftool", lambda: "/usr/bin/exiftool")
     monkeypatch.setattr(crop_metadata.subprocess, "run", run)
@@ -143,7 +208,7 @@ def test_write_photo_crop_sets_lightroom_crop_flag_on_existing_sidecar(
         CropRect(0.2, 0.1, 0.8, 0.9),
     )
 
-    assert "-XMP-crs:HasCrop=True" in calls[0]
+    assert "-XMP-crs:HasCrop=True" in calls[-1]
 
 
 def test_extract_preview_requests_selected_embedded_tag(
