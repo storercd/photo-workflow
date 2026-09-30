@@ -5,7 +5,7 @@ from __future__ import annotations
 from math import cos, hypot, radians, sin
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPolygonF, QTransform
 from PySide6.QtWidgets import QWidget
 
 from photo_workflow.crop_tool.horizon import HorizonCandidate
@@ -618,6 +618,173 @@ class CropView(QWidget):
         self._crop = crop
         self.update()
         self.crop_changed.emit(crop)
+
+
+class CroppedPreview(QWidget):
+    """Show the crop result and allow panning the crop by dragging the image."""
+
+    crop_changed = Signal(object)
+
+    def __init__(self) -> None:
+        """Initialize the result pane with no image loaded."""
+        super().__init__()
+        self.setMinimumSize(320, 240)
+        self.setStyleSheet("background: #555555;")
+        self._image = QImage()
+        self._crop: CropRect | None = None
+        self._rotation_angle = 0.0
+        self._loading = False
+        self._drag_start: QPointF | None = None
+        self._drag_crop: CropRect | None = None
+        self._drag_target: QRectF | None = None
+        self._rotated_cache = QImage()
+        self._rotated_cache_key: tuple[int, float] | None = None
+        self.setMouseTracking(True)
+
+    def set_image(self, image: QImage) -> None:
+        """Set the source preview used to render the cropped result."""
+        self._image = image
+        self._rotated_cache = QImage()
+        self._rotated_cache_key = None
+        self.update()
+
+    def set_crop(self, crop: CropRect | None) -> None:
+        """Set the normalized crop bounds shown in the result pane."""
+        self._crop = crop
+        self.update()
+
+    def set_rotation(self, angle_degrees: float) -> None:
+        """Set the source rotation used for the cropped result."""
+        self._rotation_angle = angle_degrees
+        self.update()
+
+    def set_loading(self, loading: bool) -> None:
+        """Show an overlay while a new source photo is loading."""
+        self._loading = loading
+        if loading:
+            self._cancel_pan()
+        self.update()
+
+    def mousePressEvent(self, event: object) -> None:
+        """Begin panning when a left drag starts inside the cropped result."""
+        target_rect = self._target_rect()
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and not self._loading
+            and self._crop is not None
+            and target_rect is not None
+            and target_rect.contains(event.position())
+        ):
+            self._drag_start = event.position()
+            self._drag_crop = self._crop
+            self._drag_target = target_rect
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: object) -> None:
+        """Pan the crop in response to dragging the cropped image."""
+        if self._drag_start is None or self._drag_crop is None or self._drag_target is None:
+            if self._target_rect() is not None:
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+            return
+        delta_x = self._drag_start.x() - event.position().x()
+        delta_y = self._drag_start.y() - event.position().y()
+        crop_delta_x = delta_x / self._drag_target.width() * self._drag_crop.width
+        crop_delta_y = delta_y / self._drag_target.height() * self._drag_crop.height
+        left = min(max(self._drag_crop.left + crop_delta_x, 0), 1 - self._drag_crop.width)
+        top = min(max(self._drag_crop.top + crop_delta_y, 0), 1 - self._drag_crop.height)
+        crop = CropRect(
+            left,
+            top,
+            left + self._drag_crop.width,
+            top + self._drag_crop.height,
+        )
+        if crop != self._crop:
+            self._crop = crop
+            self.update()
+            self.crop_changed.emit(crop)
+        event.accept()
+
+    def mouseReleaseEvent(self, event: object) -> None:
+        """Finish panning and restore the hover cursor."""
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_start is not None:
+            self._cancel_pan()
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event: object) -> None:
+        """Clear the pan cursor when the pointer leaves the result pane."""
+        if self._drag_start is None:
+            self.unsetCursor()
+        super().leaveEvent(event)
+
+    def _cancel_pan(self) -> None:
+        self._drag_start = None
+        self._drag_crop = None
+        self._drag_target = None
+        self.unsetCursor()
+
+    def paintEvent(self, event: object) -> None:
+        """Paint the cropped image, fitting it inside the result pane."""
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.fillRect(self.rect(), CANVAS_COLOR)
+        if self._image.isNull():
+            message = "Loading preview..." if self._loading else "Cropped preview"
+            painter.setPen(QColor("#a7acb2"))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, message)
+            return
+        if self._crop is None:
+            painter.setPen(QColor("#a7acb2"))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No crop selected")
+            return
+
+        rotated_image = self._get_rotated_image()
+        source_rect = QRectF(
+            self._crop.left * rotated_image.width(),
+            self._crop.top * rotated_image.height(),
+            self._crop.width * rotated_image.width(),
+            self._crop.height * rotated_image.height(),
+        )
+        target_rect = self._fit_rect(source_rect.width(), source_rect.height())
+        painter.drawImage(target_rect, rotated_image, source_rect)
+        if self._loading:
+            painter.fillRect(target_rect, QColor(0, 0, 0, 100))
+
+    def _get_rotated_image(self) -> QImage:
+        cache_key = (self._image.cacheKey(), self._rotation_angle)
+        if self._rotated_cache_key != cache_key:
+            self._rotated_cache = self._image.transformed(
+                QTransform().rotate(self._rotation_angle),
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self._rotated_cache_key = cache_key
+        return self._rotated_cache
+
+    def _target_rect(self) -> QRectF | None:
+        if self._image.isNull() or self._crop is None:
+            return None
+        rotated_image = self._get_rotated_image()
+        return self._fit_rect(
+            self._crop.width * rotated_image.width(),
+            self._crop.height * rotated_image.height(),
+        )
+
+    def _fit_rect(self, width: float, height: float) -> QRectF:
+        scale = min(self.width() / width, self.height() / height)
+        fitted_width = width * scale
+        fitted_height = height * scale
+        return QRectF(
+            (self.width() - fitted_width) / 2,
+            (self.height() - fitted_height) / 2,
+            fitted_width,
+            fitted_height,
+        )
 
 
 def closest_ratio_for_edge(

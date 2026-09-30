@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication
 
 from photo_workflow.crop_tool.horizon import HorizonCandidate
 from photo_workflow.crop_tool.model import CropRect
-from photo_workflow.crop_tool.view import CropView
+from photo_workflow.crop_tool.view import CroppedPreview, CropView
 
 
 def test_crop_grips_are_reachable_outside_edges_and_corners() -> None:
@@ -181,4 +181,76 @@ def test_clicking_horizon_guide_emits_its_candidate_index() -> None:
     assert selections == [1]
     assert view._drag_kind is None
     view.close()
+    app.quit()
+
+
+def test_cropped_preview_shows_the_selected_source_region() -> None:
+    """The read-only result pane maps the active crop to the source pixels."""
+    app = QApplication.instance() or QApplication([])
+    preview = CroppedPreview()
+    preview.resize(200, 160)
+    image = QImage(QSize(100, 100), QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.blue)
+    for y in range(100):
+        for x in range(50, 100):
+            image.setPixelColor(x, y, Qt.GlobalColor.red)
+    preview.set_image(image)
+    preview.set_crop(CropRect(0.5, 0, 1, 1))
+    rendered = QImage(preview.size(), QImage.Format.Format_RGB32)
+    rendered.fill(Qt.GlobalColor.black)
+
+    preview.render(rendered)
+
+    assert rendered.pixelColor(100, 80).name() == "#ff0000"
+    preview.close()
+    app.quit()
+
+
+def test_dragging_cropped_preview_pans_crop_within_image_bounds() -> None:
+    """Dragging the result pane shifts the crop and clamps it to source bounds."""
+    app = QApplication.instance() or QApplication([])
+    preview = CroppedPreview()
+    preview.resize(200, 160)
+    image = QImage(QSize(100, 100), QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.blue)
+    crop = CropRect(0.2, 0.2, 0.8, 0.8)
+    preview.set_image(image)
+    preview.set_crop(crop)
+    target = preview._target_rect()
+    assert target is not None
+    changes: list[CropRect] = []
+    preview.crop_changed.connect(changes.append)
+    start = target.center().toPoint()
+
+    QTest.mousePress(preview, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(preview, QPoint(start.x() + 20, start.y() + 10))
+    QTest.mouseRelease(
+        preview,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(start.x() + 20, start.y() + 10),
+    )
+
+    assert changes
+    assert preview._crop is not None
+    assert preview._crop.left < crop.left
+    assert preview._crop.top < crop.top
+    assert preview._crop.left >= 0
+    assert preview._crop.top >= 0
+
+    edge_crop = CropRect(0.2, 0.2, 0.8, 0.8)
+    preview.set_crop(edge_crop)
+    target = preview._target_rect()
+    assert target is not None
+    start = target.center().toPoint()
+    QTest.mousePress(preview, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(preview, QPoint(preview.width() + 50, start.y()))
+    QTest.mouseRelease(
+        preview,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(preview.width() + 50, start.y()),
+    )
+    assert preview._crop is not None
+    assert preview._crop.left == pytest.approx(0)
+    assert preview._crop.right == pytest.approx(0.6)
+    preview.close()
     app.quit()

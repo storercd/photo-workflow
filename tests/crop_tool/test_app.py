@@ -16,6 +16,7 @@ from PySide6.QtCore import (
     QUrl,
 )
 from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QImage, QShortcut
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from photo_workflow.crop_tool import app as crop_app
@@ -310,6 +311,47 @@ def test_compact_navigation_and_filename_reveal_controls(
     window.position_label.clicked.emit()
 
     assert calls == [("open", ["-R", str(raw_path.resolve())])]
+    window.close()
+    app.quit()
+
+
+def test_side_by_side_preview_is_optional_and_tracks_editing_state() -> None:
+    """The result pane starts hidden and mirrors the active image, crop, and angle."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+
+    assert not window.side_by_side_button.isChecked()
+    assert window.cropped_preview.parentWidget().isHidden()
+    window.side_by_side_button.click()
+    assert not window.cropped_preview.parentWidget().isHidden()
+
+    image = QImage(QSize(640, 480), QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.green)
+    crop = CropRect(0.2, 0.1, 0.8, 0.9)
+    window._set_preview_image(image, 640, 480)
+    window._current_path = Path("preview.cr3")
+    window._current_metadata = PhotoMetadata(640, 480, CropRect(0, 0, 1, 1))
+    window.view._set_edited_crop(crop)
+    window._set_preview_rotation(6.5)
+
+    target = window.cropped_preview._target_rect()
+    assert target is not None
+    start = target.center().toPoint()
+    QTest.mousePress(window.cropped_preview, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(window.cropped_preview, QPoint(start.x() + 20, start.y()))
+    QTest.mouseRelease(
+        window.cropped_preview,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(start.x() + 20, start.y()),
+    )
+
+    assert window.view._image.cacheKey() == window.cropped_preview._image.cacheKey()
+    assert window.view._crop == window.cropped_preview._crop
+    assert window.view._crop is not None and window.view._crop.left < crop.left
+    assert window.view._rotation_angle == window.cropped_preview._rotation_angle == 6.5
+
+    window._save_timer.stop()
+    window._dirty = False
     window.close()
     app.quit()
 

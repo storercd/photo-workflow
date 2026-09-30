@@ -108,7 +108,7 @@ The current prototype applies EXIF orientation to embedded previews and uses dis
 
 ## Follow-Up TODOs
 
-- [ ] Add an optional side-by-side view with the full image and crop boundaries on one side and the cropped preview on the other.
+- [x] Add an optional side-by-side view with the full image and crop boundaries on one side and the cropped preview on the other. It is hidden by default and can be enabled from the toolbar for larger screens.
 - [ ] Crop boundaries are allowed outside the actual image border; this should be adjusted to fall inside the bounds?  Except, sometimes it's useful to drag/pan outside knowing that it won't work long-term, but we can't save it that way.  Not sure how to handle that.
 - [ ] Experiment with a smoother Lightroom Classic refresh workflow so users do not need to manually force metadata rereading after an XMP update.
 - [ ] Measure navigation latency on a representative larger folder and tune preview extraction, prefetch, and cache limits based on the results.

@@ -72,7 +72,7 @@ from photo_workflow.crop_tool.model import (
     fit_crop_to_ratio,
     rotated_image_size,
 )
-from photo_workflow.crop_tool.view import CropView
+from photo_workflow.crop_tool.view import CroppedPreview, CropView
 
 RAW_SUFFIXES = {".cr3"}
 DropTarget = tuple[Path, Path | None]
@@ -456,6 +456,13 @@ class CropWindow(QMainWindow):
             self.show_horizon_button,
         ):
             angle_layout.addWidget(control)
+        self.side_by_side_button = QToolButton()
+        self.side_by_side_button.setIcon(qta.icon("fa5s.columns", color="#f4f2ec"))
+        self.side_by_side_button.setToolTip("Show side-by-side crop preview")
+        self.side_by_side_button.setAccessibleName("Toggle side-by-side crop preview")
+        self.side_by_side_button.setCheckable(True)
+        self.side_by_side_button.setFixedSize(28, 28)
+        self.side_by_side_button.setAutoRaise(True)
         self.lock_checkbox = QToolButton()
         self.lock_checkbox.setCheckable(True)
         self.lock_checkbox.setToolTip("Lock crop ratio (L)")
@@ -483,11 +490,25 @@ class CropWindow(QMainWindow):
             toolbar.addWidget(button)
         toolbar.addWidget(self.position_label, 1)
         toolbar.addWidget(self.angle_group)
+        toolbar.addWidget(self.side_by_side_button)
         toolbar.addWidget(self.aspect_group)
         toolbar.addWidget(self.save_label)
         self.view = CropView()
+        self.cropped_preview = CroppedPreview()
+        result_panel = QWidget()
+        result_layout = QVBoxLayout(result_panel)
+        result_layout.setContentsMargins(0, 0, 0, 0)
+        result_layout.addWidget(QLabel("Cropped result"))
+        result_layout.addWidget(self.cropped_preview, 1)
+        self.preview_container = QWidget()
+        preview_layout = QHBoxLayout(self.preview_container)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(8)
+        preview_layout.addWidget(self.view, 1)
+        preview_layout.addWidget(result_panel, 1)
+        result_panel.setVisible(False)
         layout.addLayout(toolbar)
-        layout.addWidget(self.view, 1)
+        layout.addWidget(self.preview_container, 1)
         self.setCentralWidget(container)
         container.path_dropped.connect(self._open_dropped_path)
         self._populate_ratios()
@@ -499,7 +520,9 @@ class CropWindow(QMainWindow):
         self.rotation_reset.clicked.connect(lambda: self.rotation_slider.setValue(0))
         self.auto_level_button.clicked.connect(self._auto_level_clicked)
         self.show_horizon_button.clicked.connect(self._toggle_horizon_visibility)
+        self.side_by_side_button.toggled.connect(self._set_side_by_side_visible)
         self.view.horizon_candidate_selected.connect(self._horizon_guide_selected)
+        self.cropped_preview.crop_changed.connect(self._crop_edited)
         self.lock_checkbox.toggled.connect(self._update_crop_mode)
         self.snap_checkbox.toggled.connect(self._update_crop_mode)
         self.lock_checkbox.toggled.connect(self._update_lock_icon)
@@ -508,6 +531,38 @@ class CropWindow(QMainWindow):
         self.view.crop_changed.connect(self._crop_edited)
         self._update_lock_icon(self.lock_checkbox.isChecked())
         self._update_crop_mode()
+
+    def _set_side_by_side_visible(self, visible: bool) -> None:
+        """Show or hide the read-only crop result pane."""
+        result_panel = self.cropped_preview.parentWidget()
+        result_panel.setVisible(visible)
+        description = "Hide" if visible else "Show"
+        self.side_by_side_button.setToolTip(f"{description} side-by-side crop preview")
+
+    def _set_preview_image(
+        self,
+        image: QImage,
+        image_width: int,
+        image_height: int,
+    ) -> None:
+        """Update the editing and cropped-result panes with one source preview."""
+        self.view.set_image(image, image_width, image_height)
+        self.cropped_preview.set_image(image)
+
+    def _set_preview_crop(self, crop: CropRect | None) -> None:
+        """Update crop geometry in both image panes."""
+        self.view.set_crop(crop)
+        self.cropped_preview.set_crop(crop)
+
+    def _set_preview_rotation(self, angle: float) -> None:
+        """Update rotation in both image panes."""
+        self.view.set_rotation(angle)
+        self.cropped_preview.set_rotation(angle)
+
+    def _set_preview_loading(self, loading: bool) -> None:
+        """Set the loading state in both image panes."""
+        self.view.set_loading(loading)
+        self.cropped_preview.set_loading(loading)
 
     def _populate_ratios(self) -> None:
         """Fill the aspect-ratio selector from settings."""
@@ -561,9 +616,9 @@ class CropWindow(QMainWindow):
         self._current_path = None
         if not self._photos:
             self.position_label.setText("No CR3 files in folder")
-            self.view.set_loading(False)
-            self.view.set_image(QImage(), 1, 1)
-            self.view.set_crop(None)
+            self._set_preview_loading(False)
+            self._set_preview_image(QImage(), 1, 1)
+            self._set_preview_crop(None)
             return
         self._show_photo(find_photo_index(self._photos, selected_photo))
 
@@ -588,7 +643,7 @@ class CropWindow(QMainWindow):
         self._current_crop = None
         self._current_metadata = self._metadata_cache.get(self._current_path)
         self._current_rotation = 0.0
-        self.view.set_rotation(0)
+        self._set_preview_rotation(0)
         self.rotation_slider.blockSignals(True)
         self.rotation_slider.setValue(0)
         self.rotation_value.setText("0.0°")
@@ -603,8 +658,8 @@ class CropWindow(QMainWindow):
         self.position_label.setText(
             f"{index + 1} / {len(self._photos)}    {self._current_path.name}"
         )
-        self.view.set_loading(True)
-        self.view.set_crop(None)
+        self._set_preview_loading(True)
+        self._set_preview_crop(None)
         cached_image = self._preview_cache.get(self._current_path)
         if cached_image is not None:
             self._show_image(cached_image)
@@ -685,18 +740,18 @@ class CropWindow(QMainWindow):
         self.rotation_slider.setEnabled(True)
         self.rotation_reset.setEnabled(True)
         self.rotation_slider.blockSignals(False)
-        self.view.set_rotation(self._current_rotation)
+        self._set_preview_rotation(self._current_rotation)
         display_width, display_height = displayed_image_size(metadata, self._current_rotation)
         image = self._preview_cache.get(path)
         if image is not None:
-            self.view.set_image(image, display_width, display_height)
-            self.view.set_crop(metadata.crop)
-            self.view.set_loading(False)
+            self._set_preview_image(image, display_width, display_height)
+            self._set_preview_crop(metadata.crop)
+            self._set_preview_loading(False)
             self.auto_level_button.setEnabled(True)
             self.show_horizon_button.setEnabled(True)
         else:
-            self.view.set_crop(None)
-            self.view.set_loading(True)
+            self._set_preview_crop(None)
+            self._set_preview_loading(True)
         self._select_crop_ratio(metadata.crop)
         self._update_crop_mode()
 
@@ -713,8 +768,8 @@ class CropWindow(QMainWindow):
             self.auto_level_button.setEnabled(True)
             self.show_horizon_button.setEnabled(True)
             if self._current_metadata is not None:
-                self.view.set_crop(self._current_metadata.crop)
-                self.view.set_loading(False)
+                self._set_preview_crop(self._current_metadata.crop)
+                self._set_preview_loading(False)
 
     def _show_image(self, image: QImage) -> None:
         """Set the visible preview using current source dimensions when known."""
@@ -722,14 +777,14 @@ class CropWindow(QMainWindow):
             width, height = displayed_image_size(self._current_metadata, self._current_rotation)
         else:
             width, height = image.width(), image.height()
-        self.view.set_image(image, width, height)
+        self._set_preview_image(image, width, height)
 
     def _load_error(self, path_text: str, message: str) -> None:
         """Show a load failure for the active photo without blocking navigation."""
         path = Path(path_text)
         self._load_failures.add(path)
         if path == self._current_path:
-            self.view.set_loading(False)
+            self._set_preview_loading(False)
             self.save_label.setText(f"Load error: {message}")
 
     def _load_finished(self, path_text: str) -> None:
@@ -743,6 +798,7 @@ class CropWindow(QMainWindow):
         if self._current_path is None or self._current_metadata is None:
             return
         self._current_crop = crop
+        self._set_preview_crop(crop)
         self._mark_dirty()
         self._select_crop_ratio(crop)
 
@@ -859,12 +915,12 @@ class CropWindow(QMainWindow):
         if self._current_path is None or self._current_metadata is None:
             return
         self._current_rotation = angle
-        self.view.set_rotation(angle)
+        self._set_preview_rotation(angle)
         if self._current_metadata is not None:
             image = self._preview_cache.get(self._current_path)
             if image is not None:
                 width, height = displayed_image_size(self._current_metadata, angle)
-                self.view.set_image(image, width, height)
+                self._set_preview_image(image, width, height)
         self._mark_dirty()
 
     def _mark_dirty(self) -> None:
@@ -973,7 +1029,7 @@ class CropWindow(QMainWindow):
                 ratio,
             )
             self._current_crop = crop
-            self.view.set_crop(crop)
+            self._set_preview_crop(crop)
             if crop != self._current_metadata.crop:
                 self._crop_edited(crop)
         self._update_crop_mode()
