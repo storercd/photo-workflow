@@ -1241,12 +1241,12 @@ def load_crop_settings(
         ValueError: If the snap tolerance or configured ratios are invalid.
     """
     if not config_path.is_file():
-        return DEFAULT_ASPECT_RATIOS, 0.025
+        return DEFAULT_ASPECT_RATIOS, 0.05
     with config_path.open("rb") as config_file:
         settings = tomllib.load(config_file).get("crop_tool", {})
     raw_ratios = settings.get("aspect_ratios")
     ratios = parse_aspect_ratios(raw_ratios) if raw_ratios is not None else DEFAULT_ASPECT_RATIOS
-    tolerance = float(settings.get("snap_tolerance", 0.025))
+    tolerance = float(settings.get("snap_tolerance", 0.05))
     if tolerance < 0 or tolerance > 1:
         raise ValueError("crop_tool.snap_tolerance must be between 0 and 1")
     return ratios, tolerance

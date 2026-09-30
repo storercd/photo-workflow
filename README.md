@@ -141,7 +141,7 @@ Configure ratios and the relative snap tolerance in `photo-workflow.toml`:
 ```toml
 [crop_tool]
 aspect_ratios = ["1:1", "4:5", "5:4", "3:2", "2:3", "4:3", "3:4", "16:9"]
-snap_tolerance = 0.025
+snap_tolerance = 0.05
 ```
 
 See [docs/crop-tool-mvp.md](docs/crop-tool-mvp.md) for the MVP scope and

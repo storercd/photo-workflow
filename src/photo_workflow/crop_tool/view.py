@@ -13,6 +13,7 @@ from photo_workflow.crop_tool.model import (
     AspectRatio,
     CropRect,
     closest_aspect_ratio,
+    crop_aspect_ratio,
     resize_from_anchor,
 )
 
@@ -20,6 +21,7 @@ EDGE_HIT_PIXELS = 24
 HORIZON_HIT_PIXELS = 10
 MIN_CROP_PIXELS = 2
 CANVAS_COLOR = QColor("#555555")
+SNAPPED_CROP_COLOR = QColor("#55e39f")
 
 
 class CropView(QWidget):
@@ -43,7 +45,8 @@ class CropView(QWidget):
         self._rotation_angle = 0.0
         self._locked_ratio: AspectRatio | None = None
         self._snap_ratios: tuple[AspectRatio, ...] = ()
-        self._snap_tolerance = 0.025
+        self._snap_tolerance = 0.05
+        self._snap_ratio: AspectRatio | None = None
         self._drag_kind: str | None = None
         self._drag_anchor = QPointF()
         self._drag_origin = QPointF()
@@ -74,6 +77,10 @@ class CropView(QWidget):
 
     def set_crop(self, crop: CropRect | None) -> None:
         """Set the active normalized crop without emitting an edit."""
+        if crop is None or self._snap_ratio is None or not self._matches_snap_ratio(
+            crop, self._snap_ratio
+        ):
+            self._snap_ratio = None
         self._crop = crop
         self.update()
 
@@ -103,6 +110,9 @@ class CropView(QWidget):
         self._locked_ratio = locked_ratio
         self._snap_ratios = snap_ratios
         self._snap_tolerance = snap_tolerance
+        if locked_ratio is not None or not snap_ratios:
+            self._snap_ratio = None
+            self.update()
 
     def paintEvent(self, event: object) -> None:
         """Paint the preview, shaded crop mask, and crop guides."""
@@ -158,8 +168,11 @@ class CropView(QWidget):
         cutout.addRect(crop_rect)
         painter.fillPath(mask.subtracted(cutout), QColor(0, 0, 0, 145))
         self._draw_horizon_candidates(painter, image_rect)
-        painter.setPen(QPen(QColor("#f4f2ec"), 1.5))
+        frame_color = SNAPPED_CROP_COLOR if self._snap_ratio is not None else QColor("#f4f2ec")
+        painter.setPen(QPen(frame_color, 2 if self._snap_ratio is not None else 1.5))
         painter.drawRect(crop_rect)
+        if self._snap_ratio is not None:
+            self._draw_snap_label(painter, crop_rect, self._snap_ratio)
         painter.setPen(QPen(QColor(244, 242, 236, 110), 1))
         painter.drawLine(
             crop_rect.left() + crop_rect.width() / 3,
@@ -616,8 +629,45 @@ class CropView(QWidget):
         if crop == self._crop:
             return
         self._crop = crop
+        self._snap_ratio = self._matching_snap_ratio(crop)
         self.update()
         self.crop_changed.emit(crop)
+
+    def _matching_snap_ratio(self, crop: CropRect) -> AspectRatio | None:
+        if self._locked_ratio is not None or not self._snap_ratios:
+            return None
+        return closest_aspect_ratio(
+            crop.width,
+            crop.height,
+            self._image_width,
+            self._image_height,
+            self._snap_ratios,
+            tolerance=self._snap_tolerance,
+        )
+
+    def _matches_snap_ratio(self, crop: CropRect, ratio: AspectRatio) -> bool:
+        actual_ratio = crop_aspect_ratio(crop, self._image_width, self._image_height)
+        return abs(actual_ratio / ratio.value - 1) <= 1e-6
+
+    def _draw_snap_label(
+        self,
+        painter: QPainter,
+        crop_rect: QRectF,
+        ratio: AspectRatio,
+    ) -> None:
+        label = ratio.label or f"{ratio.width}:{ratio.height}"
+        font_metrics = painter.fontMetrics()
+        label_rect = QRectF(
+            crop_rect.left(),
+            max(2, crop_rect.top() - font_metrics.height() - 6),
+            font_metrics.horizontalAdvance(label) + 12,
+            font_metrics.height() + 4,
+        )
+        label_rect.moveLeft(min(label_rect.left(), self.width() - label_rect.width() - 2))
+        painter.fillRect(label_rect, QColor(20, 45, 35, 225))
+        painter.setPen(QPen(SNAPPED_CROP_COLOR, 1))
+        painter.drawRect(label_rect)
+        painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, label)
 
 
 class CroppedPreview(QWidget):

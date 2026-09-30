@@ -410,6 +410,14 @@ def test_load_crop_settings_reads_custom_ratios_and_tolerance(tmp_path: Path) ->
     assert tolerance == pytest.approx(0.04)
 
 
+def test_load_crop_settings_defaults_to_wider_snap_range(tmp_path: Path) -> None:
+    """The default relative snap tolerance is five percent when no config exists."""
+    ratios, tolerance = load_crop_settings(tmp_path / "missing.toml")
+
+    assert ratios
+    assert tolerance == pytest.approx(0.05)
+
+
 def test_load_crop_settings_rejects_out_of_range_tolerance(tmp_path: Path) -> None:
     """Reject snap tolerances outside the supported normalized range."""
     config_path = tmp_path / "photo-workflow.toml"

@@ -7,7 +7,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from photo_workflow.crop_tool.horizon import HorizonCandidate
-from photo_workflow.crop_tool.model import CropRect
+from photo_workflow.crop_tool.model import AspectRatio, CropRect, crop_aspect_ratio
 from photo_workflow.crop_tool.view import CroppedPreview, CropView
 
 
@@ -253,4 +253,51 @@ def test_dragging_cropped_preview_pans_crop_within_image_bounds() -> None:
     assert preview._crop.left == pytest.approx(0)
     assert preview._crop.right == pytest.approx(0.6)
     preview.close()
+    app.quit()
+
+
+def test_freeform_snap_uses_wider_range_and_marks_snapped_crop() -> None:
+    """A near 4:5 freeform crop snaps within 5% and displays its ratio in green."""
+    app = QApplication.instance() or QApplication([])
+    view = CropView()
+    view.resize(500, 400)
+    image = QImage(QSize(400, 400), QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.white)
+    view.set_image(image, 1000, 1000)
+    ratio = AspectRatio(4, 5, "4:5")
+    view.set_crop_mode(
+        locked_ratio=None,
+        snap_ratios=(ratio,),
+        snap_tolerance=0.05,
+    )
+
+    view._resize_from_anchor(QPointF(0.1, 0.1), QPointF(0.516, 0.6))
+
+    assert view._crop is not None
+    assert crop_aspect_ratio(view._crop, 1000, 1000) == pytest.approx(4 / 5)
+    assert view._snap_ratio == ratio
+    rendered = QImage(view.size(), QImage.Format.Format_RGB32)
+    rendered.fill(Qt.GlobalColor.black)
+    view.render(rendered)
+    green_pixels = sum(
+        rendered.pixelColor(x, y).name() == "#55e39f"
+        for y in range(rendered.height())
+        for x in range(rendered.width())
+    )
+    assert green_pixels > 0
+
+    view.set_crop(None)
+    view.set_crop_mode(
+        locked_ratio=None,
+        snap_ratios=(ratio,),
+        snap_tolerance=0.05,
+    )
+    view._resize_from_anchor(QPointF(0.1, 0.1), QPointF(0.525, 0.6))
+    assert view._crop is not None
+    assert crop_aspect_ratio(view._crop, 1000, 1000) == pytest.approx(0.85)
+    assert view._snap_ratio is None
+
+    view.set_crop_mode(locked_ratio=None, snap_ratios=(), snap_tolerance=0.05)
+    assert view._snap_ratio is None
+    view.close()
     app.quit()

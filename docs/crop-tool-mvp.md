@@ -38,6 +38,7 @@ The first release should prove two things: the folder can be navigated without w
   - **Freeform:** Resize without an aspect constraint; snap to a configured ratio when close enough.
   - **Locked ratio:** Resize while maintaining the selected ratio.
   - **Snap toggle:** Enable or disable snapping independently from the selected resize mode.
+- Freeform snapping uses a 5% default relative aspect-ratio tolerance; override `snap_tolerance` in `photo-workflow.toml` to tune how early it engages.
 - Provide a small, editable ratio list in a simple settings file. Start with `1:1`, `4:5`, `5:4`, `3:2`, `2:3`, `4:3`, `3:4`, and `16:9`.
 - Make the current mode and ratio visible. Choose and document a compact default keyboard map before implementation; it must include previous/next, freeform/lock toggle, snap toggle, and ratio selection.
 - Initial keyboard map: `Left`/`Right` previous/next, `L` toggle ratio lock, `S` toggle snapping, `1`-`8` choose the corresponding configured ratio, `Command+O` open folder, and `Command+S` save now.
@@ -108,7 +109,6 @@ The current prototype applies EXIF orientation to embedded previews and uses dis
 
 ## Follow-Up TODOs
 
-- [x] Add an optional side-by-side view with the full image and crop boundaries on one side and the cropped preview on the other. It is hidden by default and can be enabled from the toolbar for larger screens.
 - [ ] Crop boundaries are allowed outside the actual image border; this should be adjusted to fall inside the bounds?  Except, sometimes it's useful to drag/pan outside knowing that it won't work long-term, but we can't save it that way.  Not sure how to handle that.
 - [ ] Experiment with a smoother Lightroom Classic refresh workflow so users do not need to manually force metadata rereading after an XMP update.
 - [ ] Measure navigation latency on a representative larger folder and tune preview extraction, prefetch, and cache limits based on the results.
