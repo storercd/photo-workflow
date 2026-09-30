@@ -10,7 +10,11 @@ import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from pathlib import Path
 
-from photo_workflow.crop_tool.model import CropRect
+from photo_workflow.crop_tool.model import (
+    CropRect,
+    display_crop_to_lightroom,
+    lightroom_crop_to_display,
+)
 
 XMP_NS = "adobe:ns:meta/"
 RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -55,6 +59,8 @@ def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
     )
     image_width = int(raw_data["ImageWidth"])
     image_height = int(raw_data["ImageHeight"])
+    sensor_width = image_width
+    sensor_height = image_height
     orientation = int(raw_data.get("Orientation", 1))
     if orientation in {5, 6, 7, 8}:
         image_width, image_height = image_height, image_width
@@ -75,11 +81,19 @@ def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
             )
         }
     )
+    crop_angle = float(crop_data.get("CropAngle", 0))
+    display_crop = lightroom_crop_to_display(
+        sensor_crop,
+        sensor_width,
+        sensor_height,
+        crop_angle,
+        orientation,
+    )
     return PhotoMetadata(
         image_width=image_width,
         image_height=image_height,
-        crop=transform_crop(sensor_crop, orientation),
-        crop_angle=float(crop_data.get("CropAngle", 0)),
+        crop=display_crop,
+        crop_angle=crop_angle,
         orientation=orientation,
     )
 
@@ -116,9 +130,20 @@ def write_photo_crop(
 ) -> None:
     """Write crop metadata without modifying the RAW; preserve existing XMP data."""
     exiftool = require_exiftool()
-    raw_metadata = _read_json(exiftool, raw_path, "-n", "-Orientation")
+    raw_metadata = _read_json(
+        exiftool,
+        raw_path,
+        "-n",
+        "-ImageWidth",
+        "-ImageHeight",
+        "-Orientation",
+    )
     orientation = int(raw_metadata.get("Orientation", 1))
-    sensor_crop = transform_crop(crop, INVERSE_ORIENTATIONS.get(orientation, 1))
+    image_width = int(raw_metadata["ImageWidth"])
+    image_height = int(raw_metadata["ImageHeight"])
+    sensor_crop = display_crop_to_lightroom(
+        crop, image_width, image_height, crop_angle, orientation
+    )
     if not xmp_path.exists():
         metadata = _read_json(exiftool, raw_path, "-ImageWidth", "-ImageHeight")
         _create_sidecar(

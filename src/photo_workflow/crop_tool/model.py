@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
-from math import isfinite
+from math import cos, isfinite, radians, sin
 from typing import Iterable
 
 
@@ -75,6 +75,226 @@ DEFAULT_ASPECT_RATIOS = (
     AspectRatio(3, 4, "3:4"),
     AspectRatio(16, 9, "16:9"),
 )
+
+
+def rotated_image_size(
+    image_width: float,
+    image_height: float,
+    angle_degrees: float,
+) -> tuple[float, float]:
+    """Return the axis-aligned pixel bounds after rotating an image around center."""
+    angle = radians(angle_degrees)
+    cosine = abs(cos(angle))
+    sine = abs(sin(angle))
+    return (
+        image_width * cosine + image_height * sine,
+        image_width * sine + image_height * cosine,
+    )
+
+
+def lightroom_crop_to_display(
+    crop: CropRect,
+    image_width: int,
+    image_height: int,
+    crop_angle: float,
+    orientation: int,
+) -> CropRect:
+    """
+    Map Lightroom crop anchors to the upright crop plane shown by the editor.
+
+    Returns:
+        The crop bounds normalized to the rotated display plane.
+    """
+    oriented_width, oriented_height = _oriented_size(
+        image_width, image_height, orientation
+    )
+    display_angle = -crop_angle
+    rotated_width, rotated_height = rotated_image_size(
+        oriented_width, oriented_height, display_angle
+    )
+    center_x = (crop.left + crop.right) * image_width / 2
+    center_y = (crop.top + crop.bottom) * image_height / 2
+    upper_left = _rotate_point(
+        crop.left * image_width,
+        crop.top * image_height,
+        center_x,
+        center_y,
+        display_angle,
+    )
+    lower_right = _rotate_point(
+        crop.right * image_width,
+        crop.bottom * image_height,
+        center_x,
+        center_y,
+        display_angle,
+    )
+    leveled_corners = (
+        upper_left,
+        (lower_right[0], upper_left[1]),
+        lower_right,
+        (upper_left[0], lower_right[1]),
+    )
+    crop_corners = _rotate_points(
+        list(leveled_corners), center_x, center_y, crop_angle
+    )
+    visual_corners = [
+        _transform_orientation_point(
+            x, y, image_width, image_height, orientation
+        )
+        for x, y in crop_corners
+    ]
+    display_corners = _rotate_points(
+        visual_corners, oriented_width / 2, oriented_height / 2, display_angle
+    )
+    normalized = [
+        (
+            (x - oriented_width / 2 + rotated_width / 2) / rotated_width,
+            (y - oriented_height / 2 + rotated_height / 2) / rotated_height,
+        )
+        for x, y in display_corners
+    ]
+    return _bounds_rect(normalized)
+
+
+def display_crop_to_lightroom(
+    crop: CropRect,
+    image_width: int,
+    image_height: int,
+    crop_angle: float,
+    orientation: int,
+) -> CropRect:
+    """
+    Map an upright editor crop back to Lightroom's unrotated crop anchors.
+
+    Returns:
+        The crop bounds normalized to the stored sensor pixel array.
+    """
+    oriented_width, oriented_height = _oriented_size(
+        image_width, image_height, orientation
+    )
+    display_angle = -crop_angle
+    rotated_width, rotated_height = rotated_image_size(
+        oriented_width, oriented_height, display_angle
+    )
+    display_corners = _rect_corners(crop, rotated_width, rotated_height)
+    visual_corners = [
+        _rotate_point(
+            x - rotated_width / 2 + oriented_width / 2,
+            y - rotated_height / 2 + oriented_height / 2,
+            oriented_width / 2,
+            oriented_height / 2,
+            -display_angle,
+        )
+        for x, y in display_corners
+    ]
+    sensor_corners = [
+        _transform_orientation_point(
+            x, y, oriented_width, oriented_height, INVERSE_ORIENTATIONS[orientation]
+        )
+        for x, y in visual_corners
+    ]
+    center_x = sum(x for x, _ in sensor_corners) / len(sensor_corners)
+    center_y = sum(y for _, y in sensor_corners) / len(sensor_corners)
+    leveled_corners = [
+        _rotate_point(x, y, center_x, center_y, -crop_angle)
+        for x, y in sensor_corners
+    ]
+    left = min(x for x, _ in leveled_corners)
+    top = min(y for _, y in leveled_corners)
+    right = max(x for x, _ in leveled_corners)
+    bottom = max(y for _, y in leveled_corners)
+    center_x = (left + right) / 2
+    center_y = (top + bottom) / 2
+    upper_left = _rotate_point(left, top, center_x, center_y, crop_angle)
+    lower_right = _rotate_point(right, bottom, center_x, center_y, crop_angle)
+    return CropRect(
+        min(max(upper_left[0] / image_width, 0), 1),
+        min(max(upper_left[1] / image_height, 0), 1),
+        min(max(lower_right[0] / image_width, 0), 1),
+        min(max(lower_right[1] / image_height, 0), 1),
+    )
+
+
+INVERSE_ORIENTATIONS = {1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 8, 7: 7, 8: 6}
+
+
+def _oriented_size(image_width: int, image_height: int, orientation: int) -> tuple[int, int]:
+    if orientation not in range(1, 9):
+        orientation = 1
+    return (
+        (image_height, image_width)
+        if orientation in {5, 6, 7, 8}
+        else (image_width, image_height)
+    )
+
+
+def _rect_corners(
+    crop: CropRect, image_width: float, image_height: float
+) -> list[tuple[float, float]]:
+    return [
+        (crop.left * image_width, crop.top * image_height),
+        (crop.right * image_width, crop.top * image_height),
+        (crop.right * image_width, crop.bottom * image_height),
+        (crop.left * image_width, crop.bottom * image_height),
+    ]
+
+
+def _rotate_points(
+    points: list[tuple[float, float]],
+    center_x: float,
+    center_y: float,
+    angle_degrees: float,
+) -> list[tuple[float, float]]:
+    return [
+        _rotate_point(x, y, center_x, center_y, angle_degrees)
+        for x, y in points
+    ]
+
+
+def _rotate_point(
+    x: float,
+    y: float,
+    center_x: float,
+    center_y: float,
+    angle_degrees: float,
+) -> tuple[float, float]:
+    angle = radians(angle_degrees)
+    offset_x = x - center_x
+    offset_y = y - center_y
+    return (
+        center_x + offset_x * cos(angle) - offset_y * sin(angle),
+        center_y + offset_x * sin(angle) + offset_y * cos(angle),
+    )
+
+
+def _transform_orientation_point(
+    x: float,
+    y: float,
+    image_width: float,
+    image_height: float,
+    orientation: int,
+) -> tuple[float, float]:
+    transforms = {
+        1: (x, y),
+        2: (image_width - x, y),
+        3: (image_width - x, image_height - y),
+        4: (x, image_height - y),
+        5: (y, x),
+        6: (image_height - y, x),
+        7: (image_height - y, image_width - x),
+        8: (y, image_width - x),
+    }
+    return transforms.get(orientation, (x, y))
+
+
+def _bounds_rect(points: list[tuple[float, float]]) -> CropRect:
+    x_values, y_values = zip(*points, strict=True)
+    return CropRect(
+        min(max(min(x_values), 0), 1),
+        min(max(min(y_values), 0), 1),
+        min(max(max(x_values), 0), 1),
+        min(max(max(y_values), 0), 1),
+    )
 
 
 def aspect_ratio_for_crop(

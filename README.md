@@ -131,8 +131,10 @@ The app currently supports Canon `.CR3` files and uses their embedded JPEG
 previews, loading a small preview before the larger `JpgFromRaw` preview.
 Previous/next are `Left`/`Right`; `L` toggles ratio lock, `S` toggles snapping,
 `1`-`8` select a configured ratio, `Command+O` opens a folder, and `Command+S`
-saves the current crop. Crop changes are written to the matching XMP sidecar;
-RAW files are not modified. The app requires ExifTool on `PATH`.
+saves the current crop. The angle control rotates the photo beneath the upright
+crop frame and saves Lightroom-compatible `CropAngle` metadata. Crop and rotation
+changes are written to the matching XMP sidecar; RAW files are not modified. The
+app requires ExifTool on `PATH`.
 
 Configure ratios and the relative snap tolerance in `photo-workflow.toml`:
 

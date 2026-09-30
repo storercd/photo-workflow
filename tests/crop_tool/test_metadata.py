@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from photo_workflow.crop_tool import metadata as crop_metadata
-from photo_workflow.crop_tool.model import CropRect
+from photo_workflow.crop_tool.model import CropRect, lightroom_crop_to_display
 
 
 def test_read_photo_metadata_loads_crop_and_angle(
@@ -21,7 +21,6 @@ def test_read_photo_metadata_loads_crop_and_angle(
         json.dumps(
             [
                 {
-                    "CropTop": 0,
                     "CropLeft": 0.233333,
                     "CropBottom": 1,
                     "CropRight": 0.766667,
@@ -43,8 +42,17 @@ def test_read_photo_metadata_loads_crop_and_angle(
 
     assert metadata.image_width == 6000
     assert metadata.image_height == 4000
-    assert metadata.crop.left == pytest.approx(0.233333)
-    assert metadata.crop.right == pytest.approx(0.766667)
+    expected_crop = lightroom_crop_to_display(
+        CropRect(0.233333, 0, 0.766667, 1),
+        6000,
+        4000,
+        2.25,
+        1,
+    )
+    assert metadata.crop.left == pytest.approx(expected_crop.left)
+    assert metadata.crop.top == pytest.approx(expected_crop.top)
+    assert metadata.crop.right == pytest.approx(expected_crop.right)
+    assert metadata.crop.bottom == pytest.approx(expected_crop.bottom)
     assert metadata.crop_angle == pytest.approx(2.25)
 
 
@@ -125,6 +133,42 @@ def test_read_photo_metadata_transforms_portrait_crop_into_display_coordinates(
     assert metadata.crop.bottom == pytest.approx(1)
 
 
+def test_read_photo_metadata_applies_lightroom_crop_angle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Read Lightroom's negative XMP angle into the positive UI crop plane."""
+    sensor_crop = CropRect(0.012828, 0.233885, 0.987172, 0.766115)
+    outputs = [
+        json.dumps([{"ImageWidth": 6000, "ImageHeight": 4000, "Orientation": 1}]),
+        json.dumps(
+            [
+                {
+                    "CropTop": sensor_crop.top,
+                    "CropLeft": sensor_crop.left,
+                    "CropBottom": sensor_crop.bottom,
+                    "CropRight": sensor_crop.right,
+                    "CropAngle": -10,
+                }
+            ]
+        ),
+    ]
+    monkeypatch.setattr(crop_metadata, "require_exiftool", lambda: "/usr/bin/exiftool")
+    monkeypatch.setattr(
+        crop_metadata.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, outputs.pop(0)),
+    )
+    xmp_path = tmp_path / "photo.xmp"
+    xmp_path.touch()
+
+    metadata = crop_metadata.read_photo_metadata(tmp_path / "photo.cr3", xmp_path)
+    expected = lightroom_crop_to_display(sensor_crop, 6000, 4000, -10, 1)
+
+    assert metadata.crop == expected
+    assert metadata.crop_angle == pytest.approx(-10)
+
+
 def test_write_photo_crop_transforms_display_crop_back_to_sensor_coordinates(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -135,7 +179,13 @@ def test_write_photo_crop_transforms_display_crop_back_to_sensor_coordinates(
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         commands.append(command)
         is_orientation_query = "-XMP-crs:CropTop=0.0000000000" not in command
-        output = json.dumps([{"Orientation": 8}]) if is_orientation_query else "updated"
+        output = (
+            json.dumps(
+                [{"ImageWidth": 6000, "ImageHeight": 4000, "Orientation": 8}]
+            )
+            if is_orientation_query
+            else "updated"
+        )
         return subprocess.CompletedProcess(command, 0, output)
 
     monkeypatch.setattr(crop_metadata, "require_exiftool", lambda: "/usr/bin/exiftool")
@@ -143,15 +193,22 @@ def test_write_photo_crop_transforms_display_crop_back_to_sensor_coordinates(
     raw_path = tmp_path / "photo.cr3"
     xmp_path = tmp_path / "photo.xmp"
     xmp_path.touch()
-    display_crop = CropRect(0, 0.255978, 1, 1)
+    sensor_crop = CropRect(0, 0, 0.744022, 1)
+    display_crop = lightroom_crop_to_display(sensor_crop, 6000, 4000, -10, 8)
 
-    crop_metadata.write_photo_crop(raw_path, xmp_path, display_crop)
+    crop_metadata.write_photo_crop(
+        raw_path,
+        xmp_path,
+        display_crop,
+        crop_angle=-10,
+    )
 
     write_args = commands[-1]
     assert "-XMP-crs:CropTop=0.0000000000" in write_args
     assert "-XMP-crs:CropLeft=0.0000000000" in write_args
     assert "-XMP-crs:CropBottom=1.0000000000" in write_args
     assert "-XMP-crs:CropRight=0.7440220000" in write_args
+    assert "-XMP-crs:CropAngle=-10.0000000000" in write_args
 
 
 def test_write_photo_crop_creates_a_minimal_sidecar(
@@ -193,7 +250,11 @@ def test_write_photo_crop_sets_lightroom_crop_flag_on_existing_sidecar(
 
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append(command)
-        output = '[{"Orientation":1}]' if "-j" in command else "1 image files updated"
+        output = (
+            '[{"ImageWidth":6000,"ImageHeight":4000,"Orientation":1}]'
+            if "-j" in command
+            else "1 image files updated"
+        )
         return subprocess.CompletedProcess(command, 0, output)
 
     monkeypatch.setattr(crop_metadata, "require_exiftool", lambda: "/usr/bin/exiftool")
@@ -206,9 +267,11 @@ def test_write_photo_crop_sets_lightroom_crop_flag_on_existing_sidecar(
         raw_path,
         xmp_path,
         CropRect(0.2, 0.1, 0.8, 0.9),
+        crop_angle=-10,
     )
 
     assert "-XMP-crs:HasCrop=True" in calls[-1]
+    assert "-XMP-crs:CropAngle=-10.0000000000" in calls[-1]
 
 
 def test_extract_preview_requests_selected_embedded_tag(

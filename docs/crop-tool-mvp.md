@@ -33,6 +33,7 @@ The first release should prove two things: the folder can be navigated without w
 - Drag inside the crop to reposition it; drag an edge or corner to resize it; drag outside the crop to start a new crop.
 - Keep the crop within image bounds.
 - Use a generous 24-pixel edge/corner hit zone for crop resizing.
+- Rotate the photo beneath the upright crop frame with the angle control; display angle uses Lightroom's user-facing sign, while XMP `CropAngle` is stored with the inverse sign.
 - Support three modes:
   - **Freeform:** Resize without an aspect constraint; snap to a configured ratio when close enough.
   - **Locked ratio:** Resize while maintaining the selected ratio.
@@ -61,7 +62,7 @@ The first release should prove two things: the folder can be navigated without w
 - RAW rendering, exposure/color controls, export, catalog/database, ratings, keywords, or editing features beyond crop metadata.
 - Windows/Linux support and non-CR3 formats.
 
-These are candidates for follow-up after crop interaction, speed, and Lightroom round-trip behavior are validated. Manual rotation should be considered before automatic horizon detection.
+These are candidates for follow-up after crop interaction, speed, and Lightroom round-trip behavior are validated.
 
 The current prototype applies EXIF orientation to embedded previews and uses display-oriented dimensions for crop geometry. Existing Lightroom `CropAngle` metadata is preserved when saving crops; changing rotation is not yet supported.
 
@@ -107,8 +108,7 @@ The current prototype applies EXIF orientation to embedded previews and uses dis
 
 ## Follow-Up TODOs
 
-- [ ] Add manual image rotation and let users adjust the horizon angle.
-- [ ] Explore automatic horizon leveling after manual rotation is supported.
+- [ ] Explore automatic horizon leveling using the manual rotation control.
 - [ ] Add an optional side-by-side view with the full image and crop boundaries on one side and the cropped preview on the other.
 - [ ] Experiment with a smoother Lightroom Classic refresh workflow so users do not need to manually force metadata rereading after an XMP update.
 - [ ] Measure navigation latency on a representative larger folder and tune preview extraction, prefetch, and cache limits based on the results.

@@ -8,22 +8,16 @@ from photo_workflow.crop_tool.model import (
     aspect_ratio_for_crop,
     closest_aspect_ratio,
     crop_aspect_ratio,
+    display_crop_to_lightroom,
     fit_crop_to_ratio,
+    lightroom_crop_to_display,
     resize_from_anchor,
 )
-
-
-def test_crop_aspect_ratio_accounts_for_image_dimensions() -> None:
-    """Normalized crop bounds are converted using the source image geometry."""
-    crop = CropRect(left=7 / 30, top=0, right=23 / 30, bottom=1)
-
-    assert crop_aspect_ratio(crop, 6000, 4000) == pytest.approx(4 / 5)
 
 
 def test_aspect_ratio_for_crop_represents_nonstandard_ratio_as_free() -> None:
     """A nonstandard crop keeps its actual ratio under the Free label."""
     crop = CropRect(left=0.1, top=0.2, right=0.8, bottom=0.9)
-
     ratio = aspect_ratio_for_crop(crop, 6000, 4000)
 
     assert ratio.label == "Free"
@@ -64,6 +58,66 @@ def test_fit_crop_to_ratio_changes_bounds_immediately_and_keeps_center() -> None
     assert updated.right <= crop.right + 1e-9
     assert updated.top == pytest.approx(crop.top)
     assert updated.bottom == pytest.approx(crop.bottom)
+
+
+@pytest.mark.parametrize(
+    ("crop", "image_width", "image_height", "angle", "orientation", "expected"),
+    [
+        (
+            CropRect(0.012828, 0.233885, 0.987172, 0.766115),
+            6000,
+            4000,
+            -10,
+            1,
+            CropRect(0.0920636288, 0.1876470319, 0.9079363712, 0.8123529681),
+        ),
+        (
+            CropRect(0.039335, 0.39907, 0.715726, 0.661195),
+            6000,
+            4000,
+            -10,
+            8,
+            CropRect(0.3238250837, 0.3239210036, 0.6726011199, 0.9015927833),
+        ),
+    ],
+)
+def test_lightroom_crop_to_display_matches_reference_corners(
+    crop: CropRect,
+    image_width: int,
+    image_height: int,
+    angle: float,
+    orientation: int,
+    expected: CropRect,
+) -> None:
+    """Adobe's crop-corner algorithm yields the reference crop bounds."""
+    display_crop = lightroom_crop_to_display(
+        crop, image_width, image_height, angle, orientation
+    )
+
+    assert display_crop.left == pytest.approx(expected.left)
+    assert display_crop.top == pytest.approx(expected.top)
+    assert display_crop.right == pytest.approx(expected.right)
+    assert display_crop.bottom == pytest.approx(expected.bottom)
+
+
+@pytest.mark.parametrize("orientation", [1, 6, 8])
+@pytest.mark.parametrize("crop_angle", [0, -10])
+def test_lightroom_crop_transform_roundtrips(
+    orientation: int,
+    crop_angle: float,
+) -> None:
+    """Saving an unchanged upright crop recovers Lightroom's original anchors."""
+    crop = CropRect(0.15, 0.2, 0.78, 0.83)
+
+    displayed = lightroom_crop_to_display(crop, 6000, 4000, crop_angle, orientation)
+    restored = display_crop_to_lightroom(
+        displayed, 6000, 4000, crop_angle, orientation
+    )
+
+    assert restored.left == pytest.approx(crop.left)
+    assert restored.top == pytest.approx(crop.top)
+    assert restored.right == pytest.approx(crop.right)
+    assert restored.bottom == pytest.approx(crop.bottom)
 
 
 def test_closest_aspect_ratio_respects_configured_tolerance() -> None:

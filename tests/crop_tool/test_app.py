@@ -15,7 +15,7 @@ from PySide6.QtCore import (
     Qt,
     QUrl,
 )
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QImage
+from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QImage
 from PySide6.QtWidgets import QApplication
 
 from photo_workflow.crop_tool.app import (
@@ -109,6 +109,34 @@ def test_prefetch_scheduler_reprioritizes_when_navigation_reverses() -> None:
 
     assert started[-1] == window._photos[9]
     window.close()
+    app.quit()
+
+
+def test_close_discards_queued_prefetches_and_waits_for_active_loaders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Close does not destroy worker signals before active preview jobs finish."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    calls: list[str] = []
+
+    class LoadPoolStub:
+        def clear(self) -> None:
+            calls.append("clear")
+
+        def waitForDone(self) -> bool:
+            calls.append("wait")
+            return True
+
+    window._load_pool = LoadPoolStub()
+    window._queued_loads = {Path("queued.cr3")}
+    event = QCloseEvent()
+
+    window.closeEvent(event)
+
+    assert calls == ["clear", "wait"]
+    assert not window._queued_loads
+    assert event.isAccepted()
     app.quit()
 
 
@@ -297,8 +325,44 @@ def test_saved_crop_updates_cached_metadata_for_revisit(tmp_path: Path) -> None:
         raw_path: PhotoMetadata(6000, 4000, old_crop, crop_angle=1.5),
     }
 
-    updated = update_saved_crop_cache(metadata_cache, raw_path, saved_crop)
+    updated = update_saved_crop_cache(
+        metadata_cache,
+        raw_path,
+        saved_crop,
+        crop_angle=-12.5,
+    )
 
     assert updated is not None
     assert metadata_cache[raw_path].crop == saved_crop
-    assert metadata_cache[raw_path].crop_angle == pytest.approx(1.5)
+    assert metadata_cache[raw_path].crop_angle == pytest.approx(-12.5)
+
+
+def test_lightroom_crop_angle_is_shown_with_opposite_user_facing_sign(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Lightroom XMP angle of -10 displays as a user-facing +10 degrees."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    raw_path = Path("portrait.cr3")
+    metadata = PhotoMetadata(
+        image_width=4000,
+        image_height=6000,
+        crop=CropRect(0, 0, 1, 1),
+        crop_angle=-10,
+        orientation=8,
+    )
+    window._current_path = raw_path
+    monkeypatch.setattr(window, "_select_crop_ratio", lambda crop: None)
+    monkeypatch.setattr(window, "_update_crop_mode", lambda *args: None)
+
+    window._apply_metadata(raw_path, metadata)
+
+    assert window.rotation_spin.value() == pytest.approx(10)
+    assert window._current_rotation == pytest.approx(10)
+    assert window.view._rotation_angle == pytest.approx(10)
+    window.rotation_spin.setValue(12.5)
+    window._save_timer.stop()
+    assert window.view._rotation_angle == pytest.approx(12.5)
+    assert window._dirty
+    window.close()
+    app.quit()

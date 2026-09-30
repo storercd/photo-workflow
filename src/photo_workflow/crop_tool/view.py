@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from math import cos, radians, sin
+
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
 from photo_workflow.crop_tool.model import (
@@ -15,6 +17,7 @@ from photo_workflow.crop_tool.model import (
 
 EDGE_HIT_PIXELS = 24
 MIN_CROP_PIXELS = 2
+CANVAS_COLOR = QColor("#555555")
 
 
 class CropView(QWidget):
@@ -28,12 +31,13 @@ class CropView(QWidget):
         self.setMinimumSize(480, 360)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setStyleSheet("background: #17191b;")
+        self.setStyleSheet("background: #555555;")
         self._image = QImage()
         self._loading = False
         self._crop: CropRect | None = None
         self._image_width = 1
         self._image_height = 1
+        self._rotation_angle = 0.0
         self._locked_ratio: AspectRatio | None = None
         self._snap_ratios: tuple[AspectRatio, ...] = ()
         self._snap_tolerance = 0.025
@@ -68,6 +72,11 @@ class CropView(QWidget):
         self._crop = crop
         self.update()
 
+    def set_rotation(self, angle_degrees: float) -> None:
+        """Rotate the photo beneath the upright crop frame."""
+        self._rotation_angle = angle_degrees
+        self.update()
+
     def set_crop_mode(
         self,
         *,
@@ -85,7 +94,7 @@ class CropView(QWidget):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        painter.fillRect(self.rect(), QColor("#17191b"))
+        painter.fillRect(self.rect(), CANVAS_COLOR)
         if self._image.isNull():
             painter.setPen(QColor("#a7acb2"))
             message = "Loading preview..." if self._loading else "Open a folder to begin"
@@ -93,9 +102,33 @@ class CropView(QWidget):
             return
 
         image_rect = self._image_rect()
-        painter.drawImage(image_rect, self._image)
+        painter.save()
+        painter.translate(image_rect.center())
+        painter.rotate(self._rotation_angle)
+        painter.drawImage(
+            QRectF(
+                -image_rect.width() / 2,
+                -image_rect.height() / 2,
+                image_rect.width(),
+                image_rect.height(),
+            ),
+            self._image,
+        )
+        painter.restore()
         if self._loading:
-            painter.fillRect(image_rect, QColor(0, 0, 0, 120))
+            painter.save()
+            painter.translate(image_rect.center())
+            painter.rotate(self._rotation_angle)
+            painter.fillRect(
+                QRectF(
+                    -image_rect.width() / 2,
+                    -image_rect.height() / 2,
+                    image_rect.width(),
+                    image_rect.height(),
+                ),
+                QColor(0, 0, 0, 120),
+            )
+            painter.restore()
             painter.setPen(QColor("#f4f2ec"))
             painter.drawText(image_rect, Qt.AlignmentFlag.AlignCenter, "Loading preview...")
             return
@@ -104,7 +137,7 @@ class CropView(QWidget):
             return
 
         mask = QPainterPath()
-        mask.addRect(image_rect)
+        mask.addPolygon(self._rotated_image_polygon(image_rect))
         cutout = QPainterPath()
         cutout.addRect(crop_rect)
         painter.fillPath(mask.subtracted(cutout), QColor(0, 0, 0, 145))
@@ -144,10 +177,11 @@ class CropView(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         image_rect = self._image_rect()
+        crop_plane = self._rotated_bounds_rect(image_rect)
         point = event.position()
-        if not image_rect.contains(point):
+        if not crop_plane.contains(point):
             return
-        normalized = self._to_normalized(point, image_rect)
+        normalized = self._to_normalized(point, crop_plane)
         crop_rect = self._crop_rect(image_rect)
         if self._crop is None or self._is_full_crop(self._crop):
             self._drag_kind = "draw"
@@ -167,16 +201,17 @@ class CropView(QWidget):
         if self._loading:
             return
         image_rect = self._image_rect()
+        crop_plane = self._rotated_bounds_rect(image_rect)
         point = event.position()
         if self._drag_kind is None:
             self._update_hover_cursor(point, image_rect)
             return
-        if not image_rect.contains(point):
+        if not crop_plane.contains(point):
             point = QPointF(
-                min(max(point.x(), image_rect.left()), image_rect.right()),
-                min(max(point.y(), image_rect.top()), image_rect.bottom()),
+                min(max(point.x(), crop_plane.left()), crop_plane.right()),
+                min(max(point.y(), crop_plane.top()), crop_plane.bottom()),
             )
-        normalized = self._to_normalized(point, image_rect)
+        normalized = self._to_normalized(point, crop_plane)
         if self._drag_kind == "draw":
             self._resize_from_anchor(self._drag_anchor, normalized)
         elif self._drag_kind == "move":
@@ -197,10 +232,44 @@ class CropView(QWidget):
         """Return the preview's aspect-preserving display rectangle."""
         if self._image.isNull():
             return QRectF()
-        scale = min(self.width() / self._image.width(), self.height() / self._image.height())
+        angle = radians(self._rotation_angle)
+        rotated_width = abs(self._image.width() * cos(angle)) + abs(
+            self._image.height() * sin(angle)
+        )
+        rotated_height = abs(self._image.width() * sin(angle)) + abs(
+            self._image.height() * cos(angle)
+        )
+        scale = min(self.width() / rotated_width, self.height() / rotated_height)
         width = self._image.width() * scale
         height = self._image.height() * scale
         return QRectF((self.width() - width) / 2, (self.height() - height) / 2, width, height)
+
+    def _rotated_image_polygon(self, image_rect: QRectF) -> QPolygonF:
+        """Return the photo's actual rotated boundary in widget coordinates."""
+        angle = radians(self._rotation_angle)
+        cosine = cos(angle)
+        sine = sin(angle)
+        center = image_rect.center()
+        points = []
+        for point in (
+            image_rect.topLeft(),
+            image_rect.topRight(),
+            image_rect.bottomRight(),
+            image_rect.bottomLeft(),
+        ):
+            offset_x = point.x() - center.x()
+            offset_y = point.y() - center.y()
+            points.append(
+                QPointF(
+                    center.x() + offset_x * cosine - offset_y * sine,
+                    center.y() + offset_x * sine + offset_y * cosine,
+                )
+            )
+        return QPolygonF(points)
+
+    def _rotated_bounds_rect(self, image_rect: QRectF) -> QRectF:
+        """Return the upright crop-plane bounds around the rotated image."""
+        return self._rotated_image_polygon(image_rect).boundingRect()
 
     def _crop_rect(self, image_rect: QRectF) -> QRectF | None:
         """
@@ -211,11 +280,12 @@ class CropView(QWidget):
         """
         if self._crop is None:
             return None
+        crop_plane = self._rotated_bounds_rect(image_rect)
         return QRectF(
-            image_rect.left() + self._crop.left * image_rect.width(),
-            image_rect.top() + self._crop.top * image_rect.height(),
-            self._crop.width * image_rect.width(),
-            self._crop.height * image_rect.height(),
+            crop_plane.left() + self._crop.left * crop_plane.width(),
+            crop_plane.top() + self._crop.top * crop_plane.height(),
+            self._crop.width * crop_plane.width(),
+            self._crop.height * crop_plane.height(),
         )
 
     def _to_normalized(self, point: QPointF, image_rect: QRectF) -> QPointF:

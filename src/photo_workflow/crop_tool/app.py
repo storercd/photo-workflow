@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -51,6 +52,7 @@ from photo_workflow.crop_tool.model import (
     closest_aspect_ratio,
     crop_aspect_ratio,
     fit_crop_to_ratio,
+    rotated_image_size,
 )
 from photo_workflow.crop_tool.view import CropView
 
@@ -72,7 +74,12 @@ class WorkerSignals(QObject):
     preview = Signal(str, object, bool)
     error = Signal(str, str)
     finished = Signal(str)
-    saved = Signal(str, int, object, str)
+    saved = Signal(str, int, object, float, str)
+
+
+def displayed_image_size(metadata: PhotoMetadata, rotation_angle: float) -> tuple[float, float]:
+    """Return the crop-plane size after EXIF orientation and user rotation."""
+    return rotated_image_size(metadata.image_width, metadata.image_height, rotation_angle)
 
 
 def resolve_drop_path(path: Path) -> DropTarget | None:
@@ -255,7 +262,9 @@ class PhotoSaveTask(QRunnable):
             error = ""
         except Exception as exception:
             error = str(exception)
-        self.signals.saved.emit(str(self.raw_path), self.version, self.crop, error)
+        self.signals.saved.emit(
+            str(self.raw_path), self.version, self.crop, self.crop_angle, error
+        )
 
 
 class CropWindow(QMainWindow):
@@ -272,6 +281,7 @@ class CropWindow(QMainWindow):
         self._navigation_direction = 1
         self._current_metadata: PhotoMetadata | None = None
         self._current_crop: CropRect | None = None
+        self._current_rotation = 0.0
         self._locked_ratio: AspectRatio | None = None
         self._current_path: Path | None = None
         self._dirty = False
@@ -313,6 +323,14 @@ class CropWindow(QMainWindow):
         self.ratio_combo = QComboBox()
         self.ratio_combo.setFixedWidth(104)
         self.ratio_combo.setToolTip("Current crop ratio; exact value shown for Free crops")
+        self.rotation_spin = QDoubleSpinBox()
+        self.rotation_spin.setRange(-45, 45)
+        self.rotation_spin.setDecimals(1)
+        self.rotation_spin.setSingleStep(0.1)
+        self.rotation_spin.setSuffix("°")
+        self.rotation_spin.setPrefix("Angle ")
+        self.rotation_spin.setToolTip("Rotate the photo beneath the crop frame")
+        self.rotation_spin.setEnabled(False)
         self.lock_checkbox = QCheckBox("Lock ratio")
         self.snap_checkbox = QCheckBox("Snap")
         self.snap_checkbox.setChecked(True)
@@ -320,6 +338,7 @@ class CropWindow(QMainWindow):
         for button in (self.open_button, self.previous_button, self.next_button):
             toolbar.addWidget(button)
         toolbar.addWidget(self.position_label, 1)
+        toolbar.addWidget(self.rotation_spin)
         toolbar.addWidget(self.ratio_combo)
         toolbar.addWidget(self.lock_checkbox)
         toolbar.addWidget(self.snap_checkbox)
@@ -334,6 +353,7 @@ class CropWindow(QMainWindow):
         self.previous_button.clicked.connect(lambda: self.navigate(-1))
         self.next_button.clicked.connect(lambda: self.navigate(1))
         self.ratio_combo.currentIndexChanged.connect(self._ratio_selected)
+        self.rotation_spin.valueChanged.connect(self._rotation_changed)
         self.lock_checkbox.toggled.connect(self._update_crop_mode)
         self.snap_checkbox.toggled.connect(self._update_crop_mode)
         self.view.crop_changed.connect(self._crop_edited)
@@ -415,6 +435,12 @@ class CropWindow(QMainWindow):
         self._current_path = self._photos[index]
         self._current_crop = None
         self._current_metadata = self._metadata_cache.get(self._current_path)
+        self._current_rotation = 0.0
+        self.view.set_rotation(0)
+        self.rotation_spin.blockSignals(True)
+        self.rotation_spin.setValue(0)
+        self.rotation_spin.setEnabled(False)
+        self.rotation_spin.blockSignals(False)
         self._version = 0
         self._saved_version = 0
         self._dirty = False
@@ -495,9 +521,16 @@ class CropWindow(QMainWindow):
             return
         self._current_metadata = metadata
         self._current_crop = metadata.crop
+        self._current_rotation = -metadata.crop_angle
+        self.rotation_spin.blockSignals(True)
+        self.rotation_spin.setValue(self._current_rotation)
+        self.rotation_spin.setEnabled(True)
+        self.rotation_spin.blockSignals(False)
+        self.view.set_rotation(self._current_rotation)
+        display_width, display_height = displayed_image_size(metadata, self._current_rotation)
         image = self._preview_cache.get(path)
         if image is not None:
-            self.view.set_image(image, metadata.image_width, metadata.image_height)
+            self.view.set_image(image, display_width, display_height)
             self.view.set_crop(metadata.crop)
             self.view.set_loading(False)
         else:
@@ -522,8 +555,10 @@ class CropWindow(QMainWindow):
 
     def _show_image(self, image: QImage) -> None:
         """Set the visible preview using current source dimensions when known."""
-        width = self._current_metadata.image_width if self._current_metadata else image.width()
-        height = self._current_metadata.image_height if self._current_metadata else image.height()
+        if self._current_metadata:
+            width, height = displayed_image_size(self._current_metadata, self._current_rotation)
+        else:
+            width, height = image.width(), image.height()
         self.view.set_image(image, width, height)
 
     def _load_error(self, path_text: str, message: str) -> None:
@@ -545,9 +580,26 @@ class CropWindow(QMainWindow):
         if self._current_path is None or self._current_metadata is None:
             return
         self._current_crop = crop
+        self._mark_dirty()
+        self._select_crop_ratio(crop)
+
+    def _rotation_changed(self, angle: float) -> None:
+        """Update the displayed rotation and persist it as a crop edit."""
+        if self._current_path is None or self._current_metadata is None:
+            return
+        self._current_rotation = angle
+        self.view.set_rotation(angle)
+        if self._current_metadata is not None:
+            image = self._preview_cache.get(self._current_path)
+            if image is not None:
+                width, height = displayed_image_size(self._current_metadata, angle)
+                self.view.set_image(image, width, height)
+        self._mark_dirty()
+
+    def _mark_dirty(self) -> None:
+        """Mark the current photo changed and debounce its XMP write."""
         self._version += 1
         self._dirty = True
-        self._select_crop_ratio(crop)
         self.save_label.setText("Unsaved")
         self._save_timer.start(SAVE_DELAY_MS)
 
@@ -558,7 +610,7 @@ class CropWindow(QMainWindow):
         if self._current_crop is None:
             return
         self._save_timer.stop()
-        crop_angle = self._current_metadata.crop_angle if self._current_metadata else 0
+        crop_angle = -self._current_rotation
         task = PhotoSaveTask(
             self._current_path,
             self._current_crop,
@@ -576,6 +628,7 @@ class CropWindow(QMainWindow):
         path_text: str,
         version: int,
         saved_crop: CropRect,
+        saved_crop_angle: float,
         error: str,
     ) -> None:
         """Update save state and continue any deferred navigation or close."""
@@ -589,7 +642,12 @@ class CropWindow(QMainWindow):
             self._dirty = self._saved_version < self._version
             self.save_label.setText("Unsaved" if self._dirty else "Saved")
         saved_path = Path(path_text)
-        saved_metadata = update_saved_crop_cache(self._metadata_cache, saved_path, saved_crop)
+        saved_metadata = update_saved_crop_cache(
+            self._metadata_cache,
+            saved_path,
+            saved_crop,
+            crop_angle=saved_crop_angle,
+        )
         if saved_path == self._current_path and saved_metadata is not None:
             self._current_metadata = saved_metadata
         if self._dirty:
@@ -611,10 +669,14 @@ class CropWindow(QMainWindow):
         """Apply the selected lock ratio and snap state to the crop view."""
         del args
         if self.lock_checkbox.isChecked() and self._current_crop and self._current_metadata:
+            image_width, image_height = displayed_image_size(
+                self._current_metadata,
+                self._current_rotation,
+            )
             self._locked_ratio = aspect_ratio_for_crop(
                 self._current_crop,
-                self._current_metadata.image_width,
-                self._current_metadata.image_height,
+                image_width,
+                image_height,
             )
         else:
             self._locked_ratio = None
@@ -629,10 +691,14 @@ class CropWindow(QMainWindow):
         """Apply a chosen preset immediately or switch to freeform geometry."""
         ratio = self.ratio_combo.itemData(index)
         if ratio is not None and self._current_crop is not None and self._current_metadata:
+            image_width, image_height = displayed_image_size(
+                self._current_metadata,
+                self._current_rotation,
+            )
             crop = fit_crop_to_ratio(
                 self._current_crop,
-                self._current_metadata.image_width,
-                self._current_metadata.image_height,
+                image_width,
+                image_height,
                 ratio,
             )
             self._current_crop = crop
@@ -645,11 +711,15 @@ class CropWindow(QMainWindow):
         """Show the closest preset only when the current crop actually matches it."""
         if self._current_metadata is None:
             return
+        image_width, image_height = displayed_image_size(
+            self._current_metadata,
+            self._current_rotation,
+        )
         ratio = closest_aspect_ratio(
             crop.width,
             crop.height,
-            self._current_metadata.image_width,
-            self._current_metadata.image_height,
+            image_width,
+            image_height,
             self._ratios,
             tolerance=RATIO_MATCH_TOLERANCE,
         )
@@ -665,8 +735,8 @@ class CropWindow(QMainWindow):
         else:
             current_ratio = crop_aspect_ratio(
                 crop,
-                self._current_metadata.image_width,
-                self._current_metadata.image_height,
+                image_width,
+                image_height,
             )
             self.ratio_combo.setItemText(0, f"Free {current_ratio:.2f}")
             self.ratio_combo.setItemData(
@@ -707,6 +777,9 @@ class CropWindow(QMainWindow):
             self._start_save()
             event.ignore()
             return
+        self._queued_loads.clear()
+        self._load_pool.clear()
+        self._load_pool.waitForDone()
         event.accept()
 
 
@@ -768,6 +841,8 @@ def update_saved_crop_cache(
     metadata_cache: dict[Path, PhotoMetadata],
     raw_path: Path,
     crop: CropRect,
+    *,
+    crop_angle: float | None = None,
 ) -> PhotoMetadata | None:
     """
     Update cached metadata to match the crop snapshot successfully written.
@@ -778,7 +853,11 @@ def update_saved_crop_cache(
     metadata = metadata_cache.get(raw_path)
     if metadata is None:
         return None
-    updated_metadata = replace(metadata, crop=crop)
+    updated_metadata = replace(
+        metadata,
+        crop=crop,
+        crop_angle=metadata.crop_angle if crop_angle is None else crop_angle,
+    )
     metadata_cache[raw_path] = updated_metadata
     return updated_metadata
 
