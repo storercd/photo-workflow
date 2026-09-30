@@ -26,12 +26,14 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
+    QSlider,
+    QStyle,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -323,14 +325,34 @@ class CropWindow(QMainWindow):
         self.ratio_combo = QComboBox()
         self.ratio_combo.setFixedWidth(104)
         self.ratio_combo.setToolTip("Current crop ratio; exact value shown for Free crops")
-        self.rotation_spin = QDoubleSpinBox()
-        self.rotation_spin.setRange(-45, 45)
-        self.rotation_spin.setDecimals(1)
-        self.rotation_spin.setSingleStep(0.1)
-        self.rotation_spin.setSuffix("°")
-        self.rotation_spin.setPrefix("Angle ")
-        self.rotation_spin.setToolTip("Rotate the photo beneath the crop frame")
-        self.rotation_spin.setEnabled(False)
+        self.rotation_slider = QSlider(Qt.Orientation.Horizontal)
+        self.rotation_slider.setRange(-450, 450)
+        self.rotation_slider.setSingleStep(1)
+        self.rotation_slider.setPageStep(10)
+        self.rotation_slider.setFixedWidth(150)
+        self.rotation_slider.setToolTip("Rotate the photo beneath the crop frame")
+        self.rotation_slider.setEnabled(False)
+        self.rotation_value = QLabel("0.0°")
+        self.rotation_value.setFixedWidth(
+            self.rotation_value.fontMetrics().horizontalAdvance("-45.0°") + 4
+        )
+        self.rotation_value.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.rotation_reset = QToolButton()
+        self.rotation_reset.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
+        )
+        self.rotation_reset.setToolTip("Reset rotation")
+        self.rotation_reset.setAccessibleName("Reset rotation")
+        self.rotation_reset.setEnabled(False)
+        angle_controls = QWidget()
+        angle_layout = QHBoxLayout(angle_controls)
+        angle_layout.setContentsMargins(0, 0, 0, 0)
+        angle_layout.setSpacing(2)
+        angle_layout.addWidget(self.rotation_slider)
+        angle_layout.addWidget(self.rotation_value)
+        angle_layout.addWidget(self.rotation_reset)
         self.lock_checkbox = QCheckBox("Lock ratio")
         self.snap_checkbox = QCheckBox("Snap")
         self.snap_checkbox.setChecked(True)
@@ -341,7 +363,8 @@ class CropWindow(QMainWindow):
         for button in (self.open_button, self.previous_button, self.next_button):
             toolbar.addWidget(button)
         toolbar.addWidget(self.position_label, 1)
-        toolbar.addWidget(self.rotation_spin)
+        toolbar.addWidget(QLabel("Angle"))
+        toolbar.addWidget(angle_controls)
         toolbar.addWidget(self.ratio_combo)
         toolbar.addWidget(self.lock_checkbox)
         toolbar.addWidget(self.snap_checkbox)
@@ -356,7 +379,8 @@ class CropWindow(QMainWindow):
         self.previous_button.clicked.connect(lambda: self.navigate(-1))
         self.next_button.clicked.connect(lambda: self.navigate(1))
         self.ratio_combo.currentIndexChanged.connect(self._ratio_selected)
-        self.rotation_spin.valueChanged.connect(self._rotation_changed)
+        self.rotation_slider.valueChanged.connect(self._rotation_slider_changed)
+        self.rotation_reset.clicked.connect(lambda: self.rotation_slider.setValue(0))
         self.lock_checkbox.toggled.connect(self._update_crop_mode)
         self.snap_checkbox.toggled.connect(self._update_crop_mode)
         self.view.crop_changed.connect(self._crop_edited)
@@ -440,10 +464,12 @@ class CropWindow(QMainWindow):
         self._current_metadata = self._metadata_cache.get(self._current_path)
         self._current_rotation = 0.0
         self.view.set_rotation(0)
-        self.rotation_spin.blockSignals(True)
-        self.rotation_spin.setValue(0)
-        self.rotation_spin.setEnabled(False)
-        self.rotation_spin.blockSignals(False)
+        self.rotation_slider.blockSignals(True)
+        self.rotation_slider.setValue(0)
+        self.rotation_value.setText("0.0°")
+        self.rotation_slider.setEnabled(False)
+        self.rotation_reset.setEnabled(False)
+        self.rotation_slider.blockSignals(False)
         self._version = 0
         self._saved_version = 0
         self._dirty = False
@@ -525,10 +551,12 @@ class CropWindow(QMainWindow):
         self._current_metadata = metadata
         self._current_crop = metadata.crop
         self._current_rotation = -metadata.crop_angle
-        self.rotation_spin.blockSignals(True)
-        self.rotation_spin.setValue(self._current_rotation)
-        self.rotation_spin.setEnabled(True)
-        self.rotation_spin.blockSignals(False)
+        self.rotation_slider.blockSignals(True)
+        self.rotation_slider.setValue(round(self._current_rotation * 10))
+        self.rotation_value.setText(f"{self._current_rotation:.1f}°")
+        self.rotation_slider.setEnabled(True)
+        self.rotation_reset.setEnabled(True)
+        self.rotation_slider.blockSignals(False)
         self.view.set_rotation(self._current_rotation)
         display_width, display_height = displayed_image_size(metadata, self._current_rotation)
         image = self._preview_cache.get(path)
@@ -585,6 +613,12 @@ class CropWindow(QMainWindow):
         self._current_crop = crop
         self._mark_dirty()
         self._select_crop_ratio(crop)
+
+    def _rotation_slider_changed(self, slider_value: int) -> None:
+        """Convert the slider's tenths-degree value into a rotation edit."""
+        angle = slider_value / 10
+        self.rotation_value.setText(f"{angle:.1f}°")
+        self._rotation_changed(angle)
 
     def _rotation_changed(self, angle: float) -> None:
         """Update the displayed rotation and persist it as a crop edit."""

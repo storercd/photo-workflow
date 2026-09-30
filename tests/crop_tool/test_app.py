@@ -372,12 +372,19 @@ def test_lightroom_crop_angle_is_shown_with_opposite_user_facing_sign(
 
     window._apply_metadata(raw_path, metadata)
 
-    assert window.rotation_spin.value() == pytest.approx(10)
+    assert window.rotation_slider.value() == 100
+    assert window.rotation_value.text() == "10.0°"
     assert window._current_rotation == pytest.approx(10)
     assert window.view._rotation_angle == pytest.approx(10)
-    window.rotation_spin.setValue(12.5)
+    window.rotation_slider.setValue(125)
     window._save_timer.stop()
     assert window.view._rotation_angle == pytest.approx(12.5)
+    assert window.rotation_value.text() == "12.5°"
+    window.rotation_reset.click()
+    window._save_timer.stop()
+    assert window.rotation_slider.value() == 0
+    assert window.rotation_value.text() == "0.0°"
+    assert window.view._rotation_angle == pytest.approx(0)
     assert window._dirty
     window.close()
     app.quit()
