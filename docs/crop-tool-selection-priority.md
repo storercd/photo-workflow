@@ -1,6 +1,6 @@
 # Crop Window Selection Priority
 
-This document describes how left-click selection is resolved inside the image window. Toolbar controls, including the angle slider and alternate-angle menu, use their normal Qt widget hit testing and are independent of image-window priority.
+This document describes how left-click selection is resolved inside the image window. Toolbar controls, including the angle slider and Auto/Show actions, use their normal Qt widget hit testing and are independent of image-window priority.
 
 ## Left-Click Priority
 

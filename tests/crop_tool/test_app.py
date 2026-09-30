@@ -15,9 +15,10 @@ from PySide6.QtCore import (
     Qt,
     QUrl,
 )
-from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QImage
+from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QImage, QShortcut
 from PySide6.QtWidgets import QApplication
 
+from photo_workflow.crop_tool import app as crop_app
 from photo_workflow.crop_tool.app import (
     PREFETCH_FORWARD_COUNT,
     PREFETCH_REVERSE_COUNT,
@@ -246,6 +247,88 @@ def test_save_status_keeps_a_fixed_toolbar_width() -> None:
     app.quit()
 
 
+def test_lock_and_snap_icon_controls_reflect_toggle_state() -> None:
+    """Lock and snap symbols and accessible labels track their checked states."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+
+    assert "←" in window.previous_button.toolTip()
+    assert "→" in window.next_button.toolTip()
+    assert "⌘O" in window.open_button.toolTip()
+    assert "1–8" in window.ratio_combo.toolTip()
+    assert "⌘S" in window.save_label.toolTip()
+    assert "H" in window.show_horizon_button.toolTip()
+    assert window.lock_checkbox.isCheckable()
+    assert window.aspect_group.title() == "Aspect"
+    assert not window.lock_checkbox.isChecked()
+    assert "unlocked" in window.lock_checkbox.toolTip().lower()
+    assert "L" in window.lock_checkbox.toolTip()
+    window.lock_checkbox.setChecked(True)
+    assert "locked" in window.lock_checkbox.toolTip().lower()
+
+    assert window.snap_checkbox.isChecked()
+    enabled_icon = window.snap_checkbox.icon().cacheKey()
+    window.snap_checkbox.setChecked(False)
+    assert window.snap_checkbox.icon().cacheKey() != enabled_icon
+    assert "disabled" in window.snap_checkbox.toolTip().lower()
+    assert "S" in window.snap_checkbox.toolTip()
+    icon_image = window.snap_checkbox.icon().pixmap(32, 32).toImage()
+    red_pixels = 0
+    light_pixels = 0
+    for y in range(icon_image.height()):
+        for x in range(icon_image.width()):
+            color = icon_image.pixelColor(x, y)
+            red_pixels += color.red() > 160 and color.green() < 130
+            light_pixels += color.red() > 180 and color.green() > 180 and color.blue() > 180
+    assert red_pixels > 0
+    assert light_pixels > 0
+
+    window.close()
+    app.quit()
+
+
+def test_compact_navigation_and_filename_reveal_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Toolbar arrows stay icon-only and clicking the filename reveals its photo."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    raw_path = Path("/tmp/selected.cr3")
+    window._current_path = raw_path
+    calls: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(
+        crop_app.QProcess,
+        "startDetached",
+        staticmethod(lambda program, arguments: calls.append((program, arguments))),
+    )
+
+    assert window.open_button.text() == "Open"
+    assert window.previous_button.text() == ""
+    assert window.next_button.text() == ""
+    assert not window.previous_button.icon().isNull()
+    assert not window.next_button.icon().isNull()
+    window.position_label.clicked.emit()
+
+    assert calls == [("open", ["-R", str(raw_path.resolve())])]
+    window.close()
+    app.quit()
+
+
+def test_show_candidates_keyboard_shortcut_is_bound_to_h() -> None:
+    """The H shortcut invokes the same reveal-only action as the Show icon."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    show_shortcuts = [
+        shortcut
+        for shortcut in window.findChildren(QShortcut)
+        if shortcut.key().toString() == "H"
+    ]
+
+    assert len(show_shortcuts) == 1
+    window.close()
+    app.quit()
+
+
 @pytest.mark.parametrize("value", ["bad", "1:0", "0:1", "-4:5"])
 def test_parse_aspect_ratios_rejects_invalid_values(value: str) -> None:
     """Reject malformed or nonpositive aspect-ratio settings clearly."""
@@ -415,11 +498,10 @@ def test_auto_level_applies_best_candidate_and_clicking_alternate_updates_angle(
 
     assert window.rotation_slider.value() == -34
     assert window.rotation_value.text() == "-3.4°"
-    assert window.horizon_alternatives.count() == 2
-    assert window.horizon_alternatives.currentText() == "Best -3.4°"
+    assert len(window._horizon_candidates) == 2
     assert window.view._selected_horizon_candidate == 0
 
-    window.horizon_alternatives.setCurrentIndex(1)
+    window._horizon_guide_selected(1)
     window._save_timer.stop()
 
     assert window.rotation_slider.value() == 21
@@ -428,7 +510,6 @@ def test_auto_level_applies_best_candidate_and_clicking_alternate_updates_angle(
     assert window.view._selected_horizon_candidate == 1
     window._horizon_guide_selected(0)
     window._save_timer.stop()
-    assert window.horizon_alternatives.currentIndex() == 0
     assert window.rotation_slider.value() == -34
     assert window.view._selected_horizon_candidate == 0
     window.close()
@@ -447,8 +528,11 @@ def test_show_horizon_candidates_does_not_change_angle_until_candidate_selected(
     window._current_rotation = original_angle
     window._current_metadata = PhotoMetadata(640, 480, CropRect(0, 0, 1, 1))
     window._preview_cache[raw_path] = preview
-    assert window.auto_level_button.text() == "Auto"
-    assert window.show_horizon_button.text() == "Show"
+    assert window.angle_group.title() == "Angle"
+    assert not window.auto_level_button.icon().isNull()
+    assert window.auto_level_button.accessibleName() == "Auto level"
+    assert not window.show_horizon_button.icon().isNull()
+    assert window.show_horizon_button.accessibleName() == "Show horizon candidates"
     window.rotation_slider.setValue(17)
     window.rotation_value.setText("1.7°")
     window._dirty = False
@@ -467,11 +551,24 @@ def test_show_horizon_candidates_does_not_change_angle_until_candidate_selected(
     assert window.rotation_value.text() == "1.7°"
     assert window._current_rotation == pytest.approx(original_angle)
     assert not window._dirty
-    assert window.horizon_alternatives.currentIndex() == -1
-    assert window.horizon_alternatives.itemText(0) == "1 -3.4°"
+    assert len(window._horizon_candidates) == 2
     assert window.view._selected_horizon_candidate == -1
+    assert window.show_horizon_button.isChecked()
+    shown_icon = window.show_horizon_button.icon().cacheKey()
 
-    window.horizon_alternatives.setCurrentIndex(1)
+    window.show_horizon_button.click()
+    assert not window.show_horizon_button.isChecked()
+    assert window.view._horizon_candidates == ()
+    assert window._current_rotation == pytest.approx(original_angle)
+    hidden_icon = window.show_horizon_button.icon().cacheKey()
+    assert hidden_icon != shown_icon
+
+    window.show_horizon_button.click()
+    assert window.show_horizon_button.isChecked()
+    assert len(window.view._horizon_candidates) == 2
+    assert window._current_rotation == pytest.approx(original_angle)
+
+    window._horizon_guide_selected(1)
     window._save_timer.stop()
     assert window.rotation_slider.value() == 21
     assert window._current_rotation == pytest.approx(2.1)

@@ -3,34 +3,45 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import tomllib
 from collections import OrderedDict
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 
+import qtawesome as qta
 from PySide6.QtCore import (
     QBuffer,
     QByteArray,
     QIODevice,
     QObject,
+    QProcess,
     QRunnable,
     QSize,
     Qt,
     QThreadPool,
     QTimer,
+    QUrl,
     Signal,
 )
-from PySide6.QtGui import QImage, QImageIOHandler, QImageReader, QKeySequence, QShortcut, QTransform
+from PySide6.QtGui import (
+    QDesktopServices,
+    QImage,
+    QImageIOHandler,
+    QImageReader,
+    QKeySequence,
+    QShortcut,
+    QTransform,
+)
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
     QFileDialog,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
-    QPushButton,
     QSlider,
     QStyle,
     QToolButton,
@@ -74,6 +85,11 @@ PREVIEW_MAX_DIMENSION = 2560
 RATIO_MATCH_TOLERANCE = 0.005
 
 
+def shortcut_modifier() -> str:
+    """Return the conventional modifier label for the current platform."""
+    return "⌘" if sys.platform == "darwin" else "Ctrl+"
+
+
 class WorkerSignals(QObject):
     """Signals emitted by background preview and save jobs."""
 
@@ -83,6 +99,22 @@ class WorkerSignals(QObject):
     finished = Signal(str)
     saved = Signal(str, int, object, float, str)
     horizon = Signal(str, object, str, bool)
+
+
+class ClickableLabel(QLabel):
+    """A label that emits a signal when clicked with the left mouse button."""
+
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, event: object) -> None:
+        """Emit `clicked` when the release occurs inside the label."""
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
+            event.position().toPoint()
+        ):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 def displayed_image_size(metadata: PhotoMetadata, rotation_angle: float) -> tuple[float, float]:
@@ -315,6 +347,7 @@ class CropWindow(QMainWindow):
         self._current_crop: CropRect | None = None
         self._current_rotation = 0.0
         self._horizon_candidates: tuple[HorizonCandidate, ...] = ()
+        self._selected_horizon_candidate = -1
         self._locked_ratio: AspectRatio | None = None
         self._current_path: Path | None = None
         self._dirty = False
@@ -348,14 +381,29 @@ class CropWindow(QMainWindow):
         container = CropDropArea()
         layout = QVBoxLayout(container)
         toolbar = QHBoxLayout()
-        self.open_button = QPushButton("Open Folder")
-        self.previous_button = QPushButton("Previous")
-        self.next_button = QPushButton("Next")
-        self.position_label = QLabel("No folder open")
+        self.open_button = QToolButton()
+        self.open_button.setText("Open")
+        self.open_button.setIcon(qta.icon("fa5s.folder-open"))
+        self.open_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.open_button.setToolTip(f"Open a photo folder ({shortcut_modifier()}O)")
+        self.open_button.setAccessibleName("Open photo folder")
+        self.previous_button = QToolButton()
+        self.previous_button.setIcon(qta.icon("fa5s.arrow-left"))
+        self.previous_button.setToolTip("Previous photo (←)")
+        self.previous_button.setAccessibleName("Previous photo")
+        self.next_button = QToolButton()
+        self.next_button.setIcon(qta.icon("fa5s.arrow-right"))
+        self.next_button.setToolTip("Next photo (→)")
+        self.next_button.setAccessibleName("Next photo")
+        self.position_label = ClickableLabel("No folder open")
         self.position_label.setMinimumWidth(260)
+        self.position_label.setToolTip("Reveal the current photo in the file manager")
+        self.position_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.ratio_combo = QComboBox()
         self.ratio_combo.setFixedWidth(104)
-        self.ratio_combo.setToolTip("Current crop ratio; exact value shown for Free crops")
+        self.ratio_combo.setToolTip(
+            "Current crop ratio; exact value shown for Free crops (1–8 to choose)"
+        )
         self.rotation_slider = QSlider(Qt.Orientation.Horizontal)
         self.rotation_slider.setRange(-450, 450)
         self.rotation_slider.setSingleStep(1)
@@ -377,51 +425,65 @@ class CropWindow(QMainWindow):
         self.rotation_reset.setToolTip("Reset rotation")
         self.rotation_reset.setAccessibleName("Reset rotation")
         self.rotation_reset.setEnabled(False)
-        angle_controls = QWidget()
-        angle_layout = QHBoxLayout(angle_controls)
+        self.angle_group = QGroupBox("Angle")
+        angle_layout = QHBoxLayout(self.angle_group)
         angle_layout.setContentsMargins(0, 0, 0, 0)
-        angle_layout.setSpacing(2)
+        angle_layout.setSpacing(4)
         angle_layout.addWidget(self.rotation_slider)
         angle_layout.addWidget(self.rotation_value)
         angle_layout.addWidget(self.rotation_reset)
-        self.auto_level_button = QPushButton("Auto")
-        self.auto_level_button.setFixedWidth(
-            self.auto_level_button.fontMetrics().horizontalAdvance("No level found") + 16
-        )
+        self.auto_level_button = QToolButton()
+        self.auto_level_button.setIcon(qta.icon("fa5s.magic", color="#45d6d0"))
         self.auto_level_button.setToolTip(
             "Estimate a level angle from prominent near-horizontal lines"
         )
+        self.auto_level_button.setAccessibleName("Auto level")
+        self.auto_level_button.setFixedSize(28, 28)
+        self.auto_level_button.setAutoRaise(True)
         self.auto_level_button.setEnabled(False)
-        self.show_horizon_button = QPushButton("Show")
+        self.show_horizon_button = QToolButton()
+        self.show_horizon_button.setIcon(qta.icon("fa5s.eye-slash", color="#f4f2ec"))
         self.show_horizon_button.setToolTip(
-            "Show detected horizon candidates without changing the angle"
+            "Show detected horizon candidates without changing the angle (H)"
         )
+        self.show_horizon_button.setAccessibleName("Show horizon candidates")
+        self.show_horizon_button.setCheckable(True)
+        self.show_horizon_button.setFixedSize(28, 28)
+        self.show_horizon_button.setAutoRaise(True)
         self.show_horizon_button.setEnabled(False)
-        self.horizon_alternatives = QComboBox()
-        self.horizon_alternatives.setFixedWidth(118)
-        self.horizon_alternatives.setPlaceholderText("Alternatives")
-        self.horizon_alternatives.setToolTip(
-            "Choose another detected line to set the rotation"
-        )
-        self.horizon_alternatives.setVisible(False)
-        self.lock_checkbox = QCheckBox("Lock ratio")
-        self.snap_checkbox = QCheckBox("Snap")
+        for control in (
+            self.auto_level_button,
+            self.show_horizon_button,
+        ):
+            angle_layout.addWidget(control)
+        self.lock_checkbox = QToolButton()
+        self.lock_checkbox.setCheckable(True)
+        self.lock_checkbox.setToolTip("Lock crop ratio (L)")
+        self.lock_checkbox.setAccessibleName("Lock crop ratio")
+        self.lock_checkbox.setIcon(qta.icon("fa5s.lock-open", color="#f4f2ec"))
+        self.snap_checkbox = QToolButton()
+        self.snap_checkbox.setCheckable(True)
         self.snap_checkbox.setChecked(True)
+        self.snap_checkbox.setToolTip("Aspect-ratio snapping enabled (S)")
+        self.snap_checkbox.setAccessibleName("Toggle aspect-ratio snapping")
+        self._update_snap_icon(True)
+        self.aspect_group = QGroupBox("Aspect")
+        aspect_layout = QHBoxLayout(self.aspect_group)
+        aspect_layout.setContentsMargins(0, 0, 0, 0)
+        aspect_layout.setSpacing(4)
+        aspect_layout.addWidget(self.ratio_combo)
+        aspect_layout.addWidget(self.lock_checkbox)
+        aspect_layout.addWidget(self.snap_checkbox)
         self.save_label = QLabel(" ")
+        self.save_label.setToolTip(f"Save current crop ({shortcut_modifier()}S)")
         status_width = self.save_label.fontMetrics().horizontalAdvance("Saving...") + 8
         self.save_label.setFixedWidth(status_width)
         self.save_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         for button in (self.open_button, self.previous_button, self.next_button):
             toolbar.addWidget(button)
         toolbar.addWidget(self.position_label, 1)
-        toolbar.addWidget(QLabel("Angle"))
-        toolbar.addWidget(angle_controls)
-        toolbar.addWidget(self.auto_level_button)
-        toolbar.addWidget(self.show_horizon_button)
-        toolbar.addWidget(self.horizon_alternatives)
-        toolbar.addWidget(self.ratio_combo)
-        toolbar.addWidget(self.lock_checkbox)
-        toolbar.addWidget(self.snap_checkbox)
+        toolbar.addWidget(self.angle_group)
+        toolbar.addWidget(self.aspect_group)
         toolbar.addWidget(self.save_label)
         self.view = CropView()
         layout.addLayout(toolbar)
@@ -436,14 +498,15 @@ class CropWindow(QMainWindow):
         self.rotation_slider.valueChanged.connect(self._rotation_slider_changed)
         self.rotation_reset.clicked.connect(lambda: self.rotation_slider.setValue(0))
         self.auto_level_button.clicked.connect(self._auto_level_clicked)
-        self.show_horizon_button.clicked.connect(self._show_horizon_clicked)
-        self.horizon_alternatives.currentIndexChanged.connect(
-            self._horizon_alternative_selected
-        )
+        self.show_horizon_button.clicked.connect(self._toggle_horizon_visibility)
         self.view.horizon_candidate_selected.connect(self._horizon_guide_selected)
         self.lock_checkbox.toggled.connect(self._update_crop_mode)
         self.snap_checkbox.toggled.connect(self._update_crop_mode)
+        self.lock_checkbox.toggled.connect(self._update_lock_icon)
+        self.snap_checkbox.toggled.connect(self._update_snap_icon)
+        self.position_label.clicked.connect(self._reveal_current_photo)
         self.view.crop_changed.connect(self._crop_edited)
+        self._update_lock_icon(self.lock_checkbox.isChecked())
         self._update_crop_mode()
 
     def _populate_ratios(self) -> None:
@@ -458,6 +521,7 @@ class CropWindow(QMainWindow):
         self._add_shortcut(Qt.Key.Key_Right, lambda: self.navigate(1))
         self._add_shortcut(Qt.Key.Key_L, self._toggle_lock)
         self._add_shortcut(Qt.Key.Key_S, self._toggle_snap)
+        self._add_shortcut(Qt.Key.Key_H, self._show_horizon_clicked)
         self._add_shortcut(QKeySequence.StandardKey.Open, self._choose_folder)
         self._add_shortcut(QKeySequence.StandardKey.Save, self._start_save)
         for index in range(min(9, len(self._ratios))):
@@ -693,7 +757,31 @@ class CropWindow(QMainWindow):
 
     def _show_horizon_clicked(self) -> None:
         """Reveal detected horizon candidates without changing the current angle."""
-        self._analyze_horizon(apply_best=False)
+        self._toggle_horizon_visibility()
+
+    def _toggle_horizon_visibility(self) -> None:
+        """Toggle candidate guides, analyzing only when no cached candidates exist."""
+        if self.show_horizon_button.isChecked():
+            if self._horizon_candidates:
+                self.view.set_horizon_candidates(
+                    self._horizon_candidates,
+                    self._selected_horizon_candidate,
+                )
+                self._update_horizon_visibility_icon(True)
+            else:
+                self._analyze_horizon(apply_best=False)
+        else:
+            self.view.set_horizon_candidates(())
+            self._update_horizon_visibility_icon(False)
+
+    def _update_horizon_visibility_icon(self, visible: bool) -> None:
+        """Reflect candidate visibility with an open- or closed-eye icon."""
+        icon_name = "fa5s.eye" if visible else "fa5s.eye-slash"
+        self.show_horizon_button.setIcon(qta.icon(icon_name, color="#f4f2ec"))
+        action = "Hide" if visible else "Show"
+        self.show_horizon_button.setToolTip(
+            f"{action} detected horizon candidates without changing the angle (H)"
+        )
 
     def _analyze_horizon(self, *, apply_best: bool) -> None:
         """Start asynchronous horizon analysis in apply or reveal-only mode."""
@@ -706,6 +794,8 @@ class CropWindow(QMainWindow):
         task.signals.horizon.connect(self._horizon_analysis_finished)
         self.auto_level_button.setEnabled(False)
         self.show_horizon_button.setEnabled(False)
+        self.auto_level_button.setToolTip("Analyzing horizon candidates...")
+        self.show_horizon_button.setToolTip("Analyzing horizon candidates... (H)")
         self._load_pool.start(task)
 
     def _horizon_analysis_finished(
@@ -719,55 +809,48 @@ class CropWindow(QMainWindow):
         path = Path(path_text)
         if path != self._current_path:
             return
-        self.auto_level_button.setText("Auto")
         self.auto_level_button.setEnabled(path in self._preview_cache)
         self.show_horizon_button.setEnabled(path in self._preview_cache)
-        self.auto_level_button.setToolTip(
-            error or "Estimate a level angle from prominent near-horizontal lines"
+        self.auto_level_button.setToolTip(error or "Auto level to the strongest candidate")
+        self.show_horizon_button.setToolTip(
+            error or "Show detected candidates without changing the angle (H)"
         )
-        self.horizon_alternatives.blockSignals(True)
-        self.horizon_alternatives.clear()
         self._horizon_candidates = tuple(candidates)
-        for index, candidate in enumerate(candidates):
-            prefix = ("Best" if index == 0 else "Alt") if apply_best else str(index + 1)
-            self.horizon_alternatives.addItem(
-                f"{prefix} {candidate.angle_degrees:+.1f}°",
-                candidate.angle_degrees,
-            )
         selected_index = 0 if candidates and apply_best else -1
-        self.horizon_alternatives.setCurrentIndex(selected_index)
-        self.horizon_alternatives.setVisible(bool(candidates))
-        self.horizon_alternatives.blockSignals(False)
+        self._selected_horizon_candidate = selected_index
         self.view.set_horizon_candidates(tuple(candidates), selected_index)
+        self.show_horizon_button.setChecked(bool(candidates))
+        self._update_horizon_visibility_icon(bool(candidates))
         if candidates and apply_best:
             self.rotation_slider.setValue(round(candidates[0].angle_degrees * 10))
         elif not candidates:
-            self.auto_level_button.setText("No level found")
-
-    def _horizon_alternative_selected(self, index: int) -> None:
-        """Apply the selected auto-level angle through the existing slider."""
-        angle = self.horizon_alternatives.itemData(index)
-        if angle is not None:
-            self.rotation_slider.setValue(round(float(angle) * 10))
-            self.view.set_horizon_candidates(self._horizon_candidates, index)
+            self.auto_level_button.setToolTip(
+                error or "No level candidates found in this preview"
+            )
 
     def _horizon_guide_selected(self, index: int) -> None:
-        """Select a clicked overlay guide and synchronize its menu and angle."""
-        self.horizon_alternatives.blockSignals(True)
-        self.horizon_alternatives.setCurrentIndex(index)
-        self.horizon_alternatives.blockSignals(False)
-        self._horizon_alternative_selected(index)
+        """Apply an image-line selection through the existing angle slider."""
+        if not 0 <= index < len(self._horizon_candidates):
+            return
+        candidate = self._horizon_candidates[index]
+        self._selected_horizon_candidate = index
+        self.rotation_slider.setValue(round(candidate.angle_degrees * 10))
+        self.view.set_horizon_candidates(self._horizon_candidates, index)
 
     def _clear_horizon_candidates(self) -> None:
         """Clear suggestions when switching to another photo."""
-        self.horizon_alternatives.blockSignals(True)
-        self.horizon_alternatives.clear()
-        self.horizon_alternatives.setVisible(False)
-        self.horizon_alternatives.blockSignals(False)
         self._horizon_candidates = ()
+        self._selected_horizon_candidate = -1
         self.view.set_horizon_candidates(())
-        self.auto_level_button.setText("Auto")
+        self.show_horizon_button.setChecked(False)
+        self._update_horizon_visibility_icon(False)
+        self.auto_level_button.setToolTip(
+            "Estimate a level angle from prominent near-horizontal lines"
+        )
         self.auto_level_button.setEnabled(False)
+        self.show_horizon_button.setToolTip(
+            "Show detected horizon candidates without changing the angle (H)"
+        )
         self.show_horizon_button.setEnabled(False)
 
     def _rotation_changed(self, angle: float) -> None:
@@ -945,6 +1028,45 @@ class CropWindow(QMainWindow):
     def _toggle_snap(self) -> None:
         """Toggle freeform aspect-ratio snapping."""
         self.snap_checkbox.toggle()
+
+    def _update_lock_icon(self, locked: bool) -> None:
+        """Reflect ratio-lock state in the lock control's icon and tooltip."""
+        self.lock_checkbox.setIcon(
+            qta.icon("fa5s.lock" if locked else "fa5s.lock-open", color="#f4f2ec")
+        )
+        self.lock_checkbox.setToolTip(
+            f"Crop ratio {'locked' if locked else 'unlocked'} (L)"
+        )
+
+    def _update_snap_icon(self, enabled: bool) -> None:
+        """Reflect snapping state with a magnet or red disabled-state icon."""
+        if enabled:
+            snap_icon = qta.icon("fa5s.magnet", color="#45d6d0")
+        else:
+            snap_icon = qta.icon(
+                "fa5s.magnet",
+                "fa5s.ban",
+                options=[
+                    {"color": "#f4f2ec"},
+                    {"color": "#e45858", "scale_factor": 0.9},
+                ],
+            )
+        self.snap_checkbox.setIcon(snap_icon)
+        self.snap_checkbox.setToolTip(
+            f"Aspect-ratio snapping {'enabled' if enabled else 'disabled'} (S)"
+        )
+
+    def _reveal_current_photo(self) -> None:
+        """Reveal the current RAW photo in the platform's file manager."""
+        if self._current_path is None:
+            return
+        path = str(self._current_path.resolve())
+        if sys.platform == "darwin":
+            QProcess.startDetached("open", ["-R", path])
+        elif sys.platform == "win32":
+            QProcess.startDetached("explorer", [f"/select,{path}"])
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
 
     def _choose_folder(self) -> None:
         """Prompt for a folder and open its CR3 files."""
