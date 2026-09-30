@@ -13,7 +13,6 @@ from photo_workflow.crop_tool.model import (
     AspectRatio,
     CropRect,
     closest_aspect_ratio,
-    crop_aspect_ratio,
     resize_from_anchor,
 )
 
@@ -77,11 +76,8 @@ class CropView(QWidget):
 
     def set_crop(self, crop: CropRect | None) -> None:
         """Set the active normalized crop without emitting an edit."""
-        if crop is None or self._snap_ratio is None or not self._matches_snap_ratio(
-            crop, self._snap_ratio
-        ):
-            self._snap_ratio = None
         self._crop = crop
+        self._snap_ratio = self._matching_snap_ratio(crop) if crop is not None else None
         self.update()
 
     def set_rotation(self, angle_degrees: float) -> None:
@@ -110,9 +106,12 @@ class CropView(QWidget):
         self._locked_ratio = locked_ratio
         self._snap_ratios = snap_ratios
         self._snap_tolerance = snap_tolerance
-        if locked_ratio is not None or not snap_ratios:
-            self._snap_ratio = None
-            self.update()
+        self._snap_ratio = (
+            self._matching_snap_ratio(self._crop)
+            if self._crop is not None
+            else None
+        )
+        self.update()
 
     def paintEvent(self, event: object) -> None:
         """Paint the preview, shaded crop mask, and crop guides."""
@@ -644,10 +643,6 @@ class CropView(QWidget):
             self._snap_ratios,
             tolerance=self._snap_tolerance,
         )
-
-    def _matches_snap_ratio(self, crop: CropRect, ratio: AspectRatio) -> bool:
-        actual_ratio = crop_aspect_ratio(crop, self._image_width, self._image_height)
-        return abs(actual_ratio / ratio.value - 1) <= 1e-6
 
     def _draw_snap_label(
         self,

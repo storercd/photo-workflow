@@ -301,3 +301,33 @@ def test_freeform_snap_uses_wider_range_and_marks_snapped_crop() -> None:
     assert view._snap_ratio is None
     view.close()
     app.quit()
+
+
+def test_loaded_freeform_crop_shows_snap_state_without_modifying_bounds() -> None:
+    """An existing crop near a configured ratio is indicated immediately on load."""
+    app = QApplication.instance() or QApplication([])
+    view = CropView()
+    view.resize(500, 400)
+    image = QImage(QSize(400, 400), QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.white)
+    view.set_image(image, 1000, 1000)
+    crop = CropRect(0.1, 0.1, 0.516, 0.6)
+    view.set_crop(crop)
+    view.set_crop_mode(
+        locked_ratio=None,
+        snap_ratios=(AspectRatio(4, 5, "4:5"),),
+        snap_tolerance=0.05,
+    )
+
+    assert view._crop == crop
+    assert view._snap_ratio == AspectRatio(4, 5, "4:5")
+    rendered = QImage(view.size(), QImage.Format.Format_RGB32)
+    rendered.fill(Qt.GlobalColor.black)
+    view.render(rendered)
+    assert any(
+        rendered.pixelColor(x, y).name() == "#55e39f"
+        for y in range(rendered.height())
+        for x in range(rendered.width())
+    )
+    view.close()
+    app.quit()
