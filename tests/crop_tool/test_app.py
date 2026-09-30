@@ -314,17 +314,35 @@ def test_compact_navigation_and_filename_reveal_controls(
     app.quit()
 
 
-def test_show_candidates_keyboard_shortcut_is_bound_to_h() -> None:
-    """The H shortcut invokes the same reveal-only action as the Show icon."""
+def test_auto_and_show_shortcuts_invoke_their_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A invokes Auto and H toggles candidate visibility through the button."""
     app = QApplication.instance() or QApplication([])
     window = CropWindow()
-    show_shortcuts = [
-        shortcut
+    shortcuts = {
+        shortcut.key().toString(): shortcut
         for shortcut in window.findChildren(QShortcut)
-        if shortcut.key().toString() == "H"
-    ]
+    }
+    analysis_modes: list[bool] = []
+    monkeypatch.setattr(
+        window,
+        "_analyze_horizon",
+        lambda *, apply_best: analysis_modes.append(apply_best),
+    )
+    window.auto_level_button.setEnabled(True)
+    window.show_horizon_button.setEnabled(True)
 
-    assert len(show_shortcuts) == 1
+    assert "A" in shortcuts
+    assert "A" in window.auto_level_button.toolTip()
+
+    shortcuts["H"].activated.emit()
+    assert window.show_horizon_button.isChecked()
+    assert analysis_modes == [False]
+    shortcuts["H"].activated.emit()
+    assert not window.show_horizon_button.isChecked()
+    assert analysis_modes == [False]
+
     window.close()
     app.quit()
 

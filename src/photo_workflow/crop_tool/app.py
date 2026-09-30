@@ -435,7 +435,7 @@ class CropWindow(QMainWindow):
         self.auto_level_button = QToolButton()
         self.auto_level_button.setIcon(qta.icon("fa5s.magic", color="#45d6d0"))
         self.auto_level_button.setToolTip(
-            "Estimate a level angle from prominent near-horizontal lines"
+            "Auto-level to the strongest detected line (A)"
         )
         self.auto_level_button.setAccessibleName("Auto level")
         self.auto_level_button.setFixedSize(28, 28)
@@ -519,6 +519,7 @@ class CropWindow(QMainWindow):
         """Install navigation, crop-mode, snap, open, and save shortcuts."""
         self._add_shortcut(Qt.Key.Key_Left, lambda: self.navigate(-1))
         self._add_shortcut(Qt.Key.Key_Right, lambda: self.navigate(1))
+        self._add_shortcut(Qt.Key.Key_A, self._auto_level_clicked)
         self._add_shortcut(Qt.Key.Key_L, self._toggle_lock)
         self._add_shortcut(Qt.Key.Key_S, self._toggle_snap)
         self._add_shortcut(Qt.Key.Key_H, self._show_horizon_clicked)
@@ -756,8 +757,8 @@ class CropWindow(QMainWindow):
         self._analyze_horizon(apply_best=True)
 
     def _show_horizon_clicked(self) -> None:
-        """Reveal detected horizon candidates without changing the current angle."""
-        self._toggle_horizon_visibility()
+        """Activate the Show control so shortcut and button state remain synchronized."""
+        self.show_horizon_button.click()
 
     def _toggle_horizon_visibility(self) -> None:
         """Toggle candidate guides, analyzing only when no cached candidates exist."""
@@ -845,7 +846,7 @@ class CropWindow(QMainWindow):
         self.show_horizon_button.setChecked(False)
         self._update_horizon_visibility_icon(False)
         self.auto_level_button.setToolTip(
-            "Estimate a level angle from prominent near-horizontal lines"
+            "Auto-level to the strongest detected line (A)"
         )
         self.auto_level_button.setEnabled(False)
         self.show_horizon_button.setToolTip(
