@@ -17,6 +17,7 @@ from PySide6.QtCore import (
     QIODevice,
     QObject,
     QProcess,
+    QRectF,
     QRunnable,
     QSize,
     Qt,
@@ -26,11 +27,18 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
     QDesktopServices,
+    QIcon,
     QImage,
     QImageIOHandler,
     QImageReader,
     QKeySequence,
+    QLinearGradient,
+    QPainter,
+    QPixmap,
     QShortcut,
     QTransform,
 )
@@ -42,6 +50,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
+    QSizePolicy,
     QSlider,
     QStyle,
     QToolButton,
@@ -60,6 +70,7 @@ from photo_workflow.crop_tool.metadata import (
     PhotoMetadata,
     extract_preview,
     read_photo_metadata,
+    read_photo_ratings,
     write_photo_crop,
 )
 from photo_workflow.crop_tool.model import (
@@ -106,6 +117,7 @@ class WorkerSignals(QObject):
     finished = Signal(str)
     saved = Signal(str, int, object, float, str)
     horizon = Signal(str, object, str, bool)
+    ratings = Signal(int, object, str)
 
 
 class ClickableLabel(QLabel):
@@ -122,6 +134,36 @@ class ClickableLabel(QLabel):
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+
+class RatingFilterPanel(QWidget):
+    """Compact pair of rating filters with an overlay for the initial scan."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """Initialize a filter row and its scan-status veil."""
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.scan_overlay = QLabel("Scanning ratings", self)
+        self.scan_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scan_overlay.setStyleSheet(
+            "QLabel { background: rgba(32, 36, 39, 235); color: #f4f2ec; "
+            "border: 1px solid #777; padding: 2px 5px; }"
+        )
+        self.scan_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.scan_overlay.hide()
+
+    def resizeEvent(self, event: object) -> None:
+        """Keep the scan-status veil stretched over the filter controls."""
+        super().resizeEvent(event)
+        self.scan_overlay.setGeometry(self.rect())
+        if self.scan_overlay.isVisible():
+            self.scan_overlay.raise_()
+
+    def set_scanning(self, scanning: bool) -> None:
+        """Show or hide the scan veil over the filter row."""
+        self.scan_overlay.setVisible(scanning)
+        if scanning:
+            self.scan_overlay.raise_()
 
 
 def displayed_image_size(metadata: PhotoMetadata, rotation_angle: float) -> tuple[float, float]:
@@ -338,6 +380,27 @@ class HorizonAnalysisTask(QRunnable):
         )
 
 
+class RatingScanTask(QRunnable):
+    """Read sidecar star ratings and color labels for one folder in a worker."""
+
+    def __init__(self, generation: int, raw_paths: list[Path]) -> None:
+        """Initialize a scan for a snapshot of the current folder's photo list."""
+        super().__init__()
+        self.generation = generation
+        self.raw_paths = raw_paths
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        """Read ratings and emit them without blocking the UI thread."""
+        try:
+            ratings = read_photo_ratings(self.raw_paths)
+            error = ""
+        except Exception as exception:
+            ratings = {}
+            error = str(exception)
+        self.signals.ratings.emit(self.generation, ratings, error)
+
+
 class CropWindow(QMainWindow):
     """Folder-based crop editor with asynchronous preview and XMP I/O."""
 
@@ -348,6 +411,14 @@ class CropWindow(QMainWindow):
         self.resize(1280, 820)
         self._ratios, self._snap_tolerance = load_crop_settings()
         self._photos: list[Path] = []
+        self._all_photos: list[Path] = []
+        self._photo_ratings: dict[Path, tuple[int, str | None]] = {}
+        self._ratings_loaded = False
+        self._rating_scan_generation = 0
+        self._rating_scan_error = ""
+        self._star_filter: int | None = None
+        self._color_filter: str | None = None
+        self._pending_filter_refresh = False
         self._current_index = -1
         self._navigation_direction = 1
         self._current_metadata: PhotoMetadata | None = None
@@ -370,6 +441,8 @@ class CropWindow(QMainWindow):
         self._close_requested = False
         self._load_pool = QThreadPool(self)
         self._load_pool.setMaxThreadCount(3)
+        self._rating_pool = QThreadPool(self)
+        self._rating_pool.setMaxThreadCount(1)
         self._load_failures: set[Path] = set()
         self._save_pool = QThreadPool(self)
         self._save_pool.setMaxThreadCount(1)
@@ -404,10 +477,86 @@ class CropWindow(QMainWindow):
         self.next_button.setIcon(qta.icon("fa5s.arrow-right"))
         self.next_button.setToolTip("Next photo (→)")
         self.next_button.setAccessibleName("Next photo")
-        self.position_label = ClickableLabel("No folder open")
-        self.position_label.setMinimumWidth(260)
+        self.position_label = ClickableLabel("")
         self.position_label.setToolTip("Reveal the current photo in the file manager")
         self.position_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.position_count_label = QLabel("No folder open")
+        self.position_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        navigation_panel = QWidget()
+        navigation_layout = QVBoxLayout(navigation_panel)
+        navigation_layout.setContentsMargins(0, 0, 0, 0)
+        navigation_layout.setSpacing(1)
+        navigation_layout.addWidget(self.position_count_label)
+        navigation_buttons = QHBoxLayout()
+        navigation_buttons.setContentsMargins(0, 0, 0, 0)
+        navigation_buttons.setSpacing(2)
+        navigation_buttons.addWidget(self.previous_button)
+        navigation_buttons.addWidget(self.next_button)
+        navigation_layout.addLayout(navigation_buttons)
+        self.star_filter_button = QToolButton()
+        self.star_filter_button.setIcon(qta.icon("fa5s.star", color="#e5bd48"))
+        self.star_filter_button.setText("*")
+        self.star_filter_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.star_filter_button.setFixedWidth(52)
+        self.star_filter_button.setToolTip("Filter by minimum star rating")
+        self.star_filter_button.setAccessibleName("Filter by star rating")
+        self.star_filter_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.star_filter_button.setEnabled(False)
+        star_menu = QMenu(self.star_filter_button)
+        star_group = QActionGroup(star_menu)
+        star_group.setExclusive(True)
+        self._star_filter_actions: dict[int | None, QAction] = {}
+        star_options = [
+            (None, "Any stars"),
+            *((value, f"{value} stars or more") for value in range(1, 6)),
+        ]
+        for stars, label in star_options:
+            action = QAction(label, star_group)
+            action.setCheckable(True)
+            action.setChecked(stars is None)
+            action.triggered.connect(
+                lambda checked=False, selected=stars: self._set_star_filter(selected)
+            )
+            star_menu.addAction(action)
+            self._star_filter_actions[stars] = action
+        self.star_filter_button.setMenu(star_menu)
+        self.color_filter_button = QToolButton()
+        self.color_filter_button.setIcon(self._color_filter_icon(None))
+        self.color_filter_button.setFixedSize(32, 28)
+        self.color_filter_button.setAutoRaise(True)
+        self.color_filter_button.setToolTip("Filter by Lightroom color label")
+        self.color_filter_button.setAccessibleName("Filter by color label")
+        self.color_filter_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.color_filter_button.setEnabled(False)
+        color_menu = QMenu(self.color_filter_button)
+        color_group = QActionGroup(color_menu)
+        color_group.setExclusive(True)
+        self._color_filter_actions: dict[str | None, QAction] = {}
+        color_options = [
+            (None, "Any color"),
+            ("", "Unlabeled"),
+            ("Red", "Red"),
+            ("Yellow", "Yellow"),
+            ("Green", "Green"),
+            ("Blue", "Blue"),
+            ("Purple", "Purple"),
+        ]
+        for label_value, label in color_options:
+            action = QAction(label, color_group)
+            action.setCheckable(True)
+            action.setChecked(label_value is None)
+            action.triggered.connect(
+                lambda checked=False, selected=label_value: self._set_color_filter(selected)
+            )
+            color_menu.addAction(action)
+            self._color_filter_actions[label_value] = action
+        self.color_filter_button.setMenu(color_menu)
+        self.rating_filter_panel = RatingFilterPanel()
+        rating_filter_layout = QHBoxLayout(self.rating_filter_panel)
+        rating_filter_layout.setContentsMargins(0, 0, 0, 0)
+        rating_filter_layout.setSpacing(2)
+        rating_filter_layout.addWidget(self.star_filter_button)
+        rating_filter_layout.addWidget(self.color_filter_button)
         self.ratio_combo = QComboBox()
         self.ratio_combo.setFixedWidth(104)
         self.ratio_combo.setToolTip(
@@ -503,8 +652,9 @@ class CropWindow(QMainWindow):
         status_width = self.save_label.fontMetrics().horizontalAdvance("Saving...") + 8
         self.save_label.setFixedWidth(status_width)
         self.save_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        for button in (self.open_button, self.previous_button, self.next_button):
-            toolbar.addWidget(button)
+        toolbar.addWidget(self.open_button)
+        toolbar.addWidget(navigation_panel)
+        toolbar.addWidget(self.rating_filter_panel)
         toolbar.addWidget(self.position_label, 1)
         toolbar.addWidget(self.angle_group)
         toolbar.addWidget(self.side_by_side_button)
@@ -547,9 +697,190 @@ class CropWindow(QMainWindow):
         self.lock_checkbox.toggled.connect(self._update_lock_icon)
         self.snap_checkbox.toggled.connect(self._update_snap_icon)
         self.position_label.clicked.connect(self._reveal_current_photo)
+        self._update_filter_button_labels()
         self.view.crop_changed.connect(self._crop_edited)
         self._update_lock_icon(self.lock_checkbox.isChecked())
         self._update_crop_mode()
+
+    def _set_star_filter(self, minimum_stars: int | None) -> None:
+        self._star_filter = minimum_stars
+        self._update_filter_button_labels()
+        self._refresh_rating_filter()
+
+    def _set_color_filter(self, color_label: str | None) -> None:
+        self._color_filter = color_label
+        self._update_filter_button_labels()
+        self._refresh_rating_filter()
+
+    def _update_filter_button_labels(self) -> None:
+        self.star_filter_button.setText(
+            f"{self._star_filter}+" if self._star_filter is not None else "*"
+        )
+        self.color_filter_button.setText("")
+        self.color_filter_button.setIcon(self._color_filter_icon(self._color_filter))
+        self.star_filter_button.setToolTip(
+            f"Star filter: {self._star_filter}+ stars"
+            if self._star_filter is not None
+            else "Filter by minimum star rating"
+        )
+        self.color_filter_button.setToolTip(
+            f"Color filter: {'Unlabeled' if self._color_filter == '' else self._color_filter}"
+            if self._color_filter is not None
+            else "Filter by Lightroom color label"
+        )
+
+    @staticmethod
+    def _color_filter_icon(color_label: str | None) -> QIcon:
+        colors = {
+            "Red": "#e45858",
+            "Yellow": "#e5bd48",
+            "Green": "#55e39f",
+            "Blue": "#5297e8",
+            "Purple": "#aa70d6",
+        }
+        if color_label == "":
+            color = "#8c9299"
+        elif color_label is not None:
+            color = colors.get(color_label, "#8c9299")
+        else:
+            pixmap = QPixmap(24, 18)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            gradient = QLinearGradient(2, 2, 22, 2)
+            for position, rainbow_color in enumerate(
+                ("#e45858", "#e5bd48", "#55e39f", "#5297e8", "#aa70d6")
+            ):
+                gradient.setColorAt(position / 4, QColor(rainbow_color))
+            painter.setBrush(gradient)
+            painter.setPen(QColor("#f4f2ec"))
+            painter.drawRoundedRect(QRectF(2, 2, 20, 14), 2, 2)
+            painter.end()
+            return QIcon(pixmap)
+        return qta.icon("fa5s.square", options=[{"color": color}])
+
+    def _start_rating_scan(self, raw_paths: list[Path]) -> None:
+        self._rating_scan_generation += 1
+        self._ratings_loaded = False
+        self._rating_scan_error = ""
+        self.star_filter_button.setEnabled(False)
+        self.color_filter_button.setEnabled(False)
+        self.rating_filter_panel.set_scanning(True)
+        self.previous_button.setEnabled(False)
+        self.next_button.setEnabled(False)
+        self._update_position_label()
+        task = RatingScanTask(self._rating_scan_generation, raw_paths)
+        task.signals.ratings.connect(self._rating_scan_finished)
+        self._rating_pool.start(task)
+
+    def _rating_scan_finished(
+        self,
+        generation: int,
+        ratings: dict[Path, tuple[int, str | None]],
+        error: str,
+    ) -> None:
+        if generation != self._rating_scan_generation:
+            return
+        self._rating_scan_error = error
+        self._ratings_loaded = not error
+        if error:
+            self._star_filter = None
+            self._color_filter = None
+            self._update_filter_button_labels()
+            self._photos = list(self._all_photos)
+            self.previous_button.setEnabled(self._current_index > 0)
+            self.next_button.setEnabled(0 <= self._current_index < len(self._photos) - 1)
+            self._update_position_label()
+            self.star_filter_button.setToolTip(f"Rating filters unavailable: {error}")
+            self.color_filter_button.setToolTip(f"Rating filters unavailable: {error}")
+            self.rating_filter_panel.set_scanning(True, "Ratings unavailable")
+            return
+        self._photo_ratings = ratings
+        self.rating_filter_panel.set_scanning(False)
+        self.star_filter_button.setEnabled(True)
+        self.color_filter_button.setEnabled(True)
+        self._refresh_rating_filter()
+
+    def _refresh_rating_filter(self) -> None:
+        if not self._ratings_loaded:
+            return
+        filtered_photos = [
+            path
+            for path in self._all_photos
+            if self._photo_matches_rating_filters(path)
+        ]
+        if filtered_photos == self._photos:
+            self.previous_button.setEnabled(self._current_index > 0)
+            self.next_button.setEnabled(0 <= self._current_index < len(self._photos) - 1)
+            self._update_position_label()
+            return
+        if self._dirty or self._save_busy:
+            self._pending_filter_refresh = True
+            self._start_save()
+            return
+
+        previous_index = max(self._current_index, 0)
+        current_path = self._current_path
+        self._photos = filtered_photos
+        if current_path in filtered_photos:
+            self._current_index = filtered_photos.index(current_path)
+            self.previous_button.setEnabled(self._current_index > 0)
+            self.next_button.setEnabled(self._current_index < len(filtered_photos) - 1)
+            self._update_position_label()
+            self._schedule_prefetch(self._current_index)
+        elif filtered_photos:
+            self._show_photo(min(previous_index, len(filtered_photos) - 1))
+        else:
+            self._clear_current_photo_for_empty_filter()
+
+    def _photo_matches_rating_filters(self, raw_path: Path) -> bool:
+        stars, color = self._photo_ratings.get(raw_path, (0, None))
+        if self._star_filter is not None and stars < self._star_filter:
+            return False
+        if (
+            self._color_filter is not None
+            and (color or "").casefold() != self._color_filter.casefold()
+        ):
+            return False
+        return True
+
+    def _clear_current_photo_for_empty_filter(self) -> None:
+        self._current_index = -1
+        self._current_path = None
+        self._current_metadata = None
+        self._current_crop = None
+        self._starting_crop = None
+        self._starting_rotation = None
+        self.revert_button.setEnabled(False)
+        self.rotation_slider.setEnabled(False)
+        self.rotation_reset.setEnabled(False)
+        self.auto_level_button.setEnabled(False)
+        self.show_horizon_button.setEnabled(False)
+        self._set_preview_loading(False)
+        self._set_preview_image(QImage(), 1, 1)
+        self._set_preview_crop(None)
+        self.view.set_horizon_candidates(())
+        self.position_count_label.setText("0 / 0 [Filtered]")
+        self.position_label.setText("No photos match filters")
+
+    def _update_position_label(self) -> None:
+        if self._current_path is None or self._current_index < 0:
+            return
+        filtered_note = (
+            " [Filtered]"
+            if self._ratings_loaded and self._rating_filters_active()
+            else " [Ratings unavailable]"
+            if self._rating_scan_error
+            else " [Scanning ratings]"
+            if not self._ratings_loaded and self._all_photos
+            else ""
+        )
+        self.position_count_label.setText(
+            f"{self._current_index + 1} / {len(self._photos)}{filtered_note}"
+        )
+        self.position_label.setText(self._current_path.name)
+
+    def _rating_filters_active(self) -> bool:
+        return self._star_filter is not None or self._color_filter is not None
 
     def _set_side_by_side_visible(self, visible: bool) -> None:
         """Show or hide the read-only crop result pane."""
@@ -657,7 +988,7 @@ class CropWindow(QMainWindow):
             self._pending_navigation = 0
             self._start_save()
             return
-        self._photos = (
+        self._all_photos = (
             sorted(
                 path
                 for path in folder.iterdir()
@@ -666,17 +997,28 @@ class CropWindow(QMainWindow):
             if folder.is_dir()
             else []
         )
+        self._photos = list(self._all_photos)
+        self._photo_ratings = {path: (0, None) for path in self._all_photos}
         self._load_failures.clear()
         self._queued_loads.clear()
         self._navigation_direction = 1
         self._current_index = -1
         self._current_path = None
-        if not self._photos:
-            self.position_label.setText("No CR3 files in folder")
+        if not self._all_photos:
+            self._rating_scan_generation += 1
+            self._ratings_loaded = False
+            self._photo_ratings = {}
+            self.position_count_label.setText("No CR3 files in folder")
+            self.position_label.setText("")
             self._set_preview_loading(False)
             self._set_preview_image(QImage(), 1, 1)
             self._set_preview_crop(None)
+            self.star_filter_button.setEnabled(False)
+            self.color_filter_button.setEnabled(False)
+            self.previous_button.setEnabled(False)
+            self.next_button.setEnabled(False)
             return
+        self._start_rating_scan(self._all_photos)
         self._show_photo(find_photo_index(self._photos, selected_photo))
 
     def navigate(self, offset: int) -> None:
@@ -697,6 +1039,12 @@ class CropWindow(QMainWindow):
         """Select a photo, restore cached state, and queue nearby previews."""
         self._current_index = index
         self._current_path = self._photos[index]
+        self.previous_button.setEnabled(
+            self._ratings_loaded and self._current_index > 0
+        )
+        self.next_button.setEnabled(
+            self._ratings_loaded and self._current_index < len(self._photos) - 1
+        )
         self._current_crop = None
         self._current_metadata = self._metadata_cache.get(self._current_path)
         self._current_rotation = 0.0
@@ -715,9 +1063,7 @@ class CropWindow(QMainWindow):
         self._saved_version = 0
         self._dirty = False
         self.save_label.setText(" ")
-        self.position_label.setText(
-            f"{index + 1} / {len(self._photos)}    {self._current_path.name}"
-        )
+        self._update_position_label()
         self._set_preview_loading(True)
         self._set_preview_crop(None)
         cached_image = self._preview_cache.get(self._current_path)
@@ -1088,6 +1434,9 @@ class CropWindow(QMainWindow):
             self._current_metadata = saved_metadata
         if self._dirty:
             self._start_save()
+        elif self._pending_filter_refresh:
+            self._pending_filter_refresh = False
+            self._refresh_rating_filter()
         elif self._pending_folder is not None:
             folder = self._pending_folder
             selected_photo = self._pending_photo
@@ -1255,6 +1604,8 @@ class CropWindow(QMainWindow):
         self._queued_loads.clear()
         self._load_pool.clear()
         self._load_pool.waitForDone()
+        self._rating_pool.clear()
+        self._rating_pool.waitForDone()
         event.accept()
 
 

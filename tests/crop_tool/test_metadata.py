@@ -74,6 +74,44 @@ def test_read_photo_metadata_defaults_to_full_frame_when_crop_is_missing(
     assert metadata.crop == CropRect(left=0, top=0, right=1, bottom=1)
 
 
+def test_read_photo_ratings_batches_xmp_stars_and_color_labels(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Read ratings in one ExifTool call and default missing sidecars to unrated."""
+    first_raw = tmp_path / "first.cr3"
+    second_raw = tmp_path / "second.cr3"
+    first_xmp = first_raw.with_suffix(".xmp")
+    first_xmp.touch()
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            json.dumps(
+                [
+                    {
+                        "SourceFile": str(first_xmp),
+                        "XMP-xmp:Rating": 4,
+                        "XMP-xmp:Label": "Red",
+                    }
+                ]
+            ),
+        )
+
+    monkeypatch.setattr(crop_metadata, "require_exiftool", lambda: "exiftool")
+    monkeypatch.setattr(crop_metadata.subprocess, "run", run)
+
+    ratings = crop_metadata.read_photo_ratings([first_raw, second_raw])
+
+    assert ratings == {first_raw: (4, "Red"), second_raw: (0, None)}
+    assert len(calls) == 1
+    assert str(first_xmp) in calls[0]
+    assert str(second_raw.with_suffix(".xmp")) not in calls[0]
+
+
 def test_read_photo_metadata_swaps_dimensions_for_rotated_orientation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -98,6 +98,54 @@ def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
     )
 
 
+def read_photo_ratings(raw_paths: list[Path]) -> dict[Path, tuple[int, str | None]]:
+    """
+    Read Lightroom star ratings and color labels for a batch of RAW photos.
+
+    Returns:
+        A mapping from each RAW path to its integer rating and optional color label.
+    """
+    ratings = {path: (0, None) for path in raw_paths}
+    sidecars = [path.with_suffix(".xmp") for path in raw_paths]
+    existing_sidecars = [path for path in sidecars if path.is_file()]
+    if not existing_sidecars:
+        return ratings
+    result = subprocess.run(
+        [
+            require_exiftool(),
+            "-j",
+            "-G1",
+            "-XMP-xmp:Rating",
+            "-XMP-xmp:Label",
+            *(str(path) for path in existing_sidecars),
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    sidecar_to_raw = {
+        str(sidecar.resolve()): raw_path
+        for raw_path, sidecar in zip(raw_paths, sidecars, strict=True)
+    }
+    for record in json.loads(result.stdout):
+        raw_path = sidecar_to_raw.get(str(Path(record["SourceFile"]).resolve()))
+        if raw_path is None:
+            continue
+        rating_value = _grouped_tag(record, "Rating")
+        label_value = _grouped_tag(record, "Label")
+        rating = min(max(int(float(rating_value or 0)), 0), 5)
+        label = str(label_value).strip() if label_value else None
+        ratings[raw_path] = (rating, label or None)
+    return ratings
+
+
+def _grouped_tag(record: dict[str, object], tag_name: str) -> object | None:
+    return next(
+        (value for key, value in record.items() if key.endswith(f":{tag_name}")),
+        None,
+    )
+
+
 def extract_preview(raw_path: Path, tag: str = "PreviewImage") -> bytes:
     """
     Extract one embedded JPEG preview from a RAW file.

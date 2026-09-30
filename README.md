@@ -129,6 +129,8 @@ dropped photo opens its parent folder with that photo selected.
 
 The app currently supports Canon `.CR3` files and uses their embedded JPEG
 previews, loading a small preview before the larger `JpgFromRaw` preview.
+Star-rating and Lightroom color-label filters can be combined; the photo count
+indicates when the visible list is filtered.
 Previous/next are `Left`/`Right`; `L` toggles ratio lock, `S` toggles snapping,
 `1`-`8` select a configured ratio, `Command+O` opens a folder, and `Command+S`
 saves the current crop. The angle control rotates the photo beneath the upright

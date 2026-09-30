@@ -308,6 +308,13 @@ def test_compact_navigation_and_filename_reveal_controls(
     assert window.next_button.text() == ""
     assert not window.previous_button.icon().isNull()
     assert not window.next_button.icon().isNull()
+    toolbar = window.rating_filter_panel.parentWidget().layout().itemAt(0).layout()
+    assert (
+        toolbar.indexOf(window.previous_button.parentWidget())
+        < toolbar.indexOf(window.rating_filter_panel)
+        < toolbar.indexOf(window.position_label)
+        < toolbar.indexOf(window.angle_group)
+    )
     window.position_label.clicked.emit()
 
     assert calls == [("open", ["-R", str(raw_path.resolve())])]
@@ -385,6 +392,97 @@ def test_auto_and_show_shortcuts_invoke_their_actions(
     assert not window.show_horizon_button.isChecked()
     assert analysis_modes == [False]
 
+    window.close()
+    app.quit()
+
+
+def test_star_and_color_filter_menus_combine_and_mark_filtered_count() -> None:
+    """Menu selections combine minimum stars with a color label and mark the count."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    photos = [Path(f"photo-{index}.cr3") for index in range(3)]
+    window._all_photos = photos
+    window._photos = list(photos)
+    window._photo_ratings = {
+        photos[0]: (2, "Red"),
+        photos[1]: (4, "Red"),
+        photos[2]: (5, "Blue"),
+    }
+    window._ratings_loaded = True
+    window._current_path = photos[1]
+    window._current_index = 1
+
+    window._star_filter_actions[4].trigger()
+
+    assert window._photos == photos[1:]
+    assert window._current_path == photos[1]
+    assert window.position_count_label.text().startswith("1 / 2 [Filtered]")
+    assert window.star_filter_button.text() == "4+"
+
+    window._color_filter_actions["Red"].trigger()
+
+    assert window._photos == [photos[1]]
+    assert window._current_path == photos[1]
+    assert window.position_count_label.text().startswith("1 / 1 [Filtered]")
+    assert window.color_filter_button.text() == ""
+    assert not window.color_filter_button.icon().isNull()
+
+    window._star_filter_actions[None].trigger()
+    assert window._photos == [photos[0], photos[1]]
+    assert window.position_count_label.text().startswith("2 / 2 [Filtered]")
+    window.close()
+    app.quit()
+
+
+def test_rating_filters_show_no_matches_and_clear_back_to_all_photos() -> None:
+    """Unlabeled/empty filters remain visible and clearing them restores browsing."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    photos = [Path("labeled.cr3"), Path("other.cr3")]
+    window._all_photos = photos
+    window._photos = list(photos)
+    window._photo_ratings = {
+        photos[0]: (2, "Red"),
+        photos[1]: (1, "Blue"),
+    }
+    window._ratings_loaded = True
+    window._current_path = photos[0]
+    window._current_index = 0
+    shown: list[int] = []
+    window._show_photo = shown.append
+
+    window._set_color_filter("")
+
+    assert window.color_filter_button.text() == ""
+    assert window._photos == []
+    assert window._current_path is None
+    assert window.position_count_label.text().startswith("0 / 0 [Filtered]")
+    assert not window.rotation_slider.isEnabled()
+
+    window._set_color_filter(None)
+
+    assert window._photos == photos
+    assert shown == [0]
+    window.close()
+    app.quit()
+
+
+def test_filter_scan_overlay_covers_disabled_rating_controls() -> None:
+    """The startup scan message overlays both filter buttons until scan completion."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+
+    assert window.star_filter_button.text() == "*"
+    assert window.color_filter_button.text() == ""
+    window._start_rating_scan([Path("one.cr3")])
+
+    assert not window.star_filter_button.isEnabled()
+    assert not window.color_filter_button.isEnabled()
+    assert window.rating_filter_panel.scan_overlay.text() == "Scanning ratings"
+    assert not window.rating_filter_panel.scan_overlay.isHidden()
+
+    window._rating_scan_generation += 1
+    window._rating_pool.clear()
     window.close()
     app.quit()
 

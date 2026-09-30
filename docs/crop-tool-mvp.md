@@ -30,6 +30,7 @@ The first release should prove two things: the folder can be navigated without w
 ## Crop Interaction
 
 - Display the full preview with a crop overlay.
+- Filter the folder by minimum Lightroom star rating and/or color label; the position counter marks when the visible photo list is filtered.
 - Drag inside the crop to reposition it; drag an edge or corner to resize it; drag outside the crop to start a new crop.
 - Keep all four crop corners inside the actual photo boundary, including when the photo is rotated; do not allow the crop to include the blank corners of the rotated image's rectangular bounds.
 - Use a generous 24-pixel edge/corner hit zone for crop resizing.
