@@ -83,11 +83,18 @@ PREFETCH_REVERSE_COUNT = 4
 SAVE_DELAY_MS = 350
 PREVIEW_MAX_DIMENSION = 2560
 RATIO_MATCH_TOLERANCE = 0.005
+AUTO_LEVEL_KEY = Qt.Key.Key_A
+SHOW_HORIZON_KEY = Qt.Key.Key_H
 
 
 def shortcut_modifier() -> str:
     """Return the conventional modifier label for the current platform."""
     return "⌘" if sys.platform == "darwin" else "Ctrl+"
+
+
+def key_hint(key: Qt.Key) -> str:
+    """Return the platform-native tooltip label for a keyboard key."""
+    return QKeySequence(key).toString(QKeySequence.SequenceFormat.NativeText)
 
 
 class WorkerSignals(QObject):
@@ -435,7 +442,7 @@ class CropWindow(QMainWindow):
         self.auto_level_button = QToolButton()
         self.auto_level_button.setIcon(qta.icon("fa5s.magic", color="#45d6d0"))
         self.auto_level_button.setToolTip(
-            "Auto-level to the strongest detected line (A)"
+            f"Auto-level to the strongest detected line ({key_hint(AUTO_LEVEL_KEY)})"
         )
         self.auto_level_button.setAccessibleName("Auto level")
         self.auto_level_button.setFixedSize(28, 28)
@@ -444,7 +451,8 @@ class CropWindow(QMainWindow):
         self.show_horizon_button = QToolButton()
         self.show_horizon_button.setIcon(qta.icon("fa5s.eye-slash", color="#f4f2ec"))
         self.show_horizon_button.setToolTip(
-            "Show detected horizon candidates without changing the angle (H)"
+            "Show detected horizon candidates without changing the angle "
+            f"({key_hint(SHOW_HORIZON_KEY)})"
         )
         self.show_horizon_button.setAccessibleName("Show horizon candidates")
         self.show_horizon_button.setCheckable(True)
@@ -599,10 +607,10 @@ class CropWindow(QMainWindow):
         """Install navigation, crop-mode, snap, open, and save shortcuts."""
         self._add_shortcut(Qt.Key.Key_Left, lambda: self.navigate(-1))
         self._add_shortcut(Qt.Key.Key_Right, lambda: self.navigate(1))
-        self._add_shortcut(Qt.Key.Key_A, self._auto_level_clicked)
+        self._add_shortcut(AUTO_LEVEL_KEY, self._auto_level_clicked)
         self._add_shortcut(Qt.Key.Key_L, self._toggle_lock)
         self._add_shortcut(Qt.Key.Key_S, self._toggle_snap)
-        self._add_shortcut(Qt.Key.Key_H, self._show_horizon_clicked)
+        self._add_shortcut(SHOW_HORIZON_KEY, self._show_horizon_clicked)
         self._add_shortcut(QKeySequence.StandardKey.Open, self._choose_folder)
         self._add_shortcut(QKeySequence.StandardKey.Save, self._start_save)
         for index in range(min(9, len(self._ratios))):
@@ -866,7 +874,8 @@ class CropWindow(QMainWindow):
         self.show_horizon_button.setIcon(qta.icon(icon_name, color="#f4f2ec"))
         action = "Hide" if visible else "Show"
         self.show_horizon_button.setToolTip(
-            f"{action} detected horizon candidates without changing the angle (H)"
+            f"{action} detected horizon candidates without changing the angle "
+            f"({key_hint(SHOW_HORIZON_KEY)})"
         )
 
     def _analyze_horizon(self, *, apply_best: bool) -> None:
@@ -880,8 +889,12 @@ class CropWindow(QMainWindow):
         task.signals.horizon.connect(self._horizon_analysis_finished)
         self.auto_level_button.setEnabled(False)
         self.show_horizon_button.setEnabled(False)
-        self.auto_level_button.setToolTip("Analyzing horizon candidates...")
-        self.show_horizon_button.setToolTip("Analyzing horizon candidates... (H)")
+        self.auto_level_button.setToolTip(
+            f"Analyzing horizon candidates... ({key_hint(AUTO_LEVEL_KEY)})"
+        )
+        self.show_horizon_button.setToolTip(
+            f"Analyzing horizon candidates... ({key_hint(SHOW_HORIZON_KEY)})"
+        )
         self._load_pool.start(task)
 
     def _horizon_analysis_finished(
@@ -897,9 +910,13 @@ class CropWindow(QMainWindow):
             return
         self.auto_level_button.setEnabled(path in self._preview_cache)
         self.show_horizon_button.setEnabled(path in self._preview_cache)
-        self.auto_level_button.setToolTip(error or "Auto level to the strongest candidate")
+        auto_message = error or "Auto level to the strongest candidate"
+        self.auto_level_button.setToolTip(
+            f"{auto_message} ({key_hint(AUTO_LEVEL_KEY)})"
+        )
         self.show_horizon_button.setToolTip(
-            error or "Show detected candidates without changing the angle (H)"
+            f"{error or 'Show detected candidates without changing the angle'} "
+            f"({key_hint(SHOW_HORIZON_KEY)})"
         )
         self._horizon_candidates = tuple(candidates)
         selected_index = 0 if candidates and apply_best else -1
@@ -911,7 +928,8 @@ class CropWindow(QMainWindow):
             self.rotation_slider.setValue(round(candidates[0].angle_degrees * 10))
         elif not candidates:
             self.auto_level_button.setToolTip(
-                error or "No level candidates found in this preview"
+                f"{error or 'No level candidates found in this preview'} "
+                f"({key_hint(AUTO_LEVEL_KEY)})"
             )
 
     def _horizon_guide_selected(self, index: int) -> None:
@@ -931,11 +949,12 @@ class CropWindow(QMainWindow):
         self.show_horizon_button.setChecked(False)
         self._update_horizon_visibility_icon(False)
         self.auto_level_button.setToolTip(
-            "Auto-level to the strongest detected line (A)"
+            f"Auto-level to the strongest detected line ({key_hint(AUTO_LEVEL_KEY)})"
         )
         self.auto_level_button.setEnabled(False)
         self.show_horizon_button.setToolTip(
-            "Show detected horizon candidates without changing the angle (H)"
+            "Show detected horizon candidates without changing the angle "
+            f"({key_hint(SHOW_HORIZON_KEY)})"
         )
         self.show_horizon_button.setEnabled(False)
 

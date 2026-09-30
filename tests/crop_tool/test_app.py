@@ -628,6 +628,8 @@ def test_show_horizon_candidates_does_not_change_angle_until_candidate_selected(
     assert window.angle_group.title() == "Angle"
     assert not window.auto_level_button.icon().isNull()
     assert window.auto_level_button.accessibleName() == "Auto level"
+    auto_hint = f"({crop_app.key_hint(crop_app.AUTO_LEVEL_KEY)})"
+    assert auto_hint in window.auto_level_button.toolTip()
     assert not window.show_horizon_button.icon().isNull()
     assert window.show_horizon_button.accessibleName() == "Show horizon candidates"
     window.rotation_slider.setValue(17)
@@ -644,6 +646,7 @@ def test_show_horizon_candidates_does_not_change_angle_until_candidate_selected(
         False,
     )
 
+    assert auto_hint in window.auto_level_button.toolTip()
     assert window.rotation_slider.value() == 17
     assert window.rotation_value.text() == "1.7°"
     assert window._current_rotation == pytest.approx(original_angle)
