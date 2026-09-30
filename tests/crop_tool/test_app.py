@@ -230,6 +230,21 @@ def test_parse_aspect_ratios_reads_ratio_labels() -> None:
     assert ratios[2].value == pytest.approx(1.91)
 
 
+def test_save_status_keeps_a_fixed_toolbar_width() -> None:
+    """Save-state text changes do not resize the toolbar status slot."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    status_width = window.save_label.width()
+
+    for status in ("Saving...", "Saved", "Unsaved", " "):
+        window.save_label.setText(status)
+        window.save_label.adjustSize()
+        assert window.save_label.width() == status_width
+
+    window.close()
+    app.quit()
+
+
 @pytest.mark.parametrize("value", ["bad", "1:0", "0:1", "-4:5"])
 def test_parse_aspect_ratios_rejects_invalid_values(value: str) -> None:
     """Reject malformed or nonpositive aspect-ratio settings clearly."""

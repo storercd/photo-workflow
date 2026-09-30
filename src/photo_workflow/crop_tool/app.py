@@ -335,6 +335,9 @@ class CropWindow(QMainWindow):
         self.snap_checkbox = QCheckBox("Snap")
         self.snap_checkbox.setChecked(True)
         self.save_label = QLabel(" ")
+        status_width = self.save_label.fontMetrics().horizontalAdvance("Saving...") + 8
+        self.save_label.setFixedWidth(status_width)
+        self.save_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         for button in (self.open_button, self.previous_button, self.next_button):
             toolbar.addWidget(button)
         toolbar.addWidget(self.position_label, 1)
