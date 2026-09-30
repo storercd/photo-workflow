@@ -6,6 +6,7 @@ from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
+from photo_workflow.crop_tool.horizon import HorizonCandidate
 from photo_workflow.crop_tool.model import CropRect
 from photo_workflow.crop_tool.view import CropView
 
@@ -102,5 +103,82 @@ def test_rotated_image_uses_neutral_gray_canvas_outside_photo() -> None:
     view.render(rendered)
 
     assert rendered.pixelColor(0, 0).name() == "#555555"
+    view.close()
+    app.quit()
+
+
+def test_horizon_candidate_lines_rotate_with_the_source_image() -> None:
+    """Guide endpoints stay attached to image content as the view angle changes."""
+    app = QApplication.instance() or QApplication([])
+    view = CropView()
+    view.resize(500, 400)
+    image = QImage(QSize(400, 300), QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.black)
+    view.set_image(image, 400, 300)
+    candidate = HorizonCandidate(5, 300, (0, 0.4), (1, 0.6))
+    image_rect = view._image_rect()
+
+    view.set_rotation(0)
+    start, end = view._horizon_line_points(candidate, image_rect)
+    initial_slope = (end.y() - start.y()) / (end.x() - start.x())
+
+    view.set_rotation(12)
+    rotated_start, rotated_end = view._horizon_line_points(candidate, image_rect)
+    rotated_slope = (rotated_end.y() - rotated_start.y()) / (
+        rotated_end.x() - rotated_start.x()
+    )
+
+    assert initial_slope == pytest.approx(0.15)
+    assert rotated_slope != pytest.approx(initial_slope)
+    view.close()
+    app.quit()
+
+
+def test_selected_horizon_guide_is_visible_in_rendered_preview() -> None:
+    """The active candidate is drawn in amber over the source image."""
+    app = QApplication.instance() or QApplication([])
+    view = CropView()
+    view.resize(500, 400)
+    image = QImage(QSize(400, 300), QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.white)
+    view.set_image(image, 400, 300)
+    view.set_crop(CropRect(0, 0, 1, 1))
+    view.set_horizon_candidates(
+        (HorizonCandidate(0, 400, (0, 0.5), (1, 0.5)),),
+        selected_index=0,
+    )
+    rendered = QImage(view.size(), QImage.Format.Format_RGB32)
+    rendered.fill(Qt.GlobalColor.black)
+
+    view.render(rendered)
+
+    assert rendered.pixelColor(250, 200).name() == "#ffd166"
+    view.close()
+    app.quit()
+
+
+def test_clicking_horizon_guide_emits_its_candidate_index() -> None:
+    """Clicking an alternate line selects it instead of starting a crop drag."""
+    app = QApplication.instance() or QApplication([])
+    view = CropView()
+    view.resize(500, 400)
+    image = QImage(QSize(400, 300), QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.white)
+    view.set_image(image, 400, 300)
+    view.set_crop(CropRect(0, 0, 1, 1))
+    view.set_horizon_candidates(
+        (
+            HorizonCandidate(-2, 400, (0, 0.3), (1, 0.3)),
+            HorizonCandidate(4, 350, (0, 0.7), (1, 0.7)),
+        ),
+        selected_index=0,
+    )
+    selections: list[int] = []
+    view.horizon_candidate_selected.connect(selections.append)
+
+    QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=QPoint(250, 275))
+
+    assert selections == [1]
+    assert view._drag_kind is None
     view.close()
     app.quit()

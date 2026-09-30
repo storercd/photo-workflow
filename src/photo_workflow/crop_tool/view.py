@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from math import cos, radians, sin
+from math import cos, hypot, radians, sin
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
+from photo_workflow.crop_tool.horizon import HorizonCandidate
 from photo_workflow.crop_tool.model import (
     AspectRatio,
     CropRect,
@@ -16,6 +17,7 @@ from photo_workflow.crop_tool.model import (
 )
 
 EDGE_HIT_PIXELS = 24
+HORIZON_HIT_PIXELS = 10
 MIN_CROP_PIXELS = 2
 CANVAS_COLOR = QColor("#555555")
 
@@ -24,6 +26,7 @@ class CropView(QWidget):
     """Display a photo and emit normalized crop changes from mouse gestures."""
 
     crop_changed = Signal(object)
+    horizon_candidate_selected = Signal(int)
 
     def __init__(self) -> None:
         """Initialize an empty image surface."""
@@ -45,6 +48,8 @@ class CropView(QWidget):
         self._drag_anchor = QPointF()
         self._drag_origin = QPointF()
         self._initial_crop: CropRect | None = None
+        self._horizon_candidates: tuple[HorizonCandidate, ...] = ()
+        self._selected_horizon_candidate = -1
 
     def set_image(self, image: QImage, image_width: int, image_height: int) -> None:
         """Set the displayed preview and source dimensions."""
@@ -55,7 +60,7 @@ class CropView(QWidget):
 
     @property
     def is_loading(self) -> bool:
-        """Return whether the selected photo is still loading."""
+        """Whether the selected photo is still loading."""
         return self._loading
 
     def set_loading(self, loading: bool) -> None:
@@ -75,6 +80,16 @@ class CropView(QWidget):
     def set_rotation(self, angle_degrees: float) -> None:
         """Rotate the photo beneath the upright crop frame."""
         self._rotation_angle = angle_degrees
+        self.update()
+
+    def set_horizon_candidates(
+        self,
+        candidates: tuple[HorizonCandidate, ...],
+        selected_index: int = -1,
+    ) -> None:
+        """Set image-anchored candidate lines and the guide to emphasize."""
+        self._horizon_candidates = candidates
+        self._selected_horizon_candidate = selected_index
         self.update()
 
     def set_crop_mode(
@@ -134,6 +149,7 @@ class CropView(QWidget):
             return
         crop_rect = self._crop_rect(image_rect)
         if crop_rect is None:
+            self._draw_horizon_candidates(painter, image_rect)
             return
 
         mask = QPainterPath()
@@ -141,6 +157,7 @@ class CropView(QWidget):
         cutout = QPainterPath()
         cutout.addRect(crop_rect)
         painter.fillPath(mask.subtracted(cutout), QColor(0, 0, 0, 145))
+        self._draw_horizon_candidates(painter, image_rect)
         painter.setPen(QPen(QColor("#f4f2ec"), 1.5))
         painter.drawRect(crop_rect)
         painter.setPen(QPen(QColor(244, 242, 236, 110), 1))
@@ -169,6 +186,102 @@ class CropView(QWidget):
             crop_rect.top() + crop_rect.height() * 2 / 3,
         )
 
+    def _draw_horizon_candidates(self, painter: QPainter, image_rect: QRectF) -> None:
+        """Draw candidate guides in the same image-local transform as the preview."""
+        if not self._horizon_candidates:
+            return
+        painter.save()
+        painter.translate(image_rect.center())
+        painter.rotate(self._rotation_angle)
+        local_image = QRectF(
+            -image_rect.width() / 2,
+            -image_rect.height() / 2,
+            image_rect.width(),
+            image_rect.height(),
+        )
+        painter.setClipRect(local_image)
+        for index, candidate in enumerate(self._horizon_candidates):
+            selected = index == self._selected_horizon_candidate
+            color = QColor("#ffd166") if selected else QColor("#45d6d0")
+            pen = QPen(color, 2.5 if selected else 1.5)
+            if not selected:
+                pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            start = QPointF(
+                (candidate.line_start[0] - 0.5) * image_rect.width(),
+                (candidate.line_start[1] - 0.5) * image_rect.height(),
+            )
+            end = QPointF(
+                (candidate.line_end[0] - 0.5) * image_rect.width(),
+                (candidate.line_end[1] - 0.5) * image_rect.height(),
+            )
+            painter.drawLine(start, end)
+        painter.restore()
+
+    def _horizon_line_points(
+        self,
+        candidate: HorizonCandidate,
+        image_rect: QRectF,
+    ) -> tuple[QPointF, QPointF]:
+        """
+        Map a candidate's normalized source line through the current rotation.
+
+        Returns:
+            The rotated endpoints in widget coordinates.
+        """
+        center = image_rect.center()
+        angle = radians(self._rotation_angle)
+        cosine = cos(angle)
+        sine = sin(angle)
+        points = []
+        for normalized_x, normalized_y in (
+            candidate.line_start,
+            candidate.line_end,
+        ):
+            offset_x = (normalized_x - 0.5) * image_rect.width()
+            offset_y = (normalized_y - 0.5) * image_rect.height()
+            points.append(
+                QPointF(
+                    center.x() + offset_x * cosine - offset_y * sine,
+                    center.y() + offset_x * sine + offset_y * cosine,
+                )
+            )
+        return points[0], points[1]
+
+    def _horizon_candidate_at(
+        self,
+        point: QPointF,
+        image_rect: QRectF,
+    ) -> int | None:
+        """
+        Find the closest guide within its clickable screen-space hit zone.
+
+        Returns:
+            The nearest matching candidate index, or `None` outside all hit zones.
+        """
+        nearest_index = None
+        nearest_distance = HORIZON_HIT_PIXELS
+        for index, candidate in enumerate(self._horizon_candidates):
+            start, end = self._horizon_line_points(candidate, image_rect)
+            segment_x = end.x() - start.x()
+            segment_y = end.y() - start.y()
+            segment_length_squared = segment_x * segment_x + segment_y * segment_y
+            if segment_length_squared == 0:
+                distance = hypot(point.x() - start.x(), point.y() - start.y())
+            else:
+                projection = (
+                    (point.x() - start.x()) * segment_x
+                    + (point.y() - start.y()) * segment_y
+                ) / segment_length_squared
+                projection = min(max(projection, 0), 1)
+                closest_x = start.x() + projection * segment_x
+                closest_y = start.y() + projection * segment_y
+                distance = hypot(point.x() - closest_x, point.y() - closest_y)
+            if distance <= nearest_distance:
+                nearest_index = index
+                nearest_distance = distance
+        return nearest_index
+
     def mousePressEvent(self, event: object) -> None:
         """Start a new crop or begin moving/resizing the current crop."""
         if self._loading:
@@ -177,6 +290,11 @@ class CropView(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         image_rect = self._image_rect()
+        candidate_index = self._horizon_candidate_at(event.position(), image_rect)
+        if candidate_index is not None:
+            self.horizon_candidate_selected.emit(candidate_index)
+            event.accept()
+            return
         crop_plane = self._rotated_bounds_rect(image_rect)
         point = event.position()
         if not crop_plane.contains(point):
@@ -204,7 +322,10 @@ class CropView(QWidget):
         crop_plane = self._rotated_bounds_rect(image_rect)
         point = event.position()
         if self._drag_kind is None:
-            self._update_hover_cursor(point, image_rect)
+            if self._horizon_candidate_at(point, image_rect) is not None:
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+            else:
+                self._update_hover_cursor(point, image_rect)
             return
         if not crop_plane.contains(point):
             point = QPointF(

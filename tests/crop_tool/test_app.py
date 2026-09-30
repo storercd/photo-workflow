@@ -32,6 +32,7 @@ from photo_workflow.crop_tool.app import (
     resolve_drop_path,
     update_saved_crop_cache,
 )
+from photo_workflow.crop_tool.horizon import HorizonCandidate
 from photo_workflow.crop_tool.metadata import PhotoMetadata
 from photo_workflow.crop_tool.model import CropRect
 
@@ -386,5 +387,94 @@ def test_lightroom_crop_angle_is_shown_with_opposite_user_facing_sign(
     assert window.rotation_value.text() == "0.0°"
     assert window.view._rotation_angle == pytest.approx(0)
     assert window._dirty
+    window.close()
+    app.quit()
+
+
+def test_auto_level_applies_best_candidate_and_clicking_alternate_updates_angle() -> None:
+    """Auto-level applies the strongest line suggestion and retains alternatives."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    raw_path = Path("horizon.cr3")
+    preview = QImage(QSize(640, 480), QImage.Format.Format_RGB32)
+    preview.fill(Qt.GlobalColor.black)
+    window._current_path = raw_path
+    window._current_metadata = PhotoMetadata(640, 480, CropRect(0, 0, 1, 1))
+    window._preview_cache[raw_path] = preview
+
+    window._horizon_analysis_finished(
+        str(raw_path),
+        [
+            HorizonCandidate(-3.4, 600, (0, 0.4), (1, 0.46)),
+            HorizonCandidate(2.1, 420, (0, 0.7), (1, 0.67)),
+        ],
+        "",
+        True,
+    )
+    window._save_timer.stop()
+
+    assert window.rotation_slider.value() == -34
+    assert window.rotation_value.text() == "-3.4°"
+    assert window.horizon_alternatives.count() == 2
+    assert window.horizon_alternatives.currentText() == "Best -3.4°"
+    assert window.view._selected_horizon_candidate == 0
+
+    window.horizon_alternatives.setCurrentIndex(1)
+    window._save_timer.stop()
+
+    assert window.rotation_slider.value() == 21
+    assert window.rotation_value.text() == "2.1°"
+    assert window._current_rotation == pytest.approx(2.1)
+    assert window.view._selected_horizon_candidate == 1
+    window._horizon_guide_selected(0)
+    window._save_timer.stop()
+    assert window.horizon_alternatives.currentIndex() == 0
+    assert window.rotation_slider.value() == -34
+    assert window.view._selected_horizon_candidate == 0
+    window.close()
+    app.quit()
+
+
+def test_show_horizon_candidates_does_not_change_angle_until_candidate_selected() -> None:
+    """Show reveals unselected guides and preserves rotation until user chooses one."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    raw_path = Path("horizon.cr3")
+    preview = QImage(QSize(640, 480), QImage.Format.Format_RGB32)
+    preview.fill(Qt.GlobalColor.black)
+    original_angle = 1.7
+    window._current_path = raw_path
+    window._current_rotation = original_angle
+    window._current_metadata = PhotoMetadata(640, 480, CropRect(0, 0, 1, 1))
+    window._preview_cache[raw_path] = preview
+    assert window.auto_level_button.text() == "Auto"
+    assert window.show_horizon_button.text() == "Show"
+    window.rotation_slider.setValue(17)
+    window.rotation_value.setText("1.7°")
+    window._dirty = False
+
+    window._horizon_analysis_finished(
+        str(raw_path),
+        [
+            HorizonCandidate(-3.4, 600, (0, 0.4), (1, 0.46)),
+            HorizonCandidate(2.1, 420, (0, 0.7), (1, 0.67)),
+        ],
+        "",
+        False,
+    )
+
+    assert window.rotation_slider.value() == 17
+    assert window.rotation_value.text() == "1.7°"
+    assert window._current_rotation == pytest.approx(original_angle)
+    assert not window._dirty
+    assert window.horizon_alternatives.currentIndex() == -1
+    assert window.horizon_alternatives.itemText(0) == "1 -3.4°"
+    assert window.view._selected_horizon_candidate == -1
+
+    window.horizon_alternatives.setCurrentIndex(1)
+    window._save_timer.stop()
+    assert window.rotation_slider.value() == 21
+    assert window._current_rotation == pytest.approx(2.1)
+    assert window.view._selected_horizon_candidate == 1
     window.close()
     app.quit()

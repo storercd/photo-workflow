@@ -64,7 +64,7 @@ The first release should prove two things: the folder can be navigated without w
 
 These are candidates for follow-up after crop interaction, speed, and Lightroom round-trip behavior are validated.
 
-The current prototype applies EXIF orientation to embedded previews and uses display-oriented dimensions for crop geometry. Existing Lightroom `CropAngle` metadata is preserved when saving crops; changing rotation is not yet supported.
+The current prototype applies EXIF orientation to embedded previews and uses display-oriented dimensions for crop geometry. Manual rotation is available as a follow-up beyond MVP scope. Automatic leveling analyzes the embedded preview with OpenCV, applies its top-ranked line-based suggestion, and offers alternate candidates for user selection; these suggestions are heuristic and need validation on varied scenes.
 
 ## Reliability and XMP Compatibility
 
@@ -108,8 +108,10 @@ The current prototype applies EXIF orientation to embedded previews and uses dis
 
 ## Follow-Up TODOs
 
-- [ ] Explore automatic horizon leveling using the manual rotation control.
+- [ ] Prototype automatic horizon suggestions with OpenCV: apply the strongest plausible near-horizontal line first, then allow clicking alternate candidates to adjust the existing rotation control. Keep the suggestion heuristic and user-reviewed.
 - [ ] Add an optional side-by-side view with the full image and crop boundaries on one side and the cropped preview on the other.
 - [ ] Experiment with a smoother Lightroom Classic refresh workflow so users do not need to manually force metadata rereading after an XMP update.
 - [ ] Measure navigation latency on a representative larger folder and tune preview extraction, prefetch, and cache limits based on the results.
 - [ ] Add image pan and zoom controls (move and grow/shrink the crop window, not literally panning and zooming the view) without conflicting with crop creation or adjustment gestures.
+- [ ] Something like a reset button to undo any work performed while on the current picture.  Don't need to maintain history for this, just a reset to a specific position.  Greyed out when not applicable.
+

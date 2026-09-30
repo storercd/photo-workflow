@@ -39,6 +39,11 @@ from PySide6.QtWidgets import (
 )
 
 from photo_workflow.config import DEFAULT_CONFIG_PATH
+from photo_workflow.crop_tool.horizon import (
+    HorizonCandidate,
+    detect_horizon_candidates,
+    qimage_to_rgb_array,
+)
 from photo_workflow.crop_tool.metadata import (
     PREVIEW_TAGS,
     PhotoMetadata,
@@ -77,6 +82,7 @@ class WorkerSignals(QObject):
     error = Signal(str, str)
     finished = Signal(str)
     saved = Signal(str, int, object, float, str)
+    horizon = Signal(str, object, str, bool)
 
 
 def displayed_image_size(metadata: PhotoMetadata, rotation_angle: float) -> tuple[float, float]:
@@ -269,6 +275,30 @@ class PhotoSaveTask(QRunnable):
         )
 
 
+class HorizonAnalysisTask(QRunnable):
+    """Detect plausible horizon angles without blocking the interface."""
+
+    def __init__(self, raw_path: Path, image: QImage, apply_best: bool) -> None:
+        """Initialize an analysis job with an immutable preview snapshot."""
+        super().__init__()
+        self.raw_path = raw_path
+        self.image = image.copy()
+        self.apply_best = apply_best
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        """Analyze the preview and report candidate angles or an error."""
+        try:
+            candidates = detect_horizon_candidates(qimage_to_rgb_array(self.image))
+            error = ""
+        except Exception as exception:
+            candidates = []
+            error = str(exception)
+        self.signals.horizon.emit(
+            str(self.raw_path), candidates, error, self.apply_best
+        )
+
+
 class CropWindow(QMainWindow):
     """Folder-based crop editor with asynchronous preview and XMP I/O."""
 
@@ -284,6 +314,7 @@ class CropWindow(QMainWindow):
         self._current_metadata: PhotoMetadata | None = None
         self._current_crop: CropRect | None = None
         self._current_rotation = 0.0
+        self._horizon_candidates: tuple[HorizonCandidate, ...] = ()
         self._locked_ratio: AspectRatio | None = None
         self._current_path: Path | None = None
         self._dirty = False
@@ -353,6 +384,26 @@ class CropWindow(QMainWindow):
         angle_layout.addWidget(self.rotation_slider)
         angle_layout.addWidget(self.rotation_value)
         angle_layout.addWidget(self.rotation_reset)
+        self.auto_level_button = QPushButton("Auto")
+        self.auto_level_button.setFixedWidth(
+            self.auto_level_button.fontMetrics().horizontalAdvance("No level found") + 16
+        )
+        self.auto_level_button.setToolTip(
+            "Estimate a level angle from prominent near-horizontal lines"
+        )
+        self.auto_level_button.setEnabled(False)
+        self.show_horizon_button = QPushButton("Show")
+        self.show_horizon_button.setToolTip(
+            "Show detected horizon candidates without changing the angle"
+        )
+        self.show_horizon_button.setEnabled(False)
+        self.horizon_alternatives = QComboBox()
+        self.horizon_alternatives.setFixedWidth(118)
+        self.horizon_alternatives.setPlaceholderText("Alternatives")
+        self.horizon_alternatives.setToolTip(
+            "Choose another detected line to set the rotation"
+        )
+        self.horizon_alternatives.setVisible(False)
         self.lock_checkbox = QCheckBox("Lock ratio")
         self.snap_checkbox = QCheckBox("Snap")
         self.snap_checkbox.setChecked(True)
@@ -365,6 +416,9 @@ class CropWindow(QMainWindow):
         toolbar.addWidget(self.position_label, 1)
         toolbar.addWidget(QLabel("Angle"))
         toolbar.addWidget(angle_controls)
+        toolbar.addWidget(self.auto_level_button)
+        toolbar.addWidget(self.show_horizon_button)
+        toolbar.addWidget(self.horizon_alternatives)
         toolbar.addWidget(self.ratio_combo)
         toolbar.addWidget(self.lock_checkbox)
         toolbar.addWidget(self.snap_checkbox)
@@ -381,6 +435,12 @@ class CropWindow(QMainWindow):
         self.ratio_combo.currentIndexChanged.connect(self._ratio_selected)
         self.rotation_slider.valueChanged.connect(self._rotation_slider_changed)
         self.rotation_reset.clicked.connect(lambda: self.rotation_slider.setValue(0))
+        self.auto_level_button.clicked.connect(self._auto_level_clicked)
+        self.show_horizon_button.clicked.connect(self._show_horizon_clicked)
+        self.horizon_alternatives.currentIndexChanged.connect(
+            self._horizon_alternative_selected
+        )
+        self.view.horizon_candidate_selected.connect(self._horizon_guide_selected)
         self.lock_checkbox.toggled.connect(self._update_crop_mode)
         self.snap_checkbox.toggled.connect(self._update_crop_mode)
         self.view.crop_changed.connect(self._crop_edited)
@@ -470,6 +530,7 @@ class CropWindow(QMainWindow):
         self.rotation_slider.setEnabled(False)
         self.rotation_reset.setEnabled(False)
         self.rotation_slider.blockSignals(False)
+        self._clear_horizon_candidates()
         self._version = 0
         self._saved_version = 0
         self._dirty = False
@@ -482,6 +543,8 @@ class CropWindow(QMainWindow):
         cached_image = self._preview_cache.get(self._current_path)
         if cached_image is not None:
             self._show_image(cached_image)
+            self.auto_level_button.setEnabled(True)
+            self.show_horizon_button.setEnabled(True)
         if self._current_metadata is not None:
             self._apply_metadata(self._current_path, self._current_metadata)
         self._schedule_prefetch(index)
@@ -564,6 +627,8 @@ class CropWindow(QMainWindow):
             self.view.set_image(image, display_width, display_height)
             self.view.set_crop(metadata.crop)
             self.view.set_loading(False)
+            self.auto_level_button.setEnabled(True)
+            self.show_horizon_button.setEnabled(True)
         else:
             self.view.set_crop(None)
             self.view.set_loading(True)
@@ -580,6 +645,8 @@ class CropWindow(QMainWindow):
                 self._preview_cache.popitem(last=False)
         if path == self._current_path:
             self._show_image(image)
+            self.auto_level_button.setEnabled(True)
+            self.show_horizon_button.setEnabled(True)
             if self._current_metadata is not None:
                 self.view.set_crop(self._current_metadata.crop)
                 self.view.set_loading(False)
@@ -619,6 +686,89 @@ class CropWindow(QMainWindow):
         angle = slider_value / 10
         self.rotation_value.setText(f"{angle:.1f}°")
         self._rotation_changed(angle)
+
+    def _auto_level_clicked(self) -> None:
+        """Analyze the current preview and apply its strongest angle candidate."""
+        self._analyze_horizon(apply_best=True)
+
+    def _show_horizon_clicked(self) -> None:
+        """Reveal detected horizon candidates without changing the current angle."""
+        self._analyze_horizon(apply_best=False)
+
+    def _analyze_horizon(self, *, apply_best: bool) -> None:
+        """Start asynchronous horizon analysis in apply or reveal-only mode."""
+        if self._current_path is None:
+            return
+        image = self._preview_cache.get(self._current_path)
+        if image is None:
+            return
+        task = HorizonAnalysisTask(self._current_path, image, apply_best)
+        task.signals.horizon.connect(self._horizon_analysis_finished)
+        self.auto_level_button.setEnabled(False)
+        self.show_horizon_button.setEnabled(False)
+        self._load_pool.start(task)
+
+    def _horizon_analysis_finished(
+        self,
+        path_text: str,
+        candidates: list[HorizonCandidate],
+        error: str,
+        apply_best: bool,
+    ) -> None:
+        """Show current-photo candidates and optionally apply the strongest."""
+        path = Path(path_text)
+        if path != self._current_path:
+            return
+        self.auto_level_button.setText("Auto")
+        self.auto_level_button.setEnabled(path in self._preview_cache)
+        self.show_horizon_button.setEnabled(path in self._preview_cache)
+        self.auto_level_button.setToolTip(
+            error or "Estimate a level angle from prominent near-horizontal lines"
+        )
+        self.horizon_alternatives.blockSignals(True)
+        self.horizon_alternatives.clear()
+        self._horizon_candidates = tuple(candidates)
+        for index, candidate in enumerate(candidates):
+            prefix = ("Best" if index == 0 else "Alt") if apply_best else str(index + 1)
+            self.horizon_alternatives.addItem(
+                f"{prefix} {candidate.angle_degrees:+.1f}°",
+                candidate.angle_degrees,
+            )
+        selected_index = 0 if candidates and apply_best else -1
+        self.horizon_alternatives.setCurrentIndex(selected_index)
+        self.horizon_alternatives.setVisible(bool(candidates))
+        self.horizon_alternatives.blockSignals(False)
+        self.view.set_horizon_candidates(tuple(candidates), selected_index)
+        if candidates and apply_best:
+            self.rotation_slider.setValue(round(candidates[0].angle_degrees * 10))
+        elif not candidates:
+            self.auto_level_button.setText("No level found")
+
+    def _horizon_alternative_selected(self, index: int) -> None:
+        """Apply the selected auto-level angle through the existing slider."""
+        angle = self.horizon_alternatives.itemData(index)
+        if angle is not None:
+            self.rotation_slider.setValue(round(float(angle) * 10))
+            self.view.set_horizon_candidates(self._horizon_candidates, index)
+
+    def _horizon_guide_selected(self, index: int) -> None:
+        """Select a clicked overlay guide and synchronize its menu and angle."""
+        self.horizon_alternatives.blockSignals(True)
+        self.horizon_alternatives.setCurrentIndex(index)
+        self.horizon_alternatives.blockSignals(False)
+        self._horizon_alternative_selected(index)
+
+    def _clear_horizon_candidates(self) -> None:
+        """Clear suggestions when switching to another photo."""
+        self.horizon_alternatives.blockSignals(True)
+        self.horizon_alternatives.clear()
+        self.horizon_alternatives.setVisible(False)
+        self.horizon_alternatives.blockSignals(False)
+        self._horizon_candidates = ()
+        self.view.set_horizon_candidates(())
+        self.auto_level_button.setText("Auto")
+        self.auto_level_button.setEnabled(False)
+        self.show_horizon_button.setEnabled(False)
 
     def _rotation_changed(self, angle: float) -> None:
         """Update the displayed rotation and persist it as a crop edit."""

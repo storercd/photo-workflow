@@ -28,7 +28,7 @@ class AspectRatio:
 
     @property
     def value(self) -> float:
-        """Return the ratio as a floating-point value."""
+        """The ratio as a floating-point value."""
         return self.width / self.height
 
 
@@ -56,12 +56,12 @@ class CropRect:
 
     @property
     def width(self) -> float:
-        """Return normalized crop width."""
+        """The normalized crop width."""
         return self.right - self.left
 
     @property
     def height(self) -> float:
-        """Return normalized crop height."""
+        """The normalized crop height."""
         return self.bottom - self.top
 
 

@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "mlx-whisper>=0.4.3",
+    "opencv-python-headless>=4.10",
     "Pillow>=12.2",
     "PySide6>=6.8",
 ]
