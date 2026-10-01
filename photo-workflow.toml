@@ -17,3 +17,26 @@ transcription_model = "mlx-community/whisper-medium-mlx"
 [crop_tool]
 aspect_ratios = ["1:1", "4:5", "1.91:1"]
 snap_tolerance = 0.05
+
+# Dashboard launcher icons. app_name is passed to `open -a` (macOS Launch Services),
+# so it does not need to be an exact install path. Adjust names to match your
+# installed app versions (e.g. Photoshop's year suffix).
+[[dashboard.apps]]
+name = "FastRawViewer"
+app_name = "FastRawViewer"
+
+[[dashboard.apps]]
+name = "Photo Workflow Crop"
+command = ["photo-workflow-crop"]
+
+[[dashboard.apps]]
+name = "Lightroom Classic"
+app_name = "Adobe Lightroom Classic"
+
+[[dashboard.apps]]
+name = "Photoshop"
+app_name = "Adobe Photoshop 2025"
+
+[[dashboard.apps]]
+name = "Aftershoot"
+app_name = "Aftershoot"

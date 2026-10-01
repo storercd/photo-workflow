@@ -6,9 +6,10 @@ import argparse
 import logging
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
-from photo_workflow.config import build_today_source_dir, load_config
+from photo_workflow.config import AppConfig, build_today_source_dir, load_config
 from photo_workflow.memory_card_copy import report_target_disk_space, run_memory_card_import
 from photo_workflow.rejected_folders import (
     RejectedFolderAssessment,
@@ -88,6 +89,64 @@ def open_single_target_folder(target_dirs: tuple[Path, ...]) -> None:
         open_target_folder(target_dirs[0])
 
 
+def run_import_step(config: AppConfig, source_dir: Path) -> tuple[Path, ...]:
+    """
+    Import a mounted memory card and generate video notes for each imported folder.
+
+    Returns:
+        The capture-date folders produced by the import, or the no-card fallback folder.
+    """
+    import_result = run_memory_card_import(
+        config.workflow.camera_root,
+        config=config.memory_card_copy,
+        report_disk_space=False,
+    )
+    source_dirs = import_result.target_dirs if import_result is not None else (source_dir,)
+    video_notes_start_time = time.perf_counter()
+    try:
+        for imported_dir in source_dirs:
+            run_video_notes_step(imported_dir, config=config.video_notes)
+    finally:
+        log_stage_elapsed("video notes", video_notes_start_time)
+    return source_dirs
+
+
+def run_full_import(
+    config: AppConfig,
+    *,
+    on_stage: Callable[[str], None] | None = None,
+) -> tuple[RejectedFolderAssessment, tuple[Path, ...]]:
+    """
+    Assess rejected folders, import a memory card, and report disk space (no purge).
+
+    Used by the dashboard, which handles rejected-folder purging as a separate,
+    user-reviewed step. Calls `on_stage` with a human-readable label before each stage.
+
+    Returns:
+        The rejected-folder assessment and the imported capture-date folders.
+    """
+
+    def report_stage(stage_name: str) -> None:
+        if on_stage is not None:
+            on_stage(stage_name)
+
+    source_dir = build_today_source_dir(camera_root=config.workflow.camera_root)
+    report_stage("Assessing rejected folders")
+    rejected_folder_assessment = run_rejected_folder_step(
+        config.workflow.camera_root,
+        purge_rejected=False,
+    )
+    report_stage("Importing memory card & generating video notes")
+    source_dirs = run_import_step(config, source_dir)
+    report_stage("Reporting disk space")
+    report_target_disk_space(
+        resolve_disk_usage_path(config.workflow.camera_root),
+        config=config.memory_card_copy,
+        reclaimable_percent=rejected_folder_assessment.total_percent_of_disk,
+    )
+    return rejected_folder_assessment, source_dirs
+
+
 def main(argv: list[str] | None = None) -> None:
     """Run the configured workflow steps in order."""
     parsed_args = parse_args(argv)
@@ -102,18 +161,7 @@ def main(argv: list[str] | None = None) -> None:
         config.workflow.camera_root,
         purge_rejected=parsed_args.purge_rejected,
     )
-    import_result = run_memory_card_import(
-        config.workflow.camera_root,
-        config=config.memory_card_copy,
-        report_disk_space=False,
-    )
-    source_dirs = import_result.target_dirs if import_result is not None else (source_dir,)
-    video_notes_start_time = time.perf_counter()
-    try:
-        for imported_dir in source_dirs:
-            run_video_notes_step(imported_dir, config=config.video_notes)
-    finally:
-        log_stage_elapsed("video notes", video_notes_start_time)
+    source_dirs = run_import_step(config, source_dir)
 
     report_target_disk_space(
         resolve_disk_usage_path(config.workflow.camera_root),

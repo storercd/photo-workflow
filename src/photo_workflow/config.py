@@ -18,6 +18,13 @@ DEFAULT_IGNORED_CARD_EXTENSIONS = (".ctg", ".log", ".tmp", ".to3")
 DEFAULT_MAX_DURATION_SECONDS = 10.0
 DEFAULT_TRANSCRIPTION_MODEL = "mlx-community/whisper-tiny-mlx"
 VALID_COPY_VERIFICATION_METHODS = {"basic", "crc32"}
+DEFAULT_DASHBOARD_APPS = (
+    {"name": "FastRawViewer", "app_name": "FastRawViewer"},
+    {"name": "Photo Workflow Crop", "command": ["photo-workflow-crop"]},
+    {"name": "Lightroom Classic", "app_name": "Adobe Lightroom Classic"},
+    {"name": "Photoshop", "app_name": "Adobe Photoshop 2025"},
+    {"name": "Aftershoot", "app_name": "Aftershoot"},
+)
 
 
 @dataclass(frozen=True)
@@ -48,12 +55,38 @@ class VideoNotesConfig:
 
 
 @dataclass(frozen=True)
+class DashboardAppLauncher:
+    """One clickable application launcher shown on the dashboard."""
+
+    name: str
+    app_name: str | None = None
+    command: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class DashboardConfig:
+    """Settings specific to the workflow dashboard."""
+
+    apps: tuple[DashboardAppLauncher, ...] = field(
+        default_factory=lambda: tuple(
+            DashboardAppLauncher(
+                name=entry["name"],
+                app_name=entry.get("app_name"),
+                command=tuple(entry["command"]) if "command" in entry else None,
+            )
+            for entry in DEFAULT_DASHBOARD_APPS
+        )
+    )
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Complete workflow configuration loaded from TOML."""
 
     workflow: WorkflowConfig = field(default_factory=WorkflowConfig)
     memory_card_copy: MemoryCardCopyConfig = field(default_factory=MemoryCardCopyConfig)
     video_notes: VideoNotesConfig = field(default_factory=VideoNotesConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
 
 
 def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
@@ -75,6 +108,7 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     workflow_config = config_data.get("workflow", {})
     memory_card_copy_config = config_data.get("memory_card_copy", {})
     video_notes_config = config_data.get("video_notes", {})
+    dashboard_config = config_data.get("dashboard", {})
 
     copy_verification = memory_card_copy_config.get(
         "copy_verification",
@@ -139,7 +173,49 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
                 )
             ),
         ),
+        dashboard=DashboardConfig(apps=parse_dashboard_apps(dashboard_config.get("apps"))),
     )
+
+
+def parse_dashboard_apps(apps_config: object) -> tuple[DashboardAppLauncher, ...]:
+    """
+    Return dashboard app launchers parsed from TOML, falling back to defaults.
+
+    Returns:
+        A tuple of configured dashboard app launchers in declared order.
+
+    Raises:
+        ValueError: If an entry is malformed or specifies both or neither launch target.
+    """
+    if apps_config is None:
+        return DashboardConfig().apps
+    if not isinstance(apps_config, list):
+        raise ValueError("dashboard.apps must be a TOML array of tables")
+
+    launchers: list[DashboardAppLauncher] = []
+    for entry in apps_config:
+        if not isinstance(entry, dict) or not entry.get("name"):
+            raise ValueError("each dashboard.apps entry requires a non-empty 'name'")
+
+        app_name = entry.get("app_name")
+        command = entry.get("command")
+        if bool(app_name) == bool(command):
+            raise ValueError(
+                f"dashboard.apps entry {entry['name']!r} must set exactly one of "
+                "'app_name' or 'command'"
+            )
+        if command is not None and not isinstance(command, list):
+            raise ValueError(f"dashboard.apps entry {entry['name']!r} 'command' must be an array")
+
+        launchers.append(
+            DashboardAppLauncher(
+                name=str(entry["name"]),
+                app_name=str(app_name) if app_name else None,
+                command=tuple(str(part) for part in command) if command else None,
+            )
+        )
+
+    return tuple(launchers)
 
 
 def load_workflow_config(config_path: Path = DEFAULT_CONFIG_PATH) -> WorkflowConfig:
@@ -157,6 +233,11 @@ def load_memory_card_copy_config(
 def load_video_notes_config(config_path: Path = DEFAULT_CONFIG_PATH) -> VideoNotesConfig:
     """Return the video-notes configuration."""
     return load_config(config_path).video_notes
+
+
+def load_dashboard_config(config_path: Path = DEFAULT_CONFIG_PATH) -> DashboardConfig:
+    """Return the dashboard configuration."""
+    return load_config(config_path).dashboard
 
 
 def build_today_source_dir(

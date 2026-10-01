@@ -17,6 +17,45 @@ ruff check .
 pytest
 ```
 
+## Dashboard
+
+Launch the visual dashboard to run the workflow and open related tools without the
+command line:
+
+```bash
+uv run photo-workflow-dashboard
+```
+
+The dashboard provides:
+
+- **Launch** icons that open FastRawViewer, Photo Workflow Crop, Lightroom Classic,
+  Photoshop, and Aftershoot with a click. Non-crop apps are opened by name via macOS
+  Launch Services (`open -a`), so exact install paths aren't required.
+- An **Import Memory Card** button that runs the same steps as `photo-workflow-run`
+  (rejected-folder assessment, memory-card import, video-note generation, and a disk
+  space report), enabled automatically whenever a memory card is detected under
+  `card_mount_root`.
+- A **Purge Rejected…** button, enabled whenever `_Rejected` folders are found under
+  the configured camera root. It opens a review dialog listing each folder with its
+  reclaimable space so you can deselect any folders you want to keep before purging.
+
+A live log panel at the bottom shows progress as each stage runs.
+
+Configure the launcher icons in [photo-workflow.toml](photo-workflow.toml):
+
+```toml
+[[dashboard.apps]]
+name = "Aftershoot"
+app_name = "Aftershoot"
+
+[[dashboard.apps]]
+name = "Photo Workflow Crop"
+command = ["photo-workflow-crop"]
+```
+
+Each entry needs exactly one of `app_name` (an installed macOS application name) or
+`command` (an explicit command to run).
+
 ## Workflow
 
 The workflow now runs in three steps:

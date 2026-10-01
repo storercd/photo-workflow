@@ -24,6 +24,7 @@ photo-workflow-short-video-notes = "photo_workflow.video_notes:main"
 photo-workflow-benchmark-transcription = "photo_workflow.video_notes:benchmark_main"
 photo-workflow-install-font = "photo_workflow.video_notes:install_font_main"
 photo-workflow-crop = "photo_workflow.crop_tool.app:main"
+photo-workflow-dashboard = "photo_workflow.dashboard.app:main"
 
 [project.optional-dependencies]
 dev = [
