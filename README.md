@@ -31,6 +31,12 @@ The dashboard provides:
 - **Launch** icons that open FastRawViewer, Photo Workflow Crop, Lightroom Classic,
   Photoshop, and Aftershoot with a click. Non-crop apps are opened by name via macOS
   Launch Services (`open -a`), so exact install paths aren't required.
+- An **"Open last imported folder in supporting apps"** checkbox, enabled once an
+  import has completed. When checked, launchers marked `supports_target_folder`
+  (FastRawViewer and Photo Workflow Crop by default) open directly into the just-
+  imported folder — FastRawViewer opens its first file, and the crop tool opens the
+  folder itself. Uncheck it (or leave it off before any import) to open those apps
+  normally. Other apps (Lightroom, Photoshop, Aftershoot) always open neutrally.
 - An **Import Memory Card** button that runs the same steps as `photo-workflow-run`
   (rejected-folder assessment, memory-card import, video-note generation, and a disk
   space report), enabled automatically whenever a memory card is detected under
@@ -39,7 +45,9 @@ The dashboard provides:
   the configured camera root. It opens a review dialog listing each folder with its
   reclaimable space so you can deselect any folders you want to keep before purging.
 
-A live log panel at the bottom shows progress as each stage runs.
+A live log panel at the bottom shows progress as each stage runs, and launch failures
+(e.g. an app name that doesn't match what's installed) are reported in the status bar
+and log instead of failing silently.
 
 Configure the launcher icons in [photo-workflow.toml](photo-workflow.toml):
 
@@ -51,10 +59,12 @@ app_name = "Aftershoot"
 [[dashboard.apps]]
 name = "Photo Workflow Crop"
 command = ["photo-workflow-crop"]
+supports_target_folder = true
 ```
 
 Each entry needs exactly one of `app_name` (an installed macOS application name) or
-`command` (an explicit command to run).
+`command` (an explicit command to run), plus an optional `supports_target_folder`
+(defaults to `false`) to opt that launcher into the target-folder checkbox above.
 
 ## Workflow
 

@@ -11,6 +11,11 @@ from photo_workflow.config import DashboardAppLauncher
 
 LOGGER = logging.getLogger(__name__)
 APPLICATION_RESOLUTION_TIMEOUT_SECONDS = 2
+APPLICATION_LAUNCH_TIMEOUT_SECONDS = 5
+
+
+class LaunchError(RuntimeError):
+    """Raised when a dashboard application shortcut fails to launch."""
 
 
 def resolve_application_path(app_name: str) -> Path | None:
@@ -30,27 +35,103 @@ def resolve_application_path(app_name: str) -> Path | None:
     return resolved_path if resolved_path.exists() else None
 
 
-def launch_app(launcher: DashboardAppLauncher) -> None:
-    """Launch a dashboard application shortcut without blocking the UI."""
+def first_file_in_folder(folder: Path) -> Path | None:
+    """Return the first (alphabetically) non-hidden file directly inside a folder."""
+    if not folder.is_dir():
+        return None
+    candidates = sorted(
+        entry for entry in folder.iterdir() if entry.is_file() and not entry.name.startswith(".")
+    )
+    return candidates[0] if candidates else None
+
+
+def launch_app(launcher: DashboardAppLauncher, target_folder: Path | None = None) -> None:
+    """
+    Launch a dashboard application shortcut, optionally pointed at a target folder.
+
+    May propagate LaunchError if the underlying launch command reports a failure.
+    """
+    effective_folder = target_folder if launcher.supports_target_folder else None
+
     if launcher.command is not None:
-        launch_command(launcher.command)
+        launch_command(launcher.command, effective_folder)
         return
 
-    launch_named_application(launcher.app_name)
+    launch_named_application(launcher.app_name, effective_folder)
 
 
-def launch_named_application(app_name: str) -> None:
-    """Launch a macOS application by name using Launch Services."""
+def launch_named_application(app_name: str, target_folder: Path | None = None) -> None:
+    """
+    Launch a macOS application by name using Launch Services.
+
+    May propagate LaunchError if Launch Services reports it could not open the application.
+    """
+    args = ["open", "-a", app_name]
+    if target_folder is not None:
+        target_file = first_file_in_folder(target_folder)
+        if target_file is not None:
+            args.append(str(target_file))
+        else:
+            LOGGER.warning(
+                "no file found in %s; opening %s without a target file", target_folder, app_name
+            )
+
     LOGGER.info("launching application %s", app_name)
-    subprocess.Popen(["open", "-a", app_name])
+    _run_launch(args, description=app_name)
 
 
-def launch_command(command: tuple[str, ...]) -> None:
-    """Launch an explicit command, resolving Photo Workflow's own console scripts."""
-    LOGGER.info("launching command %s", " ".join(command))
+def launch_command(command: tuple[str, ...], target_folder: Path | None = None) -> None:
+    """
+    Launch an explicit command, resolving Photo Workflow's own console scripts.
+
+    May propagate LaunchError if the command could not be started.
+    """
     executable, *arguments = command
     if executable == "photo-workflow-crop":
-        subprocess.Popen([sys.executable, "-m", "photo_workflow.crop_tool.app", *arguments])
+        args = [sys.executable, "-m", "photo_workflow.crop_tool.app", *arguments]
+        if target_folder is not None:
+            args.append(str(target_folder))
+        LOGGER.info("launching command %s", " ".join(args))
+        _popen_launch(args, description="Photo Workflow Crop")
         return
 
-    subprocess.Popen(list(command))
+    args = list(command)
+    if target_folder is not None:
+        args.append(str(target_folder))
+    LOGGER.info("launching command %s", " ".join(args))
+    _popen_launch(args, description=executable)
+
+
+def _run_launch(args: list[str], *, description: str) -> None:
+    """
+    Run a quick dispatching command (e.g. `open`) and raise if it reports failure.
+
+    Raises:
+        LaunchError: If the command exits non-zero, times out, or cannot be started.
+    """
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=APPLICATION_LAUNCH_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, OSError) as error:
+        raise LaunchError(f"could not launch {description}: {error}") from error
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"exit code {result.returncode}"
+        raise LaunchError(f"could not launch {description}: {detail}")
+
+
+def _popen_launch(args: list[str], *, description: str) -> None:
+    """
+    Start a long-running process without blocking the UI.
+
+    Raises:
+        LaunchError: If the process could not be started.
+    """
+    try:
+        subprocess.Popen(args)
+    except OSError as error:
+        raise LaunchError(f"could not launch {description}: {error}") from error

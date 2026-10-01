@@ -19,10 +19,14 @@ DEFAULT_MAX_DURATION_SECONDS = 10.0
 DEFAULT_TRANSCRIPTION_MODEL = "mlx-community/whisper-tiny-mlx"
 VALID_COPY_VERIFICATION_METHODS = {"basic", "crc32"}
 DEFAULT_DASHBOARD_APPS = (
-    {"name": "FastRawViewer", "app_name": "FastRawViewer"},
-    {"name": "Photo Workflow Crop", "command": ["photo-workflow-crop"]},
+    {"name": "FastRawViewer", "app_name": "FastRawViewer", "supports_target_folder": True},
+    {
+        "name": "Photo Workflow Crop",
+        "command": ["photo-workflow-crop"],
+        "supports_target_folder": True,
+    },
     {"name": "Lightroom Classic", "app_name": "Adobe Lightroom Classic"},
-    {"name": "Photoshop", "app_name": "Adobe Photoshop 2025"},
+    {"name": "Photoshop", "app_name": "Adobe Photoshop 2026"},
     {"name": "Aftershoot", "app_name": "Aftershoot"},
 )
 
@@ -61,6 +65,7 @@ class DashboardAppLauncher:
     name: str
     app_name: str | None = None
     command: tuple[str, ...] | None = None
+    supports_target_folder: bool = False
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,7 @@ class DashboardConfig:
                 name=entry["name"],
                 app_name=entry.get("app_name"),
                 command=tuple(entry["command"]) if "command" in entry else None,
+                supports_target_folder=entry.get("supports_target_folder", False),
             )
             for entry in DEFAULT_DASHBOARD_APPS
         )
@@ -135,9 +141,7 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
 
     return AppConfig(
         workflow=WorkflowConfig(
-            camera_root=Path(
-                workflow_config.get("camera_root", DEFAULT_CAMERA_ROOT)
-            ).expanduser()
+            camera_root=Path(workflow_config.get("camera_root", DEFAULT_CAMERA_ROOT)).expanduser()
         ),
         memory_card_copy=MemoryCardCopyConfig(
             card_mount_root=Path(
@@ -207,11 +211,18 @@ def parse_dashboard_apps(apps_config: object) -> tuple[DashboardAppLauncher, ...
         if command is not None and not isinstance(command, list):
             raise ValueError(f"dashboard.apps entry {entry['name']!r} 'command' must be an array")
 
+        supports_target_folder = entry.get("supports_target_folder", False)
+        if not isinstance(supports_target_folder, bool):
+            raise ValueError(
+                f"dashboard.apps entry {entry['name']!r} 'supports_target_folder' must be a bool"
+            )
+
         launchers.append(
             DashboardAppLauncher(
                 name=str(entry["name"]),
                 app_name=str(app_name) if app_name else None,
                 command=tuple(str(part) for part in command) if command else None,
+                supports_target_folder=supports_target_folder,
             )
         )
 

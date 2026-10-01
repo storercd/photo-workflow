@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from photo_workflow.config import DashboardAppLauncher
 from photo_workflow.dashboard import launchers
 
@@ -61,22 +63,85 @@ def test_resolve_application_path_returns_none_when_path_does_not_exist(
 
 def test_launch_app_opens_named_application(monkeypatch) -> None:
     """Verify an app_name launcher is opened via macOS Launch Services."""
-    popen_calls: list[list[str]] = []
+    run_calls: list[list[str]] = []
     monkeypatch.setattr(
-        launchers.subprocess, "Popen", lambda command: popen_calls.append(command)
+        launchers.subprocess,
+        "run",
+        lambda command, **kwargs: (
+            run_calls.append(command)
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
     )
 
     launchers.launch_app(DashboardAppLauncher(name="Aftershoot", app_name="Aftershoot"))
 
-    assert popen_calls == [["open", "-a", "Aftershoot"]]
+    assert run_calls == [["open", "-a", "Aftershoot"]]
+
+
+def test_launch_app_opens_named_application_with_first_file_in_target_folder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Verify a target-folder-capable app is opened with its first file."""
+    (tmp_path / "b.jpg").write_text("b")
+    (tmp_path / "a.jpg").write_text("a")
+    run_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        launchers.subprocess,
+        "run",
+        lambda command, **kwargs: (
+            run_calls.append(command)
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
+    )
+
+    launchers.launch_app(
+        DashboardAppLauncher(
+            name="FastRawViewer", app_name="FastRawViewer", supports_target_folder=True
+        ),
+        target_folder=tmp_path,
+    )
+
+    assert run_calls == [["open", "-a", "FastRawViewer", str(tmp_path / "a.jpg")]]
+
+
+def test_launch_app_ignores_target_folder_when_unsupported(tmp_path: Path, monkeypatch) -> None:
+    """Verify a launcher that does not opt in ignores the target folder."""
+    (tmp_path / "a.jpg").write_text("a")
+    run_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        launchers.subprocess,
+        "run",
+        lambda command, **kwargs: (
+            run_calls.append(command)
+            or subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        ),
+    )
+
+    launchers.launch_app(
+        DashboardAppLauncher(name="Aftershoot", app_name="Aftershoot"), target_folder=tmp_path
+    )
+
+    assert run_calls == [["open", "-a", "Aftershoot"]]
+
+
+def test_launch_app_raises_launch_error_on_failure(monkeypatch) -> None:
+    """Verify a non-zero Launch Services exit is surfaced as a LaunchError."""
+    monkeypatch.setattr(
+        launchers.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="No such application"
+        ),
+    )
+
+    with pytest.raises(launchers.LaunchError, match="Ghost App.*No such application"):
+        launchers.launch_app(DashboardAppLauncher(name="Ghost App", app_name="Ghost App"))
 
 
 def test_launch_app_runs_photo_workflow_crop_as_a_module(monkeypatch) -> None:
     """Verify the crop tool is launched via -m so it uses this interpreter's venv."""
     popen_calls: list[list[str]] = []
-    monkeypatch.setattr(
-        launchers.subprocess, "Popen", lambda command: popen_calls.append(command)
-    )
+    monkeypatch.setattr(launchers.subprocess, "Popen", lambda command: popen_calls.append(command))
 
     launchers.launch_app(
         DashboardAppLauncher(name="Photo Workflow Crop", command=("photo-workflow-crop",))
@@ -85,12 +150,29 @@ def test_launch_app_runs_photo_workflow_crop_as_a_module(monkeypatch) -> None:
     assert popen_calls == [[sys.executable, "-m", "photo_workflow.crop_tool.app"]]
 
 
+def test_launch_app_passes_target_folder_to_photo_workflow_crop(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Verify the crop tool receives the target folder as a positional argument."""
+    popen_calls: list[list[str]] = []
+    monkeypatch.setattr(launchers.subprocess, "Popen", lambda command: popen_calls.append(command))
+
+    launchers.launch_app(
+        DashboardAppLauncher(
+            name="Photo Workflow Crop",
+            command=("photo-workflow-crop",),
+            supports_target_folder=True,
+        ),
+        target_folder=tmp_path,
+    )
+
+    assert popen_calls == [[sys.executable, "-m", "photo_workflow.crop_tool.app", str(tmp_path)]]
+
+
 def test_launch_app_runs_other_commands_directly(monkeypatch) -> None:
     """Verify a non-crop command launcher runs the command as given."""
     popen_calls: list[list[str]] = []
-    monkeypatch.setattr(
-        launchers.subprocess, "Popen", lambda command: popen_calls.append(command)
-    )
+    monkeypatch.setattr(launchers.subprocess, "Popen", lambda command: popen_calls.append(command))
 
     launchers.launch_app(
         DashboardAppLauncher(name="Custom Tool", command=("custom-tool", "--flag"))

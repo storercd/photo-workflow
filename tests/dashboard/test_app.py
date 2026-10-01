@@ -34,7 +34,9 @@ def test_launcher_button_click_launches_configured_app(monkeypatch) -> None:
     """Verify clicking a launcher button calls launch_app with its launcher."""
     app = QApplication.instance() or QApplication([])
     launched: list[app_config.DashboardAppLauncher] = []
-    monkeypatch.setattr(dashboard_app, "launch_app", launched.append)
+    monkeypatch.setattr(
+        dashboard_app, "launch_app", lambda launcher, target_folder=None: launched.append(launcher)
+    )
     monkeypatch.setattr(dashboard_app, "resolve_application_path", lambda name: None)
 
     launcher = app_config.DashboardAppLauncher(name="Aftershoot", app_name="Aftershoot")
@@ -42,6 +44,46 @@ def test_launcher_button_click_launches_configured_app(monkeypatch) -> None:
     button.click()
 
     assert launched == [launcher]
+    del app
+
+
+def test_launcher_button_reports_launch_failure(monkeypatch) -> None:
+    """Verify a LaunchError raised by launch_app is surfaced via the status reporter."""
+    app = QApplication.instance() or QApplication([])
+
+    def raise_launch_error(launcher, target_folder=None):
+        raise dashboard_app.LaunchError("could not launch Ghost App: no such application")
+
+    monkeypatch.setattr(dashboard_app, "launch_app", raise_launch_error)
+    monkeypatch.setattr(dashboard_app, "resolve_application_path", lambda name: None)
+
+    reported: list[str] = []
+    launcher = app_config.DashboardAppLauncher(name="Ghost App", app_name="Ghost App")
+    button = dashboard_app.LauncherButton(launcher, status_reporter=reported.append)
+    button.click()
+
+    assert reported == ["could not launch Ghost App: no such application"]
+    del app
+
+
+def test_launcher_button_passes_resolved_target_folder(tmp_path: Path, monkeypatch) -> None:
+    """Verify the button asks its provider for a target folder and forwards it."""
+    app = QApplication.instance() or QApplication([])
+    calls: list[tuple[app_config.DashboardAppLauncher, Path | None]] = []
+    monkeypatch.setattr(
+        dashboard_app,
+        "launch_app",
+        lambda launcher, target_folder=None: calls.append((launcher, target_folder)),
+    )
+    monkeypatch.setattr(dashboard_app, "resolve_application_path", lambda name: None)
+
+    launcher = app_config.DashboardAppLauncher(
+        name="FastRawViewer", app_name="FastRawViewer", supports_target_folder=True
+    )
+    button = dashboard_app.LauncherButton(launcher, target_folder_provider=lambda _: tmp_path)
+    button.click()
+
+    assert calls == [(launcher, tmp_path)]
     del app
 
 
@@ -81,6 +123,66 @@ def test_refresh_action_availability_enables_purge_when_rejected_folders_exist(
     window._refresh_action_availability()
 
     assert window.purge_button.isEnabled() is True
+    del app
+
+
+def test_target_folder_checkbox_enabled_only_after_import(tmp_path: Path) -> None:
+    """Verify the target-folder checkbox is disabled until an import completes."""
+    app = QApplication.instance() or QApplication([])
+    config = build_config(tmp_path)
+    config.memory_card_copy.card_mount_root.mkdir(parents=True)
+    window = dashboard_app.DashboardWindow(config)
+    window.poll_timer.stop()
+
+    assert window.target_folder_checkbox.isEnabled() is False
+    assert (
+        window._target_folder_for_launcher(
+            app_config.DashboardAppLauncher(
+                name="FastRawViewer", app_name="FastRawViewer", supports_target_folder=True
+            )
+        )
+        is None
+    )
+
+    imported_folder = tmp_path / "camera" / "20260701" / "import"
+    imported_folder.mkdir(parents=True)
+    window._on_import_finished(
+        RejectedFolderAssessment(
+            camera_root=config.workflow.camera_root,
+            disk_total_bytes=100,
+            folders=(),
+            total_reclaimable_bytes=0,
+            total_percent_of_disk=0.0,
+        ),
+        (imported_folder,),
+    )
+
+    assert window.target_folder_checkbox.isEnabled() is True
+    assert window.target_folder_checkbox.isChecked() is True
+    assert (
+        window._target_folder_for_launcher(
+            app_config.DashboardAppLauncher(
+                name="FastRawViewer", app_name="FastRawViewer", supports_target_folder=True
+            )
+        )
+        == imported_folder
+    )
+    assert (
+        window._target_folder_for_launcher(
+            app_config.DashboardAppLauncher(name="Aftershoot", app_name="Aftershoot")
+        )
+        is None
+    )
+
+    window.target_folder_checkbox.setChecked(False)
+    assert (
+        window._target_folder_for_launcher(
+            app_config.DashboardAppLauncher(
+                name="FastRawViewer", app_name="FastRawViewer", supports_target_folder=True
+            )
+        )
+        is None
+    )
     del app
 
 

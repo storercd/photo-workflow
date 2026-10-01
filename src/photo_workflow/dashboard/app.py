@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from photo_workflow.config import AppConfig, DashboardAppLauncher, load_config
-from photo_workflow.dashboard.launchers import launch_app, resolve_application_path
+from photo_workflow.dashboard.launchers import LaunchError, launch_app, resolve_application_path
 from photo_workflow.memory_card_copy import find_memory_card_mount
 from photo_workflow.rejected_folders import (
     RejectedFolderAssessment,
@@ -86,9 +87,7 @@ class ImportWorker(QRunnable):
     def run(self) -> None:
         """Execute the import and report results or errors via signals."""
         try:
-            assessment, source_dirs = run_full_import(
-                self.config, on_stage=self.signals.stage.emit
-            )
+            assessment, source_dirs = run_full_import(self.config, on_stage=self.signals.stage.emit)
         except Exception as error:  # noqa: BLE001 - surface any failure to the UI
             self.signals.error.emit(str(error))
             return
@@ -134,10 +133,17 @@ def resolve_launcher_icon(launcher: DashboardAppLauncher) -> QIcon:
 class LauncherButton(QToolButton):
     """A large icon button that launches one dashboard application."""
 
-    def __init__(self, launcher: DashboardAppLauncher) -> None:
+    def __init__(
+        self,
+        launcher: DashboardAppLauncher,
+        target_folder_provider: Callable[[DashboardAppLauncher], Path | None] | None = None,
+        status_reporter: Callable[[str], None] | None = None,
+    ) -> None:
         """Build the button for one dashboard app launcher."""
         super().__init__()
         self.launcher = launcher
+        self.target_folder_provider = target_folder_provider
+        self.status_reporter = status_reporter
         self.setText(launcher.name)
         self.setIcon(resolve_launcher_icon(launcher))
         self.setIconSize(LAUNCHER_ICON_SIZE)
@@ -148,8 +154,16 @@ class LauncherButton(QToolButton):
 
     def _launch(self) -> None:
         """Launch the configured application or command for this button."""
+        target_folder = None
+        if self.target_folder_provider is not None:
+            target_folder = self.target_folder_provider(self.launcher)
         LOGGER.info("launching %s", self.launcher.name)
-        launch_app(self.launcher)
+        try:
+            launch_app(self.launcher, target_folder=target_folder)
+        except LaunchError as error:
+            LOGGER.error("%s", error)
+            if self.status_reporter is not None:
+                self.status_reporter(str(error))
 
 
 @dataclass
@@ -249,6 +263,7 @@ class DashboardWindow(QMainWindow):
         super().__init__()
         self.config = config or load_config()
         self.thread_pool = QThreadPool.globalInstance()
+        self.last_import_folder: Path | None = None
         self.setWindowTitle("Photo Workflow Dashboard")
         self.resize(720, 480)
 
@@ -269,6 +284,7 @@ class DashboardWindow(QMainWindow):
         root_layout.addWidget(self.log_view, stretch=1)
 
         self._install_log_handler()
+        self._refresh_target_folder_checkbox()
 
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self._refresh_action_availability)
@@ -277,10 +293,24 @@ class DashboardWindow(QMainWindow):
 
     def _build_launcher_row(self) -> QGroupBox:
         group = QGroupBox("Launch")
-        layout = QHBoxLayout(group)
+        layout = QVBoxLayout(group)
+
+        icon_row = QHBoxLayout()
         for launcher in self.config.dashboard.apps:
-            layout.addWidget(LauncherButton(launcher))
-        layout.addStretch()
+            icon_row.addWidget(
+                LauncherButton(
+                    launcher,
+                    target_folder_provider=self._target_folder_for_launcher,
+                    status_reporter=self._report_launch_failure,
+                )
+            )
+        icon_row.addStretch()
+        layout.addLayout(icon_row)
+
+        self.target_folder_checkbox = QCheckBox("Open last imported folder in supporting apps")
+        self.target_folder_checkbox.setChecked(True)
+        layout.addWidget(self.target_folder_checkbox)
+
         return group
 
     def _build_divider(self) -> QFrame:
@@ -313,6 +343,26 @@ class DashboardWindow(QMainWindow):
         self.log_handler.setLevel(logging.INFO)
         logging.getLogger("photo_workflow").addHandler(self.log_handler)
         logging.getLogger("photo_workflow").setLevel(logging.INFO)
+
+    def _target_folder_for_launcher(self, launcher: DashboardAppLauncher) -> Path | None:
+        """Return the folder to open a launcher with, if it opts in and one is available."""
+        if not launcher.supports_target_folder:
+            return None
+        if not self.target_folder_checkbox.isChecked():
+            return None
+        return self.last_import_folder
+
+    def _refresh_target_folder_checkbox(self) -> None:
+        """Enable the target-folder checkbox once a folder is imported, checked by default."""
+        has_target_folder = self.last_import_folder is not None
+        self.target_folder_checkbox.setEnabled(has_target_folder)
+        self.target_folder_checkbox.setChecked(has_target_folder)
+        self.target_folder_checkbox.setToolTip(
+            str(self.last_import_folder) if has_target_folder else "No imported folder yet"
+        )
+
+    def _report_launch_failure(self, message: str) -> None:
+        self.status_label.setText(message)
 
     def _refresh_action_availability(self) -> None:
         card_detected = find_memory_card_mount(self.config.memory_card_copy.card_mount_root)
@@ -355,6 +405,8 @@ class DashboardWindow(QMainWindow):
     ) -> None:
         folder_list = ", ".join(str(folder) for folder in source_dirs) or "none"
         self.status_label.setText(f"Import complete. Target folder(s): {folder_list}")
+        self.last_import_folder = source_dirs[0] if source_dirs else None
+        self._refresh_target_folder_checkbox()
         self.poll_timer.start(POLL_INTERVAL_MS)
         self._refresh_action_availability()
 

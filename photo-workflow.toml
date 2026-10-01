@@ -24,10 +24,12 @@ snap_tolerance = 0.05
 [[dashboard.apps]]
 name = "FastRawViewer"
 app_name = "FastRawViewer"
+supports_target_folder = true
 
 [[dashboard.apps]]
 name = "Photo Workflow Crop"
 command = ["photo-workflow-crop"]
+supports_target_folder = true
 
 [[dashboard.apps]]
 name = "Lightroom Classic"
@@ -35,7 +37,7 @@ app_name = "Adobe Lightroom Classic"
 
 [[dashboard.apps]]
 name = "Photoshop"
-app_name = "Adobe Photoshop 2025"
+app_name = "Adobe Photoshop 2026"
 
 [[dashboard.apps]]
 name = "Aftershoot"
