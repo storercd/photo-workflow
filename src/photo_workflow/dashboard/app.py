@@ -29,7 +29,12 @@ from PySide6.QtWidgets import (
 )
 
 from photo_workflow.config import AppConfig, DashboardAppLauncher, load_config
-from photo_workflow.dashboard.launchers import LaunchError, launch_app, resolve_application_path
+from photo_workflow.dashboard.launchers import (
+    LaunchError,
+    launch_app,
+    resolve_application_path,
+    resolve_bundled_command_icon,
+)
 from photo_workflow.memory_card_copy import find_memory_card_mount
 from photo_workflow.rejected_folders import (
     RejectedFolderAssessment,
@@ -122,6 +127,11 @@ class PurgeWorker(QRunnable):
 
 def resolve_launcher_icon(launcher: DashboardAppLauncher) -> QIcon:
     """Return the best available icon for a dashboard launcher."""
+    if launcher.command:
+        icon_path = resolve_bundled_command_icon(launcher.command[0])
+        if icon_path is not None:
+            return QIcon(str(icon_path))
+
     if launcher.app_name:
         app_path = resolve_application_path(launcher.app_name)
         if app_path is not None:

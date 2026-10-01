@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+from importlib import resources
 from pathlib import Path
 
 from photo_workflow.config import DashboardAppLauncher
@@ -12,6 +13,13 @@ from photo_workflow.config import DashboardAppLauncher
 LOGGER = logging.getLogger(__name__)
 APPLICATION_RESOLUTION_TIMEOUT_SECONDS = 2
 APPLICATION_LAUNCH_TIMEOUT_SECONDS = 5
+
+# Maps a console-script executable name to the package bundling its dashboard icon
+# (expected at <package>/resources/icon.png). Add an entry here for any new
+# in-house tool that should show its own icon instead of the generic fallback.
+BUNDLED_COMMAND_ICON_PACKAGES = {
+    "photo-workflow-crop": "photo_workflow.crop_tool",
+}
 
 
 class LaunchError(RuntimeError):
@@ -33,6 +41,16 @@ def resolve_application_path(app_name: str) -> Path | None:
 
     resolved_path = Path(result.stdout.strip())
     return resolved_path if resolved_path.exists() else None
+
+
+def resolve_bundled_command_icon(executable: str) -> Path | None:
+    """Return the bundled dashboard icon for one of Photo Workflow's own console scripts."""
+    package = BUNDLED_COMMAND_ICON_PACKAGES.get(executable)
+    if package is None:
+        return None
+
+    icon_resource = resources.files(package) / "resources" / "icon.png"
+    return Path(str(icon_resource)) if icon_resource.is_file() else None
 
 
 def first_file_in_folder(folder: Path) -> Path | None:
