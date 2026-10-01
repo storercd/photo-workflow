@@ -118,14 +118,15 @@ This workflow requires `exiftool`, `ffmpeg`, and `ffprobe` to be available on `P
 
 ## Rapid Crop Tool
 
-Launch the folder-oriented crop editor with an optional starting folder:
+Launch the folder-oriented crop editor with an optional starting folder or photo:
 
 ```bash
 uv run photo-workflow-crop /path/to/photo/folder
 ```
 
-Folders and individual `.CR2` or `.CR3` photos can also be dropped onto the app window. A
-dropped photo opens its parent folder with that photo selected.
+When launched without arguments, the app remembers and reopens the folder and photo from
+your last session. Folders and individual `.CR2` or `.CR3` photos can also be dropped onto the app
+window. A dropped photo opens its parent folder with that photo selected.
 
 The app supports Canon `.CR2` and `.CR3` files and uses embedded JPEG previews.
 For CR3, it loads a small preview before the larger `JpgFromRaw` preview; for

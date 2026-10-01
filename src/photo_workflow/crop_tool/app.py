@@ -19,6 +19,7 @@ from PySide6.QtCore import (
     QProcess,
     QRectF,
     QRunnable,
+    QSettings,
     QSize,
     Qt,
     QThreadPool,
@@ -410,11 +411,18 @@ class RatingScanTask(QRunnable):
 class CropWindow(QMainWindow):
     """Folder-based crop editor with asynchronous preview and XMP I/O."""
 
-    def __init__(self, initial_folder: Path | None = None) -> None:
+    def __init__(
+        self,
+        initial_folder: Path | None = None,
+        *,
+        restore_last_session: bool = False,
+        settings: QSettings | None = None,
+    ) -> None:
         """Create the window, controls, and background worker pools."""
         super().__init__()
         self.setWindowTitle("Photo Workflow Crop")
         self.resize(1280, 820)
+        self._settings = settings
         self._ratios, self._snap_tolerance = load_crop_settings()
         self._photos: list[Path] = []
         self._all_photos: list[Path] = []
@@ -463,7 +471,41 @@ class CropWindow(QMainWindow):
         self._build_ui()
         self._build_shortcuts()
         if initial_folder is not None:
-            self.open_folder(initial_folder)
+            resolved = resolve_drop_path(initial_folder)
+            if resolved is not None:
+                self.open_folder(resolved[0], resolved[1])
+            else:
+                self.open_folder(initial_folder)
+        elif restore_last_session:
+            self._restore_last_session()
+
+    def _restore_last_session(self) -> None:
+        """Restore the last viewed folder and photo from settings if accessible."""
+        if self._settings is None:
+            return
+        last_folder_val = self._settings.value("last_folder", type=str)
+        if not last_folder_val:
+            return
+        folder = Path(last_folder_val)
+        if not folder.is_dir():
+            return
+        last_photo_val = self._settings.value("last_photo", type=str)
+        photo = Path(last_photo_val) if last_photo_val else None
+        if photo is not None and (
+            not photo.is_file() or photo.parent.resolve() != folder.resolve()
+        ):
+            photo = None
+        self.open_folder(folder, photo)
+
+    def _record_session_state(self, folder: Path, photo: Path | None = None) -> None:
+        """Persist the current folder and photo to settings if enabled."""
+        if self._settings is None:
+            return
+        self._settings.setValue("last_folder", str(folder.resolve()))
+        if photo is not None:
+            self._settings.setValue("last_photo", str(photo.resolve()))
+        else:
+            self._settings.remove("last_photo")
 
     def _build_ui(self) -> None:
         """Construct the compact navigation bar and crop canvas."""
@@ -1023,6 +1065,8 @@ class CropWindow(QMainWindow):
             self._rating_scan_generation += 1
             self._ratings_loaded = False
             self._photo_ratings = {}
+            if folder.is_dir():
+                self._record_session_state(folder, None)
             self.position_count_label.setText("No CR2 or CR3 files in folder")
             self.position_label.setText("")
             self._set_preview_loading(False)
@@ -1054,6 +1098,7 @@ class CropWindow(QMainWindow):
         """Select a photo, restore cached state, and queue nearby previews."""
         self._current_index = index
         self._current_path = self._photos[index]
+        self._record_session_state(self._current_path.parent, self._current_path)
         self.previous_button.setEnabled(
             self._ratings_loaded and self._current_index > 0
         )
@@ -1629,6 +1674,8 @@ class CropWindow(QMainWindow):
         self._load_pool.waitForDone()
         self._rating_pool.clear()
         self._rating_pool.waitForDone()
+        if self._settings is not None:
+            self._settings.sync()
         event.accept()
 
 
@@ -1783,7 +1830,12 @@ def main(argv: list[str] | None = None) -> int:
     """
     args = parse_args(argv)
     app = QApplication.instance() or QApplication([])
-    window = CropWindow(args.folder)
+    settings = QSettings("photo-workflow", "crop-tool")
+    window = CropWindow(
+        args.folder,
+        restore_last_session=args.folder is None,
+        settings=settings,
+    )
     window.show()
     return app.exec()
 

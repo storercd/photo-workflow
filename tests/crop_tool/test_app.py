@@ -11,6 +11,7 @@ from PySide6.QtCore import (
     QMimeData,
     QPoint,
     QPointF,
+    QSettings,
     QSize,
     Qt,
     QUrl,
@@ -962,3 +963,184 @@ def test_numeric_shortcuts_select_configured_ratios() -> None:
 
     window.close()
     app.quit()
+
+
+def test_should_restore_last_session_folder_and_photo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When requested, restore the remembered folder and photo from settings."""
+    app = QApplication.instance() or QApplication([])
+    folder = tmp_path / "photos"
+    folder.mkdir()
+    photo_a = folder / "first.cr3"
+    photo_b = folder / "second.cr3"
+    photo_a.touch()
+    photo_b.touch()
+
+    settings_path = tmp_path / "settings.ini"
+    settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
+    settings.setValue("last_folder", str(folder.resolve()))
+    settings.setValue("last_photo", str(photo_b.resolve()))
+    settings.sync()
+
+    window = CropWindow(restore_last_session=True, settings=settings)
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda index: None)
+
+    assert window._current_path == photo_b
+    assert window._current_index == 1
+    window.close()
+    app.quit()
+
+
+def test_should_ignore_missing_session_folder(tmp_path: Path) -> None:
+    """If the saved folder no longer exists, remain in empty initial state."""
+    app = QApplication.instance() or QApplication([])
+    missing_folder = tmp_path / "gone"
+    settings_path = tmp_path / "settings.ini"
+    settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
+    settings.setValue("last_folder", str(missing_folder.resolve()))
+    settings.setValue("last_photo", str((missing_folder / "img.cr3").resolve()))
+    settings.sync()
+
+    window = CropWindow(restore_last_session=True, settings=settings)
+
+    assert window._current_path is None
+    assert window.position_count_label.text() == "No folder open"
+    window.close()
+    app.quit()
+
+
+def test_should_fallback_to_first_photo_when_saved_photo_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the saved photo is missing from the folder, default to the first photo."""
+    app = QApplication.instance() or QApplication([])
+    folder = tmp_path / "photos"
+    folder.mkdir()
+    photo_a = folder / "first.cr3"
+    photo_a.touch()
+
+    settings_path = tmp_path / "settings.ini"
+    settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
+    settings.setValue("last_folder", str(folder.resolve()))
+    settings.setValue("last_photo", str((folder / "missing.cr3").resolve()))
+    settings.sync()
+
+    window = CropWindow(restore_last_session=True, settings=settings)
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda index: None)
+
+    assert window._current_path == photo_a
+    assert window._current_index == 0
+    window.close()
+    app.quit()
+
+
+def test_should_prefer_explicit_target_over_saved_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit target overrides the saved session in settings."""
+    app = QApplication.instance() or QApplication([])
+    saved_folder = tmp_path / "saved"
+    saved_folder.mkdir()
+    (saved_folder / "saved.cr3").touch()
+
+    explicit_folder = tmp_path / "explicit"
+    explicit_folder.mkdir()
+    explicit_photo = explicit_folder / "target.cr3"
+    explicit_photo.touch()
+
+    settings_path = tmp_path / "settings.ini"
+    settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
+    settings.setValue("last_folder", str(saved_folder.resolve()))
+    settings.sync()
+
+    window = CropWindow(explicit_folder, restore_last_session=True, settings=settings)
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda index: None)
+
+    assert window._current_path == explicit_photo
+    window.close()
+    app.quit()
+
+
+def test_should_record_session_state_on_navigation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Displaying photos updates last_folder and last_photo in settings."""
+    app = QApplication.instance() or QApplication([])
+    folder = tmp_path / "photos"
+    folder.mkdir()
+    photo_a = folder / "first.cr3"
+    photo_b = folder / "second.cr3"
+    photo_a.touch()
+    photo_b.touch()
+
+    settings_path = tmp_path / "settings.ini"
+    settings = QSettings(str(settings_path), QSettings.Format.IniFormat)
+    window = CropWindow(settings=settings)
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda index: None)
+
+    window.open_folder(folder)
+    assert settings.value("last_folder") == str(folder.resolve())
+    assert settings.value("last_photo") == str(photo_a.resolve())
+
+    window.navigate(1)
+    assert settings.value("last_photo") == str(photo_b.resolve())
+
+    window.close()
+    app.quit()
+
+
+def test_should_open_raw_photo_passed_as_initial_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Passing a RAW photo file path as initial target selects that photo."""
+    app = QApplication.instance() or QApplication([])
+    folder = tmp_path / "photos"
+    folder.mkdir()
+    photo_a = folder / "first.cr3"
+    photo_b = folder / "second.cr2"
+    photo_a.touch()
+    photo_b.touch()
+
+    window = CropWindow(photo_b)
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda index: None)
+
+    assert window._current_path == photo_b
+    assert window._current_index == 1
+    window.close()
+    app.quit()
+
+
+def test_should_enable_session_restore_in_main_when_no_argument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Main restores session if no path was passed, but not if one was provided."""
+    launched_args: list[tuple[object, bool]] = []
+
+    class DummyCropWindow:
+        def __init__(
+            self,
+            folder: object = None,
+            *,
+            restore_last_session: bool = False,
+            **kwargs: object,
+        ) -> None:
+            launched_args.append((folder, restore_last_session))
+
+        def show(self) -> None:
+            pass
+
+    monkeypatch.setattr(crop_app, "CropWindow", DummyCropWindow)
+    monkeypatch.setattr(crop_app.QApplication, "exec", lambda self: 0)
+
+    crop_app.main([])
+    assert launched_args == [(None, True)]
+
+    launched_args.clear()
+    crop_app.main(["/some/folder"])
+    assert launched_args == [(Path("/some/folder"), False)]
