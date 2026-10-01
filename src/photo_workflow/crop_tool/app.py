@@ -1484,7 +1484,8 @@ class CropWindow(QMainWindow):
             )
         else:
             self._locked_ratio = None
-        snap_ratios = self._ratios if self.snap_checkbox.isChecked() else ()
+        has_snap = self.snap_checkbox.isChecked() or self._locked_ratio is not None
+        snap_ratios = self._ratios if has_snap else ()
         self.view.set_crop_mode(
             locked_ratio=self._locked_ratio,
             snap_ratios=snap_ratios,

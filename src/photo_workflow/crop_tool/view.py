@@ -695,7 +695,7 @@ class CropView(QWidget):
         )
 
     def _matching_snap_ratio(self, crop: CropRect) -> AspectRatio | None:
-        if self._locked_ratio is not None or not self._snap_ratios:
+        if not self._snap_ratios:
             return None
         return closest_aspect_ratio(
             crop.width,

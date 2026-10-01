@@ -385,3 +385,33 @@ def test_loaded_freeform_crop_shows_snap_state_without_modifying_bounds() -> Non
     )
     view.close()
     app.quit()
+
+
+def test_locked_mode_shows_aspect_ratio_indicator_when_matching_preset() -> None:
+    """When ratio lock is enabled, matching known ratio is still indicated in green."""
+    app = QApplication.instance() or QApplication([])
+    view = CropView()
+    view.resize(500, 400)
+    image = QImage(QSize(400, 400), QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.white)
+    view.set_image(image, 1000, 1000)
+    ratio = AspectRatio(4, 5, "4:5")
+    crop = CropRect(0.1, 0.1, 0.5, 0.6)  # width 0.4, height 0.5 -> 4:5
+    view.set_crop(crop)
+    view.set_crop_mode(
+        locked_ratio=ratio,
+        snap_ratios=(ratio,),
+        snap_tolerance=0.05,
+    )
+
+    assert view._snap_ratio == ratio
+    rendered = QImage(view.size(), QImage.Format.Format_RGB32)
+    rendered.fill(Qt.GlobalColor.black)
+    view.render(rendered)
+    assert any(
+        rendered.pixelColor(x, y).name() == "#55e39f"
+        for y in range(rendered.height())
+        for x in range(rendered.width())
+    )
+    view.close()
+    app.quit()
