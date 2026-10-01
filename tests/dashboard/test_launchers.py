@@ -12,6 +12,20 @@ from photo_workflow.config import DashboardAppLauncher
 from photo_workflow.dashboard import launchers
 
 
+def test_resolve_bundled_command_icon_returns_path_for_known_command() -> None:
+    """Verify the crop tool's own command resolves to its bundled icon file."""
+    icon_path = launchers.resolve_bundled_command_icon("photo-workflow-crop")
+
+    assert icon_path is not None
+    assert icon_path.name == "icon.png"
+    assert icon_path.is_file()
+
+
+def test_resolve_bundled_command_icon_returns_none_for_unknown_command() -> None:
+    """Verify commands without a bundled icon mapping return None."""
+    assert launchers.resolve_bundled_command_icon("some-other-tool") is None
+
+
 def test_resolve_application_path_returns_path_for_existing_app(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -30,6 +30,20 @@ def test_resolve_launcher_icon_falls_back_when_app_not_found(monkeypatch) -> Non
     assert icon is not None
 
 
+def test_resolve_launcher_icon_uses_bundled_icon_for_own_command() -> None:
+    """Verify an in-house command launcher gets its bundled icon, not the fallback theme icon."""
+    QApplication.instance() or QApplication([])
+
+    icon = dashboard_app.resolve_launcher_icon(
+        app_config.DashboardAppLauncher(
+            name="Photo Workflow Crop", command=("photo-workflow-crop",)
+        )
+    )
+
+    assert icon is not None
+    assert not icon.isNull()
+
+
 def test_launcher_button_click_launches_configured_app(monkeypatch) -> None:
     """Verify clicking a launcher button calls launch_app with its launcher."""
     app = QApplication.instance() or QApplication([])
