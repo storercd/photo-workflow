@@ -170,7 +170,8 @@ def test_prefetch_window_favors_current_navigation_direction() -> None:
 
     assert forward == [10, 11, 12, 13, 14, 15, 16, 17, 9, 8, 7, 6]
     assert reverse == [10, 9, 8, 7, 6, 5, 4, 3, 11, 12, 13, 14]
-    assert len(forward) == PREVIEW_CACHE_SIZE == PREFETCH_FORWARD_COUNT + PREFETCH_REVERSE_COUNT
+    assert len(forward) == PREFETCH_FORWARD_COUNT + PREFETCH_REVERSE_COUNT
+    assert PREVIEW_CACHE_SIZE >= len(forward) * 2
 
 
 def test_prefetch_window_clips_to_folder_edges_without_duplicates() -> None:
@@ -1229,7 +1230,7 @@ def test_should_enable_session_restore_in_main_when_no_argument(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Main restores session if no path was passed, but not if one was provided."""
-    launched_args: list[tuple[object, bool]] = []
+    launched_args: list[tuple[object, bool, bool]] = []
 
     class DummyCropWindow:
         def __init__(
@@ -1237,9 +1238,10 @@ def test_should_enable_session_restore_in_main_when_no_argument(
             folder: object = None,
             *,
             restore_last_session: bool = False,
+            debug: bool = False,
             **kwargs: object,
         ) -> None:
-            launched_args.append((folder, restore_last_session))
+            launched_args.append((folder, restore_last_session, debug))
 
         def show(self) -> None:
             pass
@@ -1248,8 +1250,65 @@ def test_should_enable_session_restore_in_main_when_no_argument(
     monkeypatch.setattr(crop_app.QApplication, "exec", lambda self: 0)
 
     crop_app.main([])
-    assert launched_args == [(None, True)]
+    assert launched_args == [(None, True, False)]
 
     launched_args.clear()
     crop_app.main(["/some/folder"])
-    assert launched_args == [(Path("/some/folder"), False)]
+    assert launched_args == [(Path("/some/folder"), False, False)]
+
+    launched_args.clear()
+    crop_app.main(["--debug"])
+    assert launched_args == [(None, True, True)]
+
+
+def test_evict_excess_previews_preserves_current_photo() -> None:
+    """Cache eviction never evicts the photo currently being viewed."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    current = Path("current.cr3")
+    window._current_path = current
+    window._preview_cache[current] = QImage(10, 10, QImage.Format.Format_RGB32)
+
+    for i in range(crop_app.PREVIEW_CACHE_SIZE + 5):
+        p = Path(f"other_{i}.cr3")
+        window._preview_cache[p] = QImage(10, 10, QImage.Format.Format_RGB32)
+        window._evict_excess_previews()
+
+    assert current in window._preview_cache
+    assert len(window._preview_cache) <= crop_app.PREVIEW_CACHE_SIZE
+    window.close()
+    app.quit()
+
+
+def test_status_bar_displays_diagnostics() -> None:
+    """The bottom status bar shows DEBUG prefix and cache/worker status when enabled."""
+    app = QApplication.instance() or QApplication([])
+    window_default = CropWindow()
+    assert window_default.statusBar().isHidden()
+    assert window_default._status_label.text().startswith("DEBUG | ")
+    assert "Cache:" in window_default._status_label.text()
+    assert "In-flight:" in window_default._status_label.text()
+    assert "Queued:" in window_default._status_label.text()
+    assert "Ratings:" in window_default._status_label.text()
+    window_default.close()
+
+    window_debug = CropWindow(debug=True)
+    assert not window_debug.statusBar().isHidden()
+    assert window_debug._status_label.text().startswith("DEBUG | ")
+    window_debug.close()
+    app.quit()
+
+
+def test_parse_args_handles_debug_flag() -> None:
+    """--debug flag is parsed into args.debug."""
+    args_default = crop_app.parse_args([])
+    assert not args_default.debug
+    assert args_default.folder is None
+
+    args_debug = crop_app.parse_args(["--debug"])
+    assert args_debug.debug
+    assert args_debug.folder is None
+
+    args_folder_debug = crop_app.parse_args(["/path/to/photos", "--debug"])
+    assert args_folder_debug.debug
+    assert args_folder_debug.folder == Path("/path/to/photos")

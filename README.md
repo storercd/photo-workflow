@@ -126,7 +126,8 @@ uv run photo-workflow-crop /path/to/photo/folder
 
 When launched without arguments, the app remembers and reopens the folder and photo from
 your last session. Folders and individual `.CR2` or `.CR3` photos can also be dropped onto the app
-window. A dropped photo opens its parent folder with that photo selected.
+window. A dropped photo opens its parent folder with that photo selected. Pass `--debug` to display
+the diagnostic status bar at the bottom of the window showing cache and worker states.
 
 The app supports Canon `.CR2` and `.CR3` files and uses embedded JPEG previews.
 For CR3, it uses the embedded `JpgFromRaw` preview (with `PreviewImage` fallback);

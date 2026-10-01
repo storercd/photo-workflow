@@ -92,7 +92,7 @@ PREVIEW_TAGS_BY_SUFFIX = {
 }
 RAW_SUFFIXES = set(PREVIEW_TAGS_BY_SUFFIX)
 DropTarget = tuple[Path, Path | None]
-PREVIEW_CACHE_SIZE = 12
+PREVIEW_CACHE_SIZE = 32
 MAX_IN_FLIGHT_PREVIEWS = 3
 PREFETCH_FORWARD_COUNT = 8
 PREFETCH_REVERSE_COUNT = 4
@@ -418,12 +418,14 @@ class CropWindow(QMainWindow):
         *,
         restore_last_session: bool = False,
         settings: QSettings | None = None,
+        debug: bool = False,
     ) -> None:
         """Create the window, controls, and background worker pools."""
         super().__init__()
         self.setWindowTitle("Photo Workflow Crop")
         self.resize(1280, 820)
         self._settings = settings
+        self._debug = debug
         self._ratios, self._snap_tolerance = load_crop_settings()
         self._photos: list[Path] = []
         self._all_photos: list[Path] = []
@@ -736,6 +738,7 @@ class CropWindow(QMainWindow):
         self.setCentralWidget(container)
         container.path_dropped.connect(self._open_dropped_path)
         self._populate_ratios()
+        self._build_status_bar()
         self.open_button.clicked.connect(self._choose_folder)
         self.previous_button.clicked.connect(lambda: self.navigate(-1))
         self.next_button.clicked.connect(lambda: self.navigate(1))
@@ -824,6 +827,7 @@ class CropWindow(QMainWindow):
         self.previous_button.setEnabled(False)
         self.next_button.setEnabled(False)
         self._update_position_label()
+        self._update_status_bar()
         task = RatingScanTask(self._rating_scan_generation, raw_paths)
         task.signals.ratings.connect(self._rating_scan_finished)
         self._active_rating_tasks[self._rating_scan_generation] = task
@@ -856,6 +860,7 @@ class CropWindow(QMainWindow):
         self.rating_filter_panel.set_scanning(False)
         self.star_filter_button.setEnabled(True)
         self.color_filter_button.setEnabled(True)
+        self._update_status_bar()
         self._refresh_rating_filter()
 
     def _refresh_rating_filter(self) -> None:
@@ -940,6 +945,34 @@ class CropWindow(QMainWindow):
 
     def _rating_filters_active(self) -> bool:
         return self._star_filter is not None or self._color_filter is not None
+
+    def _build_status_bar(self) -> None:
+        """Create the bottom status bar with diagnostic metrics."""
+        self.statusBar().setSizeGripEnabled(False)
+        self._status_label = QLabel("Ready")
+        self._status_label.setStyleSheet("color: #8c9299; padding: 2px 4px;")
+        self.statusBar().addWidget(self._status_label, 1)
+        self.statusBar().setVisible(self._debug)
+        self._update_status_bar()
+
+    def _update_status_bar(self) -> None:
+        """Update bottom status bar with cache and worker diagnostics."""
+        cache_count = len(self._preview_cache)
+        in_flight = len(self._loading)
+        queued = len(self._queued_loads)
+        ratings_status = (
+            "Scanning..."
+            if not self._ratings_loaded and self._all_photos
+            else f"Ready ({len(self._photo_ratings)} photos)"
+            if self._ratings_loaded
+            else "Idle"
+        )
+        metrics = (
+            f"DEBUG | Cache: {cache_count}/{PREVIEW_CACHE_SIZE} | "
+            f"In-flight: {in_flight} | Queued: {queued} | "
+            f"Ratings: {ratings_status}"
+        )
+        self._status_label.setText(metrics)
 
     def _set_side_by_side_visible(self, visible: bool) -> None:
         """Show or hide the read-only crop result pane."""
@@ -1138,6 +1171,8 @@ class CropWindow(QMainWindow):
         self.save_label.setText(" ")
         self._update_position_label()
         cached_image = self._preview_cache.get(self._current_path)
+        if cached_image is not None:
+            self._preview_cache.move_to_end(self._current_path)
         if cached_image is not None and self._current_metadata is not None:
             self._set_preview_loading(False)
             self._show_image(cached_image)
@@ -1153,6 +1188,7 @@ class CropWindow(QMainWindow):
                 self.show_horizon_button.setEnabled(True)
             if self._current_metadata is not None:
                 self._apply_metadata(self._current_path, self._current_metadata)
+        self._update_status_bar()
         self._schedule_prefetch(index)
 
     def _schedule_prefetch(self, index: int) -> None:
@@ -1205,6 +1241,7 @@ class CropWindow(QMainWindow):
         task.signals.finished.connect(self._load_finished)
         self._active_load_tasks[raw_path] = task
         self._loading.add(raw_path)
+        self._update_status_bar()
         self._load_pool.start(task)
 
     def _metadata_loaded(self, path_text: str, metadata: PhotoMetadata) -> None:
@@ -1236,6 +1273,8 @@ class CropWindow(QMainWindow):
             self._set_preview_loading(False)
             self.auto_level_button.setEnabled(True)
             self.show_horizon_button.setEnabled(True)
+        elif path == self._current_path and not self.view.is_loading:
+            pass
         else:
             self._set_preview_crop(None)
             self._set_preview_loading(True)
@@ -1248,8 +1287,8 @@ class CropWindow(QMainWindow):
         if high_quality or path not in self._preview_cache:
             self._preview_cache[path] = image
             self._preview_cache.move_to_end(path)
-            while len(self._preview_cache) > PREVIEW_CACHE_SIZE:
-                self._preview_cache.popitem(last=False)
+            self._evict_excess_previews()
+        self._update_status_bar()
         if path == self._current_path:
             if self._dirty:
                 self._show_image(image)
@@ -1263,6 +1302,15 @@ class CropWindow(QMainWindow):
                     path, self._current_metadata
                 )
                 self._set_preview_loading(False)
+
+    def _evict_excess_previews(self) -> None:
+        """Evict oldest cached previews while preserving the currently viewed photo."""
+        while len(self._preview_cache) > PREVIEW_CACHE_SIZE:
+            oldest_key = next(iter(self._preview_cache))
+            if oldest_key == self._current_path and len(self._preview_cache) > 1:
+                self._preview_cache.move_to_end(oldest_key)
+                oldest_key = next(iter(self._preview_cache))
+            self._preview_cache.pop(oldest_key, None)
 
     def _show_image(self, image: QImage) -> None:
         """Set the visible preview using current source dimensions when known."""
@@ -1285,6 +1333,7 @@ class CropWindow(QMainWindow):
         path = Path(path_text)
         self._active_load_tasks.pop(path, None)
         self._loading.discard(path)
+        self._update_status_bar()
         if self._current_index >= 0:
             self._schedule_prefetch(self._current_index)
 
@@ -1864,6 +1913,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(prog="photo-workflow-crop")
     parser.add_argument("folder", nargs="?", type=Path)
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Show the diagnostic debug bar at the bottom of the window",
+    )
     return parser.parse_args(argv)
 
 
@@ -1881,6 +1935,7 @@ def main(argv: list[str] | None = None) -> int:
         args.folder,
         restore_last_session=args.folder is None,
         settings=settings,
+        debug=args.debug,
     )
     window.show()
     return app.exec()
