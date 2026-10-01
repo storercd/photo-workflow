@@ -16,6 +16,7 @@ from photo_workflow.crop_tool.model import (
     lightroom_crop_to_display,
     resize_from_anchor,
     rotated_image_size,
+    transform_crop_for_rotation,
 )
 
 
@@ -96,6 +97,22 @@ def test_crop_constraint_leaves_zero_angle_crop_unchanged() -> None:
     crop = CropRect(0.05, 0.1, 0.9, 0.8)
 
     assert constrain_crop_to_rotated_image(crop, 1000, 800, 0) == crop
+
+
+def test_transform_crop_for_rotation_preserves_aspect_ratio_and_center() -> None:
+    """Rotating an upright crop preserves its physical aspect ratio on screen."""
+    crop0 = CropRect(0.25, 0.125, 0.75, 0.875)
+    assert crop_aspect_ratio(crop0, 6000, 4000) == pytest.approx(1.0)
+
+    crop15 = transform_crop_for_rotation(crop0, 6000, 4000, 0.0, 15.0)
+    w15, h15 = rotated_image_size(6000, 4000, 15.0)
+    assert crop_aspect_ratio(crop15, w15, h15) == pytest.approx(1.0)
+    assert (crop15.left + crop15.right) / 2 == pytest.approx(0.5)
+    assert (crop15.top + crop15.bottom) / 2 == pytest.approx(0.5)
+
+    same_angle = transform_crop_for_rotation(crop0, 6000, 4000, 5.0, 5.0)
+    expected = constrain_crop_to_rotated_image(crop0, 6000, 4000, 5.0)
+    assert same_angle == expected
 
 
 @pytest.mark.parametrize(

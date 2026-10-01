@@ -67,7 +67,6 @@ from photo_workflow.crop_tool.horizon import (
     qimage_to_rgb_array,
 )
 from photo_workflow.crop_tool.metadata import (
-    PREVIEW_TAGS,
     PhotoMetadata,
     extract_preview,
     read_photo_metadata,
@@ -83,12 +82,13 @@ from photo_workflow.crop_tool.model import (
     crop_aspect_ratio,
     fit_crop_to_ratio,
     rotated_image_size,
+    transform_crop_for_rotation,
 )
 from photo_workflow.crop_tool.view import CroppedPreview, CropView
 
 PREVIEW_TAGS_BY_SUFFIX = {
     ".cr2": ("PreviewImage",),
-    ".cr3": PREVIEW_TAGS,
+    ".cr3": ("JpgFromRaw", "PreviewImage"),
 }
 RAW_SUFFIXES = set(PREVIEW_TAGS_BY_SUFFIX)
 DropTarget = tuple[Path, Path | None]
@@ -101,6 +101,7 @@ PREVIEW_MAX_DIMENSION = 2560
 RATIO_MATCH_TOLERANCE = 0.005
 AUTO_LEVEL_KEY = Qt.Key.Key_A
 SHOW_HORIZON_KEY = Qt.Key.Key_H
+TOGGLE_LIVE_PREVIEW_KEY = Qt.Key.Key_P
 
 
 def shortcut_modifier() -> str:
@@ -310,7 +311,7 @@ class PhotoLoadTask(QRunnable):
         self.signals.finished.emit(str(self.raw_path))
 
     def _emit_previews(self, orientation: int) -> None:
-        """Emit decoded previews in quality order, ignoring unavailable tags."""
+        """Emit decoded preview image, trying available tags in preference order."""
         preview_tags = PREVIEW_TAGS_BY_SUFFIX[self.raw_path.suffix.lower()]
         for preview_index, tag in enumerate(preview_tags):
             try:
@@ -323,8 +324,8 @@ class PhotoLoadTask(QRunnable):
                     self.signals.error.emit(str(self.raw_path), str(error))
                 continue
             if not image.isNull():
-                is_final_preview = preview_index == len(preview_tags) - 1
-                self.signals.preview.emit(str(self.raw_path), image, is_final_preview)
+                self.signals.preview.emit(str(self.raw_path), image, True)
+                break
 
 
 class PhotoSaveTask(QRunnable):
@@ -461,6 +462,10 @@ class CropWindow(QMainWindow):
         self._load_failures: set[Path] = set()
         self._save_pool = QThreadPool(self)
         self._save_pool.setMaxThreadCount(1)
+        self._active_load_tasks: dict[Path, PhotoLoadTask] = {}
+        self._active_rating_tasks: dict[int, RatingScanTask] = {}
+        self._active_horizon_tasks: dict[Path, HorizonAnalysisTask] = {}
+        self._active_save_tasks: dict[int, PhotoSaveTask] = {}
         self._loading: set[Path] = set()
         self._queued_loads: set[Path] = set()
         self._metadata_cache: dict[Path, PhotoMetadata] = {}
@@ -666,8 +671,10 @@ class CropWindow(QMainWindow):
             angle_layout.addWidget(control)
         self.side_by_side_button = QToolButton()
         self.side_by_side_button.setIcon(qta.icon("fa5s.columns", color="#f4f2ec"))
-        self.side_by_side_button.setToolTip("Show side-by-side crop preview")
-        self.side_by_side_button.setAccessibleName("Toggle side-by-side crop preview")
+        self.side_by_side_button.setToolTip(
+            f"Show Live Preview ({key_hint(TOGGLE_LIVE_PREVIEW_KEY)})"
+        )
+        self.side_by_side_button.setAccessibleName("Toggle Live Preview")
         self.side_by_side_button.setCheckable(True)
         self.side_by_side_button.setFixedSize(28, 28)
         self.side_by_side_button.setAutoRaise(True)
@@ -715,7 +722,7 @@ class CropWindow(QMainWindow):
         result_panel = QWidget()
         result_layout = QVBoxLayout(result_panel)
         result_layout.setContentsMargins(0, 0, 0, 0)
-        result_layout.addWidget(QLabel("Cropped result"))
+        result_layout.addWidget(QLabel("Live Preview"))
         result_layout.addWidget(self.cropped_preview, 1)
         self.preview_container = QWidget()
         preview_layout = QHBoxLayout(self.preview_container)
@@ -819,6 +826,7 @@ class CropWindow(QMainWindow):
         self._update_position_label()
         task = RatingScanTask(self._rating_scan_generation, raw_paths)
         task.signals.ratings.connect(self._rating_scan_finished)
+        self._active_rating_tasks[self._rating_scan_generation] = task
         self._rating_pool.start(task)
 
     def _rating_scan_finished(
@@ -827,6 +835,7 @@ class CropWindow(QMainWindow):
         ratings: dict[Path, tuple[int, str | None]],
         error: str,
     ) -> None:
+        self._active_rating_tasks.pop(generation, None)
         if generation != self._rating_scan_generation:
             return
         self._rating_scan_error = error
@@ -937,7 +946,9 @@ class CropWindow(QMainWindow):
         result_panel = self.cropped_preview.parentWidget()
         result_panel.setVisible(visible)
         description = "Hide" if visible else "Show"
-        self.side_by_side_button.setToolTip(f"{description} side-by-side crop preview")
+        self.side_by_side_button.setToolTip(
+            f"{description} Live Preview ({key_hint(TOGGLE_LIVE_PREVIEW_KEY)})"
+        )
 
     def _set_preview_image(
         self,
@@ -1015,6 +1026,7 @@ class CropWindow(QMainWindow):
         self._add_shortcut(AUTO_LEVEL_KEY, self._auto_level_clicked)
         self._add_shortcut(Qt.Key.Key_L, self._toggle_lock)
         self._add_shortcut(Qt.Key.Key_S, self._toggle_snap)
+        self._add_shortcut(TOGGLE_LIVE_PREVIEW_KEY, self.side_by_side_button.click)
         self._add_shortcut(SHOW_HORIZON_KEY, self._show_horizon_clicked)
         self._add_shortcut(QKeySequence.StandardKey.Open, self._choose_folder)
         self._add_shortcut(QKeySequence.StandardKey.Save, self._start_save)
@@ -1125,15 +1137,22 @@ class CropWindow(QMainWindow):
         self._dirty = False
         self.save_label.setText(" ")
         self._update_position_label()
-        self._set_preview_loading(True)
-        self._set_preview_crop(None)
         cached_image = self._preview_cache.get(self._current_path)
-        if cached_image is not None:
+        if cached_image is not None and self._current_metadata is not None:
+            self._set_preview_loading(False)
             self._show_image(cached_image)
+            self._apply_metadata(self._current_path, self._current_metadata)
             self.auto_level_button.setEnabled(True)
             self.show_horizon_button.setEnabled(True)
-        if self._current_metadata is not None:
-            self._apply_metadata(self._current_path, self._current_metadata)
+        else:
+            self._set_preview_loading(True)
+            self._set_preview_crop(None)
+            if cached_image is not None:
+                self._show_image(cached_image)
+                self.auto_level_button.setEnabled(True)
+                self.show_horizon_button.setEnabled(True)
+            if self._current_metadata is not None:
+                self._apply_metadata(self._current_path, self._current_metadata)
         self._schedule_prefetch(index)
 
     def _schedule_prefetch(self, index: int) -> None:
@@ -1184,6 +1203,7 @@ class CropWindow(QMainWindow):
         task.signals.preview.connect(self._preview_loaded)
         task.signals.error.connect(self._load_error)
         task.signals.finished.connect(self._load_finished)
+        self._active_load_tasks[raw_path] = task
         self._loading.add(raw_path)
         self._load_pool.start(task)
 
@@ -1231,6 +1251,10 @@ class CropWindow(QMainWindow):
             while len(self._preview_cache) > PREVIEW_CACHE_SIZE:
                 self._preview_cache.popitem(last=False)
         if path == self._current_path:
+            if self._dirty:
+                self._show_image(image)
+                self._set_preview_loading(False)
+                return
             self._show_image(image)
             self.auto_level_button.setEnabled(True)
             self.show_horizon_button.setEnabled(True)
@@ -1258,7 +1282,9 @@ class CropWindow(QMainWindow):
 
     def _load_finished(self, path_text: str) -> None:
         """Release the in-flight marker for a completed photo load."""
-        self._loading.discard(Path(path_text))
+        path = Path(path_text)
+        self._active_load_tasks.pop(path, None)
+        self._loading.discard(path)
         if self._current_index >= 0:
             self._schedule_prefetch(self._current_index)
 
@@ -1344,6 +1370,7 @@ class CropWindow(QMainWindow):
             return
         task = HorizonAnalysisTask(self._current_path, image, apply_best)
         task.signals.horizon.connect(self._horizon_analysis_finished)
+        self._active_horizon_tasks[self._current_path] = task
         self.auto_level_button.setEnabled(False)
         self.show_horizon_button.setEnabled(False)
         self.auto_level_button.setToolTip(
@@ -1363,6 +1390,7 @@ class CropWindow(QMainWindow):
     ) -> None:
         """Show current-photo candidates and optionally apply the strongest."""
         path = Path(path_text)
+        self._active_horizon_tasks.pop(path, None)
         if path != self._current_path:
             return
         self.auto_level_button.setEnabled(path in self._preview_cache)
@@ -1419,14 +1447,26 @@ class CropWindow(QMainWindow):
         """Update the displayed rotation and persist it as a crop edit."""
         if self._current_path is None or self._current_metadata is None:
             return
+        old_angle = self._current_rotation
         self._current_rotation = angle
         self._ratio_base_crop = None
+        if self._current_crop is not None:
+            self._current_crop = transform_crop_for_rotation(
+                self._current_crop,
+                self._current_metadata.image_width,
+                self._current_metadata.image_height,
+                old_angle,
+                angle,
+            )
         self._set_preview_rotation(angle)
         if self._current_metadata is not None:
             image = self._preview_cache.get(self._current_path)
             if image is not None:
                 width, height = displayed_image_size(self._current_metadata, angle)
                 self._set_preview_image(image, width, height)
+        if self._current_crop is not None:
+            self._set_preview_crop(self._current_crop)
+            self._select_crop_ratio(self._current_crop)
         self._mark_dirty()
 
     def _mark_dirty(self) -> None:
@@ -1464,6 +1504,7 @@ class CropWindow(QMainWindow):
             self._version,
         )
         task.signals.saved.connect(self._save_finished)
+        self._active_save_tasks[self._version] = task
         self._save_busy = True
         self._saving_version = self._version
         self.save_label.setText("Saving...")
@@ -1478,6 +1519,7 @@ class CropWindow(QMainWindow):
         error: str,
     ) -> None:
         """Update save state and continue any deferred navigation or close."""
+        self._active_save_tasks.pop(version, None)
         self._save_busy = False
         if error:
             self._dirty = True
@@ -1674,6 +1716,10 @@ class CropWindow(QMainWindow):
         self._load_pool.waitForDone()
         self._rating_pool.clear()
         self._rating_pool.waitForDone()
+        self._active_load_tasks.clear()
+        self._active_rating_tasks.clear()
+        self._active_horizon_tasks.clear()
+        self._active_save_tasks.clear()
         if self._settings is not None:
             self._settings.sync()
         event.accept()

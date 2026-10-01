@@ -18,7 +18,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QImage, QKeySequence, QShortcut
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from photo_workflow.crop_tool import app as crop_app
 from photo_workflow.crop_tool.app import (
@@ -93,8 +93,10 @@ def test_cr2_preview_does_not_require_jpg_from_raw(monkeypatch: pytest.MonkeyPat
     assert errors == []
 
 
-def test_cr3_preview_loads_both_tags_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CR3 emits the quick preview before its final JpgFromRaw image."""
+def test_cr3_preview_prefers_jpg_from_raw_without_double_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CR3 emits the full-resolution preview directly without a second refresh."""
     task = crop_app.PhotoLoadTask(Path("primary.CR3"))
     tags: list[str] = []
     previews: list[bool] = []
@@ -113,8 +115,36 @@ def test_cr3_preview_loads_both_tags_in_order(monkeypatch: pytest.MonkeyPatch) -
 
     task._emit_previews(1)
 
-    assert tags == ["PreviewImage", "JpgFromRaw"]
-    assert previews == [False, True]
+    assert tags == ["JpgFromRaw"]
+    assert previews == [True]
+
+
+def test_cr3_preview_falls_back_to_preview_image_when_jpg_from_raw_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CR3 falls back to PreviewImage if JpgFromRaw is unavailable."""
+    task = crop_app.PhotoLoadTask(Path("primary.CR3"))
+    tags: list[str] = []
+    previews: list[bool] = []
+    task.signals.preview.connect(lambda path, image, final: previews.append(final))
+
+    def extract_preview(path: Path, tag: str) -> bytes:
+        tags.append(tag)
+        if tag == "JpgFromRaw":
+            raise RuntimeError("missing tag")
+        return b"preview"
+
+    monkeypatch.setattr(crop_app, "extract_preview", extract_preview)
+    monkeypatch.setattr(
+        crop_app,
+        "decode_preview",
+        lambda data, **kwargs: QImage(8, 8, QImage.Format.Format_RGB32),
+    )
+
+    task._emit_previews(1)
+
+    assert tags == ["JpgFromRaw", "PreviewImage"]
+    assert previews == [True]
 
 
 def test_resolve_drop_path_rejects_unsupported_files(tmp_path: Path) -> None:
@@ -407,6 +437,22 @@ def test_side_by_side_preview_is_optional_and_tracks_editing_state() -> None:
 
     assert not window.side_by_side_button.isChecked()
     assert window.cropped_preview.parentWidget().isHidden()
+    assert "Live Preview" in window.side_by_side_button.toolTip()
+    labels = [w.text() for w in window.cropped_preview.parentWidget().findChildren(QLabel)]
+    assert "Live Preview" in labels
+
+    p_shortcut = next(
+        s for s in window.findChildren(QShortcut) if s.key() == QKeySequence(Qt.Key.Key_P)
+    )
+    p_shortcut.activated.emit()
+    assert window.side_by_side_button.isChecked()
+    assert not window.cropped_preview.parentWidget().isHidden()
+    assert "Hide Live Preview" in window.side_by_side_button.toolTip()
+
+    p_shortcut.activated.emit()
+    assert not window.side_by_side_button.isChecked()
+    assert window.cropped_preview.parentWidget().isHidden()
+
     window.side_by_side_button.click()
     assert not window.cropped_preview.parentWidget().isHidden()
 
@@ -960,6 +1006,69 @@ def test_numeric_shortcuts_select_configured_ratios() -> None:
 
     assert window.ratio_combo.currentIndex() == 2
     assert window.ratio_combo.currentText() == "4:5"
+
+    window.close()
+    app.quit()
+
+
+def test_angle_slider_rotation_preserves_crop_aspect_ratio() -> None:
+    """Rotating the angle slider maintains the crop's physical aspect ratio on screen."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    raw_path = Path("sample.cr3")
+    crop0 = CropRect(0.25, 0.125, 0.75, 0.875)
+    metadata = PhotoMetadata(6000, 4000, crop0)
+    preview = QImage(QSize(600, 400), QImage.Format.Format_RGB32)
+    preview.fill(Qt.GlobalColor.black)
+    window._current_path = raw_path
+    window._preview_cache[raw_path] = preview
+    window._apply_metadata(raw_path, metadata)
+    window._save_timer.stop()
+
+    assert window.view._snap_ratio is not None
+    assert window.view._snap_ratio.label == "1:1"
+
+    window.rotation_slider.setValue(150)
+    window._save_timer.stop()
+
+    image_rect = window.view._image_rect()
+    crop_rect = window.view._crop_rect(image_rect)
+    assert crop_rect is not None
+    assert crop_rect.width() == pytest.approx(crop_rect.height(), rel=1e-3)
+    assert window.view._snap_ratio is not None
+    assert window.view._snap_ratio.label == "1:1"
+
+    window.close()
+    app.quit()
+
+
+def test_cached_photo_navigation_does_not_blink_loading_state() -> None:
+    """Navigating to a previously cached photo immediately displays without loading veil."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    photo_1 = Path("first.cr3")
+    photo_2 = Path("second.cr3")
+    window._photos = [photo_1, photo_2]
+    window._current_index = 0
+    window._current_path = photo_1
+
+    img1 = QImage(QSize(600, 400), QImage.Format.Format_RGB32)
+    img2 = QImage(QSize(600, 400), QImage.Format.Format_RGB32)
+    meta1 = PhotoMetadata(6000, 4000, CropRect(0, 0, 1, 1))
+    meta2 = PhotoMetadata(6000, 4000, CropRect(0.1, 0.1, 0.9, 0.9))
+
+    window._preview_cache[photo_1] = img1
+    window._preview_cache[photo_2] = img2
+    window._metadata_cache[photo_1] = meta1
+    window._metadata_cache[photo_2] = meta2
+
+    window._show_photo(1)
+    assert not window.view.is_loading
+    assert window._current_crop == meta2.crop
+
+    window._show_photo(0)
+    assert not window.view.is_loading
+    assert window._current_crop == meta1.crop
 
     window.close()
     app.quit()

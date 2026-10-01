@@ -93,7 +93,7 @@ class CropView(QWidget):
         """Rotate the photo beneath the upright crop frame."""
         self._rotation_angle = angle_degrees
         if self._crop is not None:
-            self._set_edited_crop(self._crop)
+            self._snap_ratio = self._matching_snap_ratio(self._crop)
         self.update()
 
     def set_horizon_candidates(

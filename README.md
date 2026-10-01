@@ -129,20 +129,20 @@ your last session. Folders and individual `.CR2` or `.CR3` photos can also be dr
 window. A dropped photo opens its parent folder with that photo selected.
 
 The app supports Canon `.CR2` and `.CR3` files and uses embedded JPEG previews.
-For CR3, it loads a small preview before the larger `JpgFromRaw` preview; for
-CR2, it uses the embedded `PreviewImage`. Star-rating thresholds and
+For CR3, it uses the embedded `JpgFromRaw` preview (with `PreviewImage` fallback);
+for CR2, it uses the embedded `PreviewImage`. Star-rating thresholds and
 Lightroom color-label filters can be combined; the photo count indicates when
 the visible list is filtered. Use the angle slider to rotate the image beneath
 the crop, Auto to apply a detected horizon, or Show to select a suggested line.
-The optional side-by-side pane previews the cropped result. Revert restores the
+The optional Live Preview pane displays the cropped result. Revert restores the
 crop and angle from when the current photo was opened.
 
 Use `Left`/`Right` to navigate, `L` to toggle ratio lock, `S` to toggle
-snapping, and `1`-`8` to select a configured ratio. `A` auto-levels and `H`
-shows horizon candidates. `Command+O` opens a folder and `Command+S` saves
-the current crop. Crop and rotation changes are written to Lightroom-compatible
-XMP sidecars, creating one on the first edit when needed; RAW files are not
-modified. ExifTool must be on `PATH`.
+snapping, `P` to toggle Live Preview, and `1`-`8` to select a configured ratio.
+`A` auto-levels and `H` shows horizon candidates. `Command+O` opens a folder and
+`Command+S` saves the current crop. Crop and rotation changes are written to
+Lightroom-compatible XMP sidecars, creating one on the first edit when needed;
+RAW files are not modified. ExifTool must be on `PATH`.
 
 Configure ratios and the relative snap tolerance in `photo-workflow.toml`:
 

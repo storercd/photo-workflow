@@ -151,6 +151,35 @@ def constrain_crop_to_rotated_image(
     return _crop_at_center(center, crop.width * scale, crop.height * scale)
 
 
+def transform_crop_for_rotation(
+    crop: CropRect,
+    image_width: float,
+    image_height: float,
+    old_angle: float,
+    new_angle: float,
+) -> CropRect:
+    """
+    Adjust an upright crop across a rotation change to preserve aspect and center.
+
+    Returns:
+        The transformed crop constrained to the newly rotated image boundary.
+    """
+    if old_angle == new_angle:
+        return constrain_crop_to_rotated_image(crop, image_width, image_height, new_angle)
+    w_old, h_old = rotated_image_size(image_width, image_height, old_angle)
+    w_new, h_new = rotated_image_size(image_width, image_height, new_angle)
+    cx_pix = ((crop.left + crop.right) / 2 - 0.5) * w_old
+    cy_pix = ((crop.top + crop.bottom) / 2 - 0.5) * h_old
+    w_norm = (crop.width * w_old) / w_new
+    h_norm = (crop.height * h_old) / h_new
+    new_cx = 0.5 + cx_pix / w_new
+    new_cy = 0.5 + cy_pix / h_new
+    unconstrained = CropRect(
+        new_cx - w_norm / 2, new_cy - h_norm / 2, new_cx + w_norm / 2, new_cy + h_norm / 2
+    )
+    return constrain_crop_to_rotated_image(unconstrained, image_width, image_height, new_angle)
+
+
 def _rotated_image_polygon(
     image_width: float,
     image_height: float,
