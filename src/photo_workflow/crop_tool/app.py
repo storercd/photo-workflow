@@ -429,6 +429,7 @@ class CropWindow(QMainWindow):
         self._navigation_direction = 1
         self._current_metadata: PhotoMetadata | None = None
         self._current_crop: CropRect | None = None
+        self._ratio_base_crop: CropRect | None = None
         self._current_rotation = 0.0
         self._starting_crop: CropRect | None = None
         self._starting_rotation: float | None = None
@@ -854,6 +855,7 @@ class CropWindow(QMainWindow):
         self._current_path = None
         self._current_metadata = None
         self._current_crop = None
+        self._ratio_base_crop = None
         self._starting_crop = None
         self._starting_rotation = None
         self.revert_button.setEnabled(False)
@@ -977,8 +979,15 @@ class CropWindow(QMainWindow):
         for index in range(min(9, len(self._ratios))):
             self._add_shortcut(
                 Qt.Key(int(Qt.Key.Key_1) + index),
-                lambda selected_index=index: self.ratio_combo.setCurrentIndex(selected_index),
+                lambda selected_index=index + 1: self._apply_ratio_index(selected_index),
             )
+
+    def _apply_ratio_index(self, index: int) -> None:
+        """Apply a ratio preset by index from a numeric shortcut."""
+        if self.ratio_combo.currentIndex() == index:
+            self._ratio_selected(index)
+        else:
+            self.ratio_combo.setCurrentIndex(index)
 
     def _add_shortcut(self, key: QKeySequence | Qt.Key, callback: object) -> None:
         """Create a window-scoped keyboard shortcut."""
@@ -1052,6 +1061,7 @@ class CropWindow(QMainWindow):
             self._ratings_loaded and self._current_index < len(self._photos) - 1
         )
         self._current_crop = None
+        self._ratio_base_crop = None
         self._current_metadata = self._metadata_cache.get(self._current_path)
         self._current_rotation = 0.0
         self._starting_crop = None
@@ -1215,6 +1225,7 @@ class CropWindow(QMainWindow):
         if constrained_crop is None:
             return
         self._current_crop = constrained_crop
+        self._ratio_base_crop = None
         self._mark_dirty()
         self._select_crop_ratio(constrained_crop)
 
@@ -1236,6 +1247,7 @@ class CropWindow(QMainWindow):
         if crop is None:
             return
         self._current_crop = crop
+        self._ratio_base_crop = None
         self._select_crop_ratio(crop)
         self._mark_dirty()
 
@@ -1363,6 +1375,7 @@ class CropWindow(QMainWindow):
         if self._current_path is None or self._current_metadata is None:
             return
         self._current_rotation = angle
+        self._ratio_base_crop = None
         self._set_preview_rotation(angle)
         if self._current_metadata is not None:
             image = self._preview_cache.get(self._current_path)
@@ -1482,21 +1495,24 @@ class CropWindow(QMainWindow):
         """Apply a chosen preset immediately or switch to freeform geometry."""
         ratio = self.ratio_combo.itemData(index)
         if ratio is not None and self._current_crop is not None and self._current_metadata:
-            image_width, image_height = displayed_image_size(
-                self._current_metadata,
-                self._current_rotation,
-            )
-            crop = fit_crop_to_ratio(
-                self._current_crop,
-                image_width,
-                image_height,
-                ratio,
-            )
-            self._current_crop = crop
-            self._set_preview_crop(crop)
-            if crop != self._current_metadata.crop:
-                self._crop_edited(crop)
+            self._fit_and_apply_ratio(ratio)
+        else:
+            self._ratio_base_crop = None
         self._update_crop_mode()
+
+    def _fit_and_apply_ratio(self, ratio: AspectRatio) -> None:
+        """Fit the base crop to a ratio preset and apply it."""
+        if self._current_metadata is None or self._current_crop is None:
+            return
+        if self._ratio_base_crop is None:
+            self._ratio_base_crop = self._current_crop
+        width, height = displayed_image_size(self._current_metadata, self._current_rotation)
+        crop = fit_crop_to_ratio(self._ratio_base_crop, width, height, ratio)
+        constrained_crop = self._set_preview_crop(crop)
+        if constrained_crop is not None:
+            self._current_crop = constrained_crop
+            self._mark_dirty()
+            self._select_crop_ratio(constrained_crop)
 
     def _select_crop_ratio(self, crop: CropRect) -> None:
         """Show the closest preset only when the current crop actually matches it."""

@@ -15,7 +15,7 @@ from PySide6.QtCore import (
     Qt,
     QUrl,
 )
-from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QImage, QShortcut
+from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QImage, QKeySequence, QShortcut
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -895,5 +895,70 @@ def test_show_horizon_candidates_does_not_change_angle_until_candidate_selected(
     assert window.rotation_slider.value() == 21
     assert window._current_rotation == pytest.approx(2.1)
     assert window.view._selected_horizon_candidate == 1
+    window.close()
+    app.quit()
+
+
+def test_consecutive_ratio_selection_preserves_base_crop_without_shrinking() -> None:
+    """Flipping between ratios without panning or resizing does not shrink the crop."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    raw_path = Path("sample.cr3")
+    original_crop = CropRect(0.0, 0.0, 1.0, 1.0)
+    metadata = PhotoMetadata(6000, 4000, original_crop)
+    preview = QImage(QSize(600, 400), QImage.Format.Format_RGB32)
+    preview.fill(Qt.GlobalColor.black)
+    window._current_path = raw_path
+    window._preview_cache[raw_path] = preview
+    window._apply_metadata(raw_path, metadata)
+    window._save_timer.stop()
+
+    window._apply_ratio_index(1)
+    crop_1_1_first = window._current_crop
+    assert crop_1_1_first is not None
+
+    window._apply_ratio_index(2)
+    crop_4_5_first = window._current_crop
+    assert crop_4_5_first is not None
+
+    window._apply_ratio_index(1)
+    assert window._current_crop == crop_1_1_first
+
+    window._apply_ratio_index(2)
+    assert window._current_crop == crop_4_5_first
+
+    panned_crop = CropRect(0.1, 0.05, 0.9, 0.85)
+    window._crop_edited(panned_crop)
+    assert window._ratio_base_crop is None
+
+    window._apply_ratio_index(1)
+    assert window._ratio_base_crop == panned_crop
+    assert window._current_crop != crop_1_1_first
+
+    window.close()
+    app.quit()
+
+
+def test_numeric_shortcuts_select_configured_ratios() -> None:
+    """Keys 1-8 select configured ratios 1 through 8, not Free."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+
+    for shortcut in window.findChildren(QShortcut):
+        if shortcut.key() == QKeySequence(Qt.Key.Key_1):
+            shortcut.activated.emit()
+            break
+
+    assert window.ratio_combo.currentIndex() == 1
+    assert window.ratio_combo.currentText() == "1:1"
+
+    for shortcut in window.findChildren(QShortcut):
+        if shortcut.key() == QKeySequence(Qt.Key.Key_2):
+            shortcut.activated.emit()
+            break
+
+    assert window.ratio_combo.currentIndex() == 2
+    assert window.ratio_combo.currentText() == "4:5"
+
     window.close()
     app.quit()
