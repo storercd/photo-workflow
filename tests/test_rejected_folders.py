@@ -135,6 +135,57 @@ def test_log_rejected_folder_assessment_reports_green_purge_summary(
     assert "purging 10.00% disk space from rejected folders" in caplog.text
 
 
+def test_select_assessment_folders_filters_to_chosen_paths(tmp_path: Path) -> None:
+    """Verify selecting a subset recomputes totals for only the chosen folders."""
+    camera_root = tmp_path / "camera"
+    first_item = rejected_folders.RejectedFolderAssessmentItem(
+        folder_path=camera_root / "20260701" / "_Rejected",
+        reclaimable_bytes=10,
+        percent_of_disk=10.0,
+    )
+    second_item = rejected_folders.RejectedFolderAssessmentItem(
+        folder_path=camera_root / "20260702" / "_Rejected",
+        reclaimable_bytes=5,
+        percent_of_disk=5.0,
+    )
+    assessment = rejected_folders.RejectedFolderAssessment(
+        camera_root=camera_root,
+        disk_total_bytes=100,
+        folders=[first_item, second_item],
+        total_reclaimable_bytes=15,
+        total_percent_of_disk=15.0,
+    )
+
+    selected = rejected_folders.select_assessment_folders(assessment, {first_item.folder_path})
+
+    assert selected.folders == [first_item]
+    assert selected.total_reclaimable_bytes == 10
+    assert selected.total_percent_of_disk == 10.0
+
+
+def test_select_assessment_folders_returns_empty_for_no_selection(tmp_path: Path) -> None:
+    """Verify an empty selection yields zeroed totals and no folders."""
+    camera_root = tmp_path / "camera"
+    item = rejected_folders.RejectedFolderAssessmentItem(
+        folder_path=camera_root / "20260701" / "_Rejected",
+        reclaimable_bytes=10,
+        percent_of_disk=10.0,
+    )
+    assessment = rejected_folders.RejectedFolderAssessment(
+        camera_root=camera_root,
+        disk_total_bytes=100,
+        folders=[item],
+        total_reclaimable_bytes=10,
+        total_percent_of_disk=10.0,
+    )
+
+    selected = rejected_folders.select_assessment_folders(assessment, set())
+
+    assert selected.folders == []
+    assert selected.total_reclaimable_bytes == 0
+    assert selected.total_percent_of_disk == 0.0
+
+
 def test_format_purge_message_is_green_when_interactive(monkeypatch) -> None:
     """Verify interactive purge summaries use green ANSI styling."""
     monkeypatch.setattr(rejected_folders.sys.stderr, "isatty", lambda: True)

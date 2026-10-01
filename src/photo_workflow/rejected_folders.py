@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 DEFAULT_REJECTED_DIRNAME = "_Rejected"
@@ -139,6 +139,26 @@ def log_rejected_folder_assessment(
         len(assessment.folders),
         bytes_to_gigabytes(assessment.total_reclaimable_bytes),
         assessment.total_percent_of_disk,
+    )
+
+
+def select_assessment_folders(
+    assessment: RejectedFolderAssessment,
+    selected_paths: set[Path],
+) -> RejectedFolderAssessment:
+    """Return an assessment narrowed to the selected folders, with totals recomputed."""
+    selected_folders = [
+        item for item in assessment.folders if item.folder_path in selected_paths
+    ]
+    total_reclaimable_bytes = sum(item.reclaimable_bytes for item in selected_folders)
+    return replace(
+        assessment,
+        folders=selected_folders,
+        total_reclaimable_bytes=total_reclaimable_bytes,
+        total_percent_of_disk=calculate_disk_percentage(
+            total_reclaimable_bytes,
+            disk_total_bytes=assessment.disk_total_bytes,
+        ),
     )
 
 

@@ -407,3 +407,97 @@ def test_run_rejected_folder_step_logs_scan_and_purge_elapsed_time(
 
     assert "rejected-folder scan completed in 1.25s" in caplog.text
     assert "rejected-folder purge completed in 1.50s" in caplog.text
+
+
+def test_run_full_import_reports_stages_without_purging(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify the dashboard import path never purges and reports each stage in order."""
+    source_dir = tmp_path / "camera" / "20260529"
+    call_order: list[str] = []
+    stage_names: list[str] = []
+    purge_values: list[bool] = []
+
+    config = app_config.AppConfig(
+        workflow=app_config.WorkflowConfig(camera_root=tmp_path / "camera"),
+        memory_card_copy=app_config.MemoryCardCopyConfig(),
+        video_notes=app_config.VideoNotesConfig(max_duration_seconds=9.0),
+    )
+
+    monkeypatch.setattr(
+        workflow,
+        "build_today_source_dir",
+        lambda today=None, camera_root=None: source_dir,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "run_rejected_folder_step",
+        lambda camera_root, purge_rejected: purge_values.append(purge_rejected)
+        or call_order.append("rejected")
+        or build_assessment(camera_root),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "run_import_step",
+        lambda config, source_dir: call_order.append("import") or (source_dir,),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "report_target_disk_space",
+        lambda target_dir, config, reclaimable_percent=None: call_order.append("disk_space"),
+    )
+    monkeypatch.setattr(workflow, "resolve_disk_usage_path", lambda camera_root: camera_root)
+
+    assessment, source_dirs = workflow.run_full_import(config, on_stage=stage_names.append)
+
+    assert purge_values == [False]
+    assert call_order == ["rejected", "import", "disk_space"]
+    assert source_dirs == (source_dir,)
+    assert assessment.total_percent_of_disk == 15.0
+    assert stage_names == [
+        "Assessing rejected folders",
+        "Importing memory card & generating video notes",
+        "Reporting disk space",
+    ]
+
+
+def test_run_full_import_works_without_a_stage_callback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify the dashboard import path tolerates an omitted stage callback."""
+    source_dir = tmp_path / "camera" / "20260529"
+
+    config = app_config.AppConfig(
+        workflow=app_config.WorkflowConfig(camera_root=tmp_path / "camera"),
+        memory_card_copy=app_config.MemoryCardCopyConfig(),
+        video_notes=app_config.VideoNotesConfig(max_duration_seconds=9.0),
+    )
+
+    monkeypatch.setattr(
+        workflow,
+        "build_today_source_dir",
+        lambda today=None, camera_root=None: source_dir,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "run_rejected_folder_step",
+        lambda camera_root, purge_rejected: build_assessment(camera_root),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "run_import_step",
+        lambda config, source_dir: (source_dir,),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "report_target_disk_space",
+        lambda target_dir, config, reclaimable_percent=None: None,
+    )
+    monkeypatch.setattr(workflow, "resolve_disk_usage_path", lambda camera_root: camera_root)
+
+    assessment, source_dirs = workflow.run_full_import(config)
+
+    assert source_dirs == (source_dir,)
+    assert assessment.total_percent_of_disk == 15.0
