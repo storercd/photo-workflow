@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
@@ -17,6 +18,26 @@ def build_config(tmp_path: Path) -> app_config.AppConfig:
         workflow=app_config.WorkflowConfig(camera_root=tmp_path / "camera"),
         memory_card_copy=app_config.MemoryCardCopyConfig(card_mount_root=tmp_path / "volumes"),
     )
+
+
+def test_qt_log_handler_strips_ansi_color_codes() -> None:
+    """Verify ANSI escape sequences are stripped from log lines shown in the dashboard."""
+    QApplication.instance() or QApplication([])
+    handler = dashboard_app.QtLogHandler()
+    emitted: list[str] = []
+    handler.message_logged.connect(emitted.append)
+
+    logger = logging.getLogger("photo_workflow.test_qt_log_handler")
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        logger.info("\033[1;32mejected memory card at /Volumes/Atlas Ultra\033[0m")
+    finally:
+        logger.removeHandler(handler)
+
+    assert emitted
+    assert emitted[-1].endswith("ejected memory card at /Volumes/Atlas Ultra")
+    assert "\033[" not in emitted[-1]
 
 
 def test_resolve_launcher_icon_falls_back_when_app_not_found(monkeypatch) -> None:
