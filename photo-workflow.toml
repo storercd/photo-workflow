@@ -17,6 +17,10 @@ transcription_model = "mlx-community/whisper-medium-mlx"
 [crop_tool]
 aspect_ratios = ["1:1", "4:5", "1.91:1"]
 snap_tolerance = 0.05
+# When switching to a preset ratio, grow the hand-drawn crop instead of
+# shrinking it (capped at the image bounds). Set to false to restore the
+# old shrink-to-fit behavior.
+grow_on_ratio_change = true
 
 # Dashboard launcher icons. app_name is passed to `open -a` (macOS Launch Services),
 # so it does not need to be an exact install path. Adjust names to match your

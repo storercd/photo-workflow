@@ -535,19 +535,42 @@ def fit_crop_to_ratio(
     image_width: int,
     image_height: int,
     ratio: AspectRatio,
+    *,
+    grow: bool = True,
 ) -> CropRect:
     """
-    Fit a crop to a requested displayed ratio, centered inside its current bounds.
+    Fit a crop to a requested displayed ratio, centered on its current center.
+
+    When `grow` is true (the default), the crop expands to the nearest
+    matching ratio instead of shrinking, so a hand-drawn selection keeps
+    its edges rather than getting cropped further in. Growth is capped at
+    the image edges: if the ideal grown size would exceed the image
+    bounds, the crop gets as large as it can without exceeding them, which
+    may require giving back a little of the other dimension to hold the
+    exact ratio. When `grow` is false, the crop instead shrinks to fit
+    within its original bounds.
 
     Returns:
-        The resized crop contained within the original crop bounds.
+        The resized crop, centered as closely as possible on the original
+        crop's center and clamped to the image bounds.
     """
     _validate_image_size(image_width, image_height)
     normalized_ratio = ratio.value * image_height / image_width
-    height = min(crop.height, crop.width / normalized_ratio)
+    if grow:
+        height = max(crop.height, crop.width / normalized_ratio)
+    else:
+        height = min(crop.height, crop.width / normalized_ratio)
     width = height * normalized_ratio
     center_x = (crop.left + crop.right) / 2
     center_y = (crop.top + crop.bottom) / 2
+    if grow:
+        scale = min(
+            2 * min(center_x, 1 - center_x) / width,
+            2 * min(center_y, 1 - center_y) / height,
+            1.0,
+        )
+        width *= scale
+        height *= scale
     return CropRect(
         max(0, center_x - width / 2),
         max(0, center_y - height / 2),
