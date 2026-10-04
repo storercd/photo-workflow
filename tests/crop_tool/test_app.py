@@ -620,25 +620,28 @@ def test_parse_aspect_ratios_rejects_invalid_values(value: str) -> None:
 
 
 def test_load_crop_settings_reads_custom_ratios_and_tolerance(tmp_path: Path) -> None:
-    """Load user-adjustable ratios and snap tolerance from TOML."""
+    """Load user-adjustable ratios, snap tolerance, and grow behavior from TOML."""
     config_path = tmp_path / "photo-workflow.toml"
     config_path.write_text(
-        '[crop_tool]\naspect_ratios = ["4:5", "3:2"]\nsnap_tolerance = 0.04\n',
+        '[crop_tool]\naspect_ratios = ["4:5", "3:2"]\nsnap_tolerance = 0.04\n'
+        "grow_on_ratio_change = false\n",
         encoding="utf-8",
     )
 
-    ratios, tolerance = load_crop_settings(config_path)
+    ratios, tolerance, grow_on_ratio_change = load_crop_settings(config_path)
 
     assert [ratio.label for ratio in ratios] == ["4:5", "3:2"]
     assert tolerance == pytest.approx(0.04)
+    assert grow_on_ratio_change is False
 
 
 def test_load_crop_settings_defaults_to_wider_snap_range(tmp_path: Path) -> None:
     """The default relative snap tolerance is five percent when no config exists."""
-    ratios, tolerance = load_crop_settings(tmp_path / "missing.toml")
+    ratios, tolerance, grow_on_ratio_change = load_crop_settings(tmp_path / "missing.toml")
 
     assert ratios
     assert tolerance == pytest.approx(0.05)
+    assert grow_on_ratio_change is True
 
 
 def test_load_crop_settings_rejects_out_of_range_tolerance(tmp_path: Path) -> None:

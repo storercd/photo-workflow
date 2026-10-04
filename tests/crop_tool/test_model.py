@@ -50,11 +50,11 @@ def test_lightroom_serialized_four_by_five_crop_matches_preset_tolerance() -> No
     ) == AspectRatio(4, 5, "4:5")
 
 
-def test_fit_crop_to_ratio_changes_bounds_immediately_and_keeps_center() -> None:
-    """A chosen preset fits within the existing crop, centered on its subject."""
+def test_fit_crop_to_ratio_shrinks_within_bounds_when_opted_out_of_growth() -> None:
+    """With `grow=False`, a chosen preset fits within the existing crop bounds."""
     crop = CropRect(left=0.1, top=0.1, right=0.9, bottom=0.9)
 
-    updated = fit_crop_to_ratio(crop, 6000, 4000, AspectRatio(4, 5))
+    updated = fit_crop_to_ratio(crop, 6000, 4000, AspectRatio(4, 5), grow=False)
 
     assert crop_aspect_ratio(updated, 6000, 4000) == pytest.approx(4 / 5)
     assert (updated.left + updated.right) / 2 == pytest.approx(0.5)
@@ -63,6 +63,34 @@ def test_fit_crop_to_ratio_changes_bounds_immediately_and_keeps_center() -> None
     assert updated.right <= crop.right + 1e-9
     assert updated.top == pytest.approx(crop.top)
     assert updated.bottom == pytest.approx(crop.bottom)
+
+
+def test_fit_crop_to_ratio_grows_a_hand_drawn_crop_by_default() -> None:
+    """A chosen preset grows the drawn crop outward, keeping both original edges."""
+    crop = CropRect(left=0.4, top=0.3, right=0.6, bottom=0.5)
+
+    updated = fit_crop_to_ratio(crop, 1000, 1000, AspectRatio(1, 2))
+
+    assert crop_aspect_ratio(updated, 1000, 1000) == pytest.approx(1 / 2)
+    assert updated.left == pytest.approx(crop.left)
+    assert updated.right == pytest.approx(crop.right)
+    assert updated.top <= crop.top + 1e-9
+    assert updated.bottom >= crop.bottom - 1e-9
+
+
+def test_fit_crop_to_ratio_growth_is_capped_at_image_bounds() -> None:
+    """Growth gets as close as possible to the ideal size without exceeding the image."""
+    crop = CropRect(left=0.1, top=0.1, right=0.9, bottom=0.9)
+
+    updated = fit_crop_to_ratio(crop, 6000, 4000, AspectRatio(4, 5))
+
+    assert crop_aspect_ratio(updated, 6000, 4000) == pytest.approx(4 / 5)
+    assert (updated.left + updated.right) / 2 == pytest.approx(0.5)
+    assert (updated.top + updated.bottom) / 2 == pytest.approx(0.5)
+    assert updated.top == pytest.approx(0)
+    assert updated.bottom == pytest.approx(1)
+    assert crop.left < updated.left
+    assert updated.right < crop.right
 
 
 @pytest.mark.parametrize("angle", [10, 30, -22])

@@ -426,7 +426,7 @@ class CropWindow(QMainWindow):
         self.resize(1280, 820)
         self._settings = settings
         self._debug = debug
-        self._ratios, self._snap_tolerance = load_crop_settings()
+        self._ratios, self._snap_tolerance, self._grow_on_ratio_change = load_crop_settings()
         self._photos: list[Path] = []
         self._all_photos: list[Path] = []
         self._photo_ratings: dict[Path, tuple[int, str | None]] = {}
@@ -1644,7 +1644,13 @@ class CropWindow(QMainWindow):
         if self._ratio_base_crop is None:
             self._ratio_base_crop = self._current_crop
         width, height = displayed_image_size(self._current_metadata, self._current_rotation)
-        crop = fit_crop_to_ratio(self._ratio_base_crop, width, height, ratio)
+        crop = fit_crop_to_ratio(
+            self._ratio_base_crop,
+            width,
+            height,
+            ratio,
+            grow=self._grow_on_ratio_change,
+        )
         constrained_crop = self._set_preview_crop(crop)
         if constrained_crop is not None:
             self._current_crop = constrained_crop
@@ -1855,18 +1861,20 @@ def update_saved_crop_cache(
 
 def load_crop_settings(
     config_path: Path = DEFAULT_CONFIG_PATH,
-) -> tuple[tuple[AspectRatio, ...], float]:
+) -> tuple[tuple[AspectRatio, ...], float, bool]:
     """
-    Load configurable ratios and snap tolerance from the project TOML.
+    Load configurable ratios, snap tolerance, and ratio-grow behavior.
 
     Returns:
-        The ratio list and relative snap tolerance.
+        The ratio list, relative snap tolerance, and whether switching to a
+        preset ratio should grow the crop (instead of shrinking it) by
+        default.
 
     Raises:
         ValueError: If the snap tolerance or configured ratios are invalid.
     """
     if not config_path.is_file():
-        return DEFAULT_ASPECT_RATIOS, 0.05
+        return DEFAULT_ASPECT_RATIOS, 0.05, True
     with config_path.open("rb") as config_file:
         settings = tomllib.load(config_file).get("crop_tool", {})
     raw_ratios = settings.get("aspect_ratios")
@@ -1874,7 +1882,8 @@ def load_crop_settings(
     tolerance = float(settings.get("snap_tolerance", 0.05))
     if tolerance < 0 or tolerance > 1:
         raise ValueError("crop_tool.snap_tolerance must be between 0 and 1")
-    return ratios, tolerance
+    grow_on_ratio_change = bool(settings.get("grow_on_ratio_change", True))
+    return ratios, tolerance, grow_on_ratio_change
 
 
 def parse_aspect_ratios(values: list[str]) -> tuple[AspectRatio, ...]:

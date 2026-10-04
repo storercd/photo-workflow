@@ -194,13 +194,20 @@ snapping, `P` to toggle Live Preview, and `1`-`8` to select a configured ratio.
 Lightroom-compatible XMP sidecars, creating one on the first edit when needed;
 RAW files are not modified. ExifTool must be on `PATH`.
 
-Configure ratios and the relative snap tolerance in `photo-workflow.toml`:
+Configure ratios, the relative snap tolerance, and ratio-switch growth behavior
+in `photo-workflow.toml`:
 
 ```toml
 [crop_tool]
 aspect_ratios = ["1:1", "4:5", "5:4", "3:2", "2:3", "4:3", "3:4", "16:9"]
 snap_tolerance = 0.05
+grow_on_ratio_change = true
 ```
+
+Pressing a ratio hotkey (`1`-`8`) after hand-drawing a crop grows the crop
+outward to the preset ratio by default, keeping every edge you already
+placed, up to the image bounds. Set `grow_on_ratio_change = false` to
+instead shrink the crop to fit within its drawn bounds.
 
 ## Fonts
 
