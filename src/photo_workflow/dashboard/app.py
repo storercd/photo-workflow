@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +57,9 @@ IMPORT_STAGES = (
 LOGGER = logging.getLogger(__name__)
 
 
+ANSI_ESCAPE_PATTERN = re.compile(r"\033\[[0-9;]*m")
+
+
 class QtLogHandler(logging.Handler, QObject):
     """A logging handler that forwards formatted records to a Qt signal."""
 
@@ -68,8 +72,16 @@ class QtLogHandler(logging.Handler, QObject):
         self.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Forward the formatted log line to listeners."""
-        self.message_logged.emit(self.format(record))
+        """
+        Forward the formatted log line to listeners, stripping any ANSI color codes.
+
+        Log messages may embed ANSI styling intended for a real terminal (e.g. the
+        memory-card eject message). The dashboard's log widget isn't a terminal and
+        can't render those escape sequences, so they must be stripped here rather
+        than shown as literal garbage characters.
+        """
+        plain_message = ANSI_ESCAPE_PATTERN.sub("", self.format(record))
+        self.message_logged.emit(plain_message)
 
 
 class ImportWorkerSignals(QObject):
