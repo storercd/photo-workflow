@@ -72,7 +72,8 @@ class QtLogHandler(logging.Handler, QObject):
         self.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Forward the formatted log line to listeners, stripping any ANSI color codes.
+        """
+        Forward the formatted log line to listeners, stripping any ANSI color codes.
 
         Log messages may embed ANSI styling intended for a real terminal (e.g. the
         memory-card eject message). The dashboard's log widget isn't a terminal and
