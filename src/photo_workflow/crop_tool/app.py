@@ -72,6 +72,7 @@ from photo_workflow.crop_tool.metadata import (
     read_photo_metadata,
     read_photo_ratings,
     write_photo_crop,
+    write_photo_label,
 )
 from photo_workflow.crop_tool.model import (
     DEFAULT_ASPECT_RATIOS,
@@ -102,6 +103,16 @@ RATIO_MATCH_TOLERANCE = 0.005
 AUTO_LEVEL_KEY = Qt.Key.Key_A
 SHOW_HORIZON_KEY = Qt.Key.Key_H
 TOGGLE_LIVE_PREVIEW_KEY = Qt.Key.Key_P
+FLAG_COLOR_KEY = Qt.Key.Key_F
+COLOR_LABELS = ("Red", "Yellow", "Green", "Blue", "Purple")
+COLOR_LABEL_HEX = {
+    "Red": "#e45858",
+    "Yellow": "#e5bd48",
+    "Green": "#55e39f",
+    "Blue": "#5297e8",
+    "Purple": "#aa70d6",
+}
+DEFAULT_FLAG_COLOR = "Red"
 
 
 def shortcut_modifier() -> str:
@@ -124,6 +135,7 @@ class WorkerSignals(QObject):
     saved = Signal(str, int, object, float, str)
     horizon = Signal(str, object, str, bool)
     ratings = Signal(int, object, str)
+    label_saved = Signal(str, object, str)
 
 
 class ClickableLabel(QLabel):
@@ -388,6 +400,27 @@ class HorizonAnalysisTask(QRunnable):
         )
 
 
+class PhotoLabelSaveTask(QRunnable):
+    """Write one color-label update to a sidecar without touching crop fields."""
+
+    def __init__(self, raw_path: Path, label: str | None) -> None:
+        """Initialize a label write for one RAW photo's XMP sidecar."""
+        super().__init__()
+        self.raw_path = raw_path
+        self.label = label
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        """Write the color label and report success or failure."""
+        xmp_path = self.raw_path.with_suffix(".xmp")
+        try:
+            write_photo_label(xmp_path, self.label)
+            error = ""
+        except Exception as exception:
+            error = str(exception)
+        self.signals.label_saved.emit(str(self.raw_path), self.label, error)
+
+
 class RatingScanTask(QRunnable):
     """Read sidecar star ratings and color labels for one folder in a worker."""
 
@@ -461,6 +494,14 @@ class CropWindow(QMainWindow):
         self._load_pool.setMaxThreadCount(3)
         self._rating_pool = QThreadPool(self)
         self._rating_pool.setMaxThreadCount(1)
+        self._label_pool = QThreadPool(self)
+        self._label_pool.setMaxThreadCount(1)
+        self._active_label_tasks: dict[Path, PhotoLabelSaveTask] = {}
+        self._flag_color = DEFAULT_FLAG_COLOR
+        if self._settings is not None:
+            stored_flag_color = self._settings.value("flag_color", DEFAULT_FLAG_COLOR, type=str)
+            if stored_flag_color in COLOR_LABELS:
+                self._flag_color = stored_flag_color
         self._load_failures: set[Path] = set()
         self._save_pool = QThreadPool(self)
         self._save_pool.setMaxThreadCount(1)
@@ -536,6 +577,9 @@ class CropWindow(QMainWindow):
         self.position_label = ClickableLabel("")
         self.position_label.setToolTip("Reveal the current photo in the file manager")
         self.position_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.label_indicator = QLabel()
+        self.label_indicator.setFixedSize(10, 10)
+        self.label_indicator.setVisible(False)
         self.position_count_label = QLabel("No folder open")
         self.position_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         navigation_panel = QWidget()
@@ -607,12 +651,22 @@ class CropWindow(QMainWindow):
             color_menu.addAction(action)
             self._color_filter_actions[label_value] = action
         self.color_filter_button.setMenu(color_menu)
+        self.flag_button = QToolButton()
+        self.flag_button.setFixedSize(32, 28)
+        self.flag_button.setAutoRaise(True)
+        self.flag_button.setAccessibleName("Flag current photo with color label")
+        self.flag_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.flag_button.clicked.connect(self._apply_flag_color)
+        self.flag_button.customContextMenuRequested.connect(self._show_flag_color_menu)
+        self.flag_button.setEnabled(False)
+        self._update_flag_button()
         self.rating_filter_panel = RatingFilterPanel()
         rating_filter_layout = QHBoxLayout(self.rating_filter_panel)
         rating_filter_layout.setContentsMargins(0, 0, 0, 0)
         rating_filter_layout.setSpacing(2)
         rating_filter_layout.addWidget(self.star_filter_button)
         rating_filter_layout.addWidget(self.color_filter_button)
+        rating_filter_layout.addWidget(self.flag_button)
         self.ratio_combo = QComboBox()
         self.ratio_combo.setFixedWidth(104)
         self.ratio_combo.setToolTip(
@@ -713,6 +767,7 @@ class CropWindow(QMainWindow):
         toolbar.addWidget(self.open_button)
         toolbar.addWidget(navigation_panel)
         toolbar.addWidget(self.rating_filter_panel)
+        toolbar.addWidget(self.label_indicator)
         toolbar.addWidget(self.position_label, 1)
         toolbar.addWidget(self.angle_group)
         toolbar.addWidget(self.side_by_side_button)
@@ -771,6 +826,62 @@ class CropWindow(QMainWindow):
         self._update_filter_button_labels()
         self._refresh_rating_filter()
 
+    def _show_flag_color_menu(self, position: object) -> None:
+        """Show a menu to pick which color the flag hotkey/button applies."""
+        menu = QMenu(self.flag_button)
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        for color in COLOR_LABELS:
+            action = QAction(color, group)
+            action.setCheckable(True)
+            action.setChecked(color == self._flag_color)
+            action.triggered.connect(
+                lambda checked=False, selected=color: self._set_flag_color(selected)
+            )
+            menu.addAction(action)
+        menu.exec(self.flag_button.mapToGlobal(position))
+
+    def _set_flag_color(self, color: str) -> None:
+        """Change which color the flag hotkey/button applies without touching photos."""
+        self._flag_color = color
+        if self._settings is not None:
+            self._settings.setValue("flag_color", color)
+        self._update_flag_button()
+
+    def _update_flag_button(self) -> None:
+        """Refresh the flag button's icon and tooltip for the active flag color."""
+        self.flag_button.setIcon(
+            qta.icon("fa5s.flag", options=[{"color": COLOR_LABEL_HEX[self._flag_color]}])
+        )
+        self.flag_button.setToolTip(
+            f"Flag with {self._flag_color} ({key_hint(FLAG_COLOR_KEY)}); "
+            "right-click to choose a different color"
+        )
+
+    def _apply_flag_color(self) -> None:
+        """Toggle the active flag color on the current photo's color label."""
+        if self._current_path is None:
+            return
+        _, current_label = self._photo_ratings.get(self._current_path, (0, None))
+        new_label = None if current_label == self._flag_color else self._flag_color
+        task = PhotoLabelSaveTask(self._current_path, new_label)
+        task.signals.label_saved.connect(self._label_save_finished)
+        self._active_label_tasks[self._current_path] = task
+        self._label_pool.start(task)
+
+    def _label_save_finished(self, path_text: str, label: str | None, error: str) -> None:
+        """Update cached ratings and filters once a color-label write completes."""
+        raw_path = Path(path_text)
+        self._active_label_tasks.pop(raw_path, None)
+        if error:
+            self.save_label.setText(f"Flag failed: {error}")
+            return
+        stars, _ = self._photo_ratings.get(raw_path, (0, None))
+        self._photo_ratings[raw_path] = (stars, label)
+        if raw_path == self._current_path:
+            self._update_position_label()
+        self._refresh_rating_filter()
+
     def _update_filter_button_labels(self) -> None:
         self.star_filter_button.setText(
             f"{self._star_filter}+" if self._star_filter is not None else "*"
@@ -790,26 +901,17 @@ class CropWindow(QMainWindow):
 
     @staticmethod
     def _color_filter_icon(color_label: str | None) -> QIcon:
-        colors = {
-            "Red": "#e45858",
-            "Yellow": "#e5bd48",
-            "Green": "#55e39f",
-            "Blue": "#5297e8",
-            "Purple": "#aa70d6",
-        }
         if color_label == "":
             color = "#8c9299"
         elif color_label is not None:
-            color = colors.get(color_label, "#8c9299")
+            color = COLOR_LABEL_HEX.get(color_label, "#8c9299")
         else:
             pixmap = QPixmap(24, 18)
             pixmap.fill(Qt.GlobalColor.transparent)
             painter = QPainter(pixmap)
             gradient = QLinearGradient(2, 2, 22, 2)
-            for position, rainbow_color in enumerate(
-                ("#e45858", "#e5bd48", "#55e39f", "#5297e8", "#aa70d6")
-            ):
-                gradient.setColorAt(position / 4, QColor(rainbow_color))
+            for position, rainbow_color in enumerate(COLOR_LABEL_HEX.values()):
+                gradient.setColorAt(position / (len(COLOR_LABEL_HEX) - 1), QColor(rainbow_color))
             painter.setBrush(gradient)
             painter.setPen(QColor("#f4f2ec"))
             painter.drawRoundedRect(QRectF(2, 2, 20, 14), 2, 2)
@@ -823,6 +925,7 @@ class CropWindow(QMainWindow):
         self._rating_scan_error = ""
         self.star_filter_button.setEnabled(False)
         self.color_filter_button.setEnabled(False)
+        self.flag_button.setEnabled(False)
         self.rating_filter_panel.set_scanning(True)
         self.previous_button.setEnabled(False)
         self.next_button.setEnabled(False)
@@ -860,6 +963,7 @@ class CropWindow(QMainWindow):
         self.rating_filter_panel.set_scanning(False)
         self.star_filter_button.setEnabled(True)
         self.color_filter_button.setEnabled(True)
+        self.flag_button.setEnabled(True)
         self._update_status_bar()
         self._refresh_rating_filter()
 
@@ -925,9 +1029,11 @@ class CropWindow(QMainWindow):
         self.view.set_horizon_candidates(())
         self.position_count_label.setText("0 / 0 [Filtered]")
         self.position_label.setText("No photos match filters")
+        self.label_indicator.setVisible(False)
 
     def _update_position_label(self) -> None:
         if self._current_path is None or self._current_index < 0:
+            self.label_indicator.setVisible(False)
             return
         filtered_note = (
             " [Filtered]"
@@ -942,6 +1048,20 @@ class CropWindow(QMainWindow):
             f"{self._current_index + 1} / {len(self._photos)}{filtered_note}"
         )
         self.position_label.setText(self._current_path.name)
+        self._update_label_indicator()
+
+    def _update_label_indicator(self) -> None:
+        """Show a small color swatch when the current photo has a color label."""
+        _, label = self._photo_ratings.get(self._current_path, (0, None))
+        if not label:
+            self.label_indicator.setVisible(False)
+            return
+        color = COLOR_LABEL_HEX.get(label, "#8c9299")
+        self.label_indicator.setStyleSheet(
+            f"background-color: {color}; border-radius: 5px;"
+        )
+        self.label_indicator.setToolTip(f"Color label: {label}")
+        self.label_indicator.setVisible(True)
 
     def _rating_filters_active(self) -> bool:
         return self._star_filter is not None or self._color_filter is not None
@@ -1061,6 +1181,7 @@ class CropWindow(QMainWindow):
         self._add_shortcut(Qt.Key.Key_S, self._toggle_snap)
         self._add_shortcut(TOGGLE_LIVE_PREVIEW_KEY, self.side_by_side_button.click)
         self._add_shortcut(SHOW_HORIZON_KEY, self._show_horizon_clicked)
+        self._add_shortcut(FLAG_COLOR_KEY, self._apply_flag_color)
         self._add_shortcut(QKeySequence.StandardKey.Open, self._choose_folder)
         self._add_shortcut(QKeySequence.StandardKey.Save, self._start_save)
         for index in range(min(9, len(self._ratios))):
@@ -1119,6 +1240,7 @@ class CropWindow(QMainWindow):
             self._set_preview_crop(None)
             self.star_filter_button.setEnabled(False)
             self.color_filter_button.setEnabled(False)
+            self.flag_button.setEnabled(False)
             self.previous_button.setEnabled(False)
             self.next_button.setEnabled(False)
             return
@@ -1771,10 +1893,13 @@ class CropWindow(QMainWindow):
         self._load_pool.waitForDone()
         self._rating_pool.clear()
         self._rating_pool.waitForDone()
+        self._label_pool.clear()
+        self._label_pool.waitForDone()
         self._active_load_tasks.clear()
         self._active_rating_tasks.clear()
         self._active_horizon_tasks.clear()
         self._active_save_tasks.clear()
+        self._active_label_tasks.clear()
         if self._settings is not None:
             self._settings.sync()
         event.accept()
