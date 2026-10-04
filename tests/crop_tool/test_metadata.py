@@ -314,6 +314,78 @@ def test_write_photo_crop_sets_lightroom_crop_flag_on_existing_sidecar(
     assert "-XMP-crs:CropAngle=-10.0000000000" in calls[-1]
 
 
+def test_write_photo_label_sets_label_on_existing_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An existing sidecar receives the new color label via ExifTool."""
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "1 image files updated")
+
+    monkeypatch.setattr(crop_metadata, "require_exiftool", lambda: "/usr/bin/exiftool")
+    monkeypatch.setattr(crop_metadata.subprocess, "run", run)
+    xmp_path = tmp_path / "photo.xmp"
+    xmp_path.touch()
+
+    crop_metadata.write_photo_label(xmp_path, "Red")
+
+    assert "-XMP-xmp:Label=Red" in calls[-1]
+    assert str(xmp_path) in calls[-1]
+
+
+def test_write_photo_label_clears_label_on_existing_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Passing `None` deletes the Label tag instead of writing an empty value."""
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "1 image files updated")
+
+    monkeypatch.setattr(crop_metadata, "require_exiftool", lambda: "/usr/bin/exiftool")
+    monkeypatch.setattr(crop_metadata.subprocess, "run", run)
+    xmp_path = tmp_path / "photo.xmp"
+    xmp_path.touch()
+
+    crop_metadata.write_photo_label(xmp_path, None)
+
+    assert "-XMP-xmp:Label=" in calls[-1]
+
+
+def test_write_photo_label_creates_a_minimal_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Flagging a photo with no sidecar yet creates a minimal standalone XMP file."""
+    monkeypatch.setattr(crop_metadata, "require_exiftool", lambda: "/usr/bin/exiftool")
+    xmp_path = tmp_path / "photo.xmp"
+
+    crop_metadata.write_photo_label(xmp_path, "Green")
+
+    root = ElementTree.parse(xmp_path).getroot()
+    description = root.find(".//{http://www.w3.org/1999/02/22-rdf-syntax-ns#}Description")
+    assert description is not None
+    assert description.get(f"{{{crop_metadata.XAP_NS}}}Label") == "Green"
+
+
+def test_write_photo_label_without_sidecar_and_no_label_is_a_no_op(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Clearing a label when there is no sidecar does not create an empty one."""
+    monkeypatch.setattr(crop_metadata, "require_exiftool", lambda: "/usr/bin/exiftool")
+    xmp_path = tmp_path / "photo.xmp"
+
+    crop_metadata.write_photo_label(xmp_path, None)
+
+    assert not xmp_path.exists()
+
+
 def test_extract_preview_requests_selected_embedded_tag(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

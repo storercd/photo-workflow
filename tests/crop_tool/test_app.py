@@ -612,6 +612,73 @@ def test_filter_scan_overlay_covers_disabled_rating_controls() -> None:
     app.quit()
 
 
+def test_flag_button_menu_changes_active_color_without_touching_photos() -> None:
+    """Right-click menu selection updates the active flag color and its icon."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+
+    assert window._flag_color == "Red"
+
+    window._set_flag_color("Blue")
+
+    assert window._flag_color == "Blue"
+    assert "Blue" in window.flag_button.toolTip()
+    window.close()
+    app.quit()
+
+
+def test_apply_flag_color_toggles_the_active_color_on_current_photo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pressing the flag hotkey sets the active color, then clears it on a second press."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    raw_path = Path("photo.cr3")
+    window._photo_ratings = {raw_path: (3, None)}
+    window._current_path = raw_path
+    window._set_flag_color("Green")
+    started_tasks = []
+    monkeypatch.setattr(window._label_pool, "start", started_tasks.append)
+
+    window._apply_flag_color()
+
+    assert len(started_tasks) == 1
+    first_task = started_tasks[0]
+    assert first_task.label == "Green"
+    window._label_save_finished(str(raw_path), first_task.label, "")
+
+    assert window._photo_ratings[raw_path] == (3, "Green")
+
+    window._apply_flag_color()
+
+    second_task = started_tasks[1]
+    assert second_task.label is None
+    window._label_save_finished(str(raw_path), second_task.label, "")
+
+    assert window._photo_ratings[raw_path] == (3, None)
+    window.close()
+    app.quit()
+
+
+def test_label_save_failure_reports_status_without_updating_ratings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed label write is surfaced in the status label and leaves ratings intact."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    raw_path = Path("photo.cr3")
+    window._photo_ratings = {raw_path: (0, None)}
+    window._current_path = raw_path
+    monkeypatch.setattr(window._label_pool, "start", lambda task: None)
+
+    window._label_save_finished(str(raw_path), "Red", "boom")
+
+    assert window._photo_ratings[raw_path] == (0, None)
+    assert window.save_label.text() == "Flag failed: boom"
+    window.close()
+    app.quit()
+
+
 @pytest.mark.parametrize("value", ["bad", "1:0", "0:1", "-4:5"])
 def test_parse_aspect_ratios_rejects_invalid_values(value: str) -> None:
     """Reject malformed or nonpositive aspect-ratio settings clearly."""
