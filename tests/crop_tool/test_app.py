@@ -603,7 +603,7 @@ def test_filter_scan_overlay_covers_disabled_rating_controls() -> None:
 
     assert not window.star_filter_button.isEnabled()
     assert not window.color_filter_button.isEnabled()
-    assert window.rating_filter_panel.scan_overlay.text() == "Scanning ratings"
+    assert window.rating_filter_panel.scan_overlay.text() == "Scanning 0/1"
     assert not window.rating_filter_panel.scan_overlay.isHidden()
 
     window._rating_scan_generation += 1
