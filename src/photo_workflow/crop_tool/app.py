@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
+    QProgressBar,
     QSizePolicy,
     QSlider,
     QStyle,
@@ -135,6 +136,7 @@ class WorkerSignals(QObject):
     saved = Signal(str, int, object, float, str)
     horizon = Signal(str, object, str, bool)
     ratings = Signal(int, object, str)
+    rating_progress = Signal(int, int, int)
     label_saved = Signal(str, object, str)
 
 
@@ -161,11 +163,12 @@ class RatingFilterPanel(QWidget):
         """Initialize a filter row and its scan-status veil."""
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.scan_overlay = QLabel("Scanning ratings", self)
+        self.scan_overlay = QProgressBar(self)
         self.scan_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.scan_overlay.setStyleSheet(
-            "QLabel { background: rgba(32, 36, 39, 235); color: #f4f2ec; "
-            "border: 1px solid #777; padding: 2px 5px; }"
+            "QProgressBar { background: #202427; color: #f4f2ec; "
+            "border: 1px solid #777; text-align: center; } "
+            "QProgressBar::chunk { background: #3d5f7d; }"
         )
         self.scan_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.scan_overlay.hide()
@@ -177,11 +180,21 @@ class RatingFilterPanel(QWidget):
         if self.scan_overlay.isVisible():
             self.scan_overlay.raise_()
 
-    def set_scanning(self, scanning: bool) -> None:
-        """Show or hide the scan veil over the filter row."""
-        self.scan_overlay.setVisible(scanning)
-        if scanning:
+    def set_scanning(self, scanning: bool, message: str = "Scanning ratings") -> None:
+        """Show or hide the scan progress bar over the filter row."""
+        self.scan_overlay.setRange(0, 0 if scanning else 1)
+        self.scan_overlay.setValue(0)
+        self.scan_overlay.setFormat(message)
+        self.scan_overlay.setVisible(scanning or message != "Scanning ratings")
+        if self.scan_overlay.isVisible():
             self.scan_overlay.raise_()
+
+    def set_progress(self, done: int, total: int) -> None:
+        """Show how many photos have been scanned so far."""
+        self.scan_overlay.setRange(0, max(total, 1))
+        self.scan_overlay.setValue(done)
+        self.scan_overlay.setFormat(f"Scanning {done}/{total}")
+        self.scan_overlay.raise_()
 
 
 def displayed_image_size(metadata: PhotoMetadata, rotation_angle: float) -> tuple[float, float]:
@@ -421,6 +434,9 @@ class PhotoLabelSaveTask(QRunnable):
         self.signals.label_saved.emit(str(self.raw_path), self.label, error)
 
 
+RATING_SCAN_BATCH_SIZE = 50
+
+
 class RatingScanTask(QRunnable):
     """Read sidecar star ratings and color labels for one folder in a worker."""
 
@@ -434,7 +450,15 @@ class RatingScanTask(QRunnable):
     def run(self) -> None:
         """Read ratings and emit them without blocking the UI thread."""
         try:
-            ratings = read_photo_ratings(self.raw_paths)
+            ratings = {}
+            total = len(self.raw_paths)
+            for start in range(0, total, RATING_SCAN_BATCH_SIZE):
+                ratings.update(
+                    read_photo_ratings(self.raw_paths[start : start + RATING_SCAN_BATCH_SIZE])
+                )
+                self.signals.rating_progress.emit(
+                    self.generation, min(start + RATING_SCAN_BATCH_SIZE, total), total
+                )
             error = ""
         except Exception as exception:
             ratings = {}
@@ -927,14 +951,20 @@ class CropWindow(QMainWindow):
         self.color_filter_button.setEnabled(False)
         self.flag_button.setEnabled(False)
         self.rating_filter_panel.set_scanning(True)
+        self.rating_filter_panel.set_progress(0, len(raw_paths))
         self.previous_button.setEnabled(False)
         self.next_button.setEnabled(False)
         self._update_position_label()
         self._update_status_bar()
         task = RatingScanTask(self._rating_scan_generation, raw_paths)
         task.signals.ratings.connect(self._rating_scan_finished)
+        task.signals.rating_progress.connect(self._rating_scan_progress)
         self._active_rating_tasks[self._rating_scan_generation] = task
         self._rating_pool.start(task)
+
+    def _rating_scan_progress(self, generation: int, done: int, total: int) -> None:
+        if generation == self._rating_scan_generation:
+            self.rating_filter_panel.set_progress(done, total)
 
     def _rating_scan_finished(
         self,
