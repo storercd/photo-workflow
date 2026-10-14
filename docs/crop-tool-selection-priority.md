@@ -7,19 +7,19 @@ When the optional side-by-side view is enabled, dragging inside the cropped-resu
 ## Left-Click Priority
 
 1. **Loading state:** While the selected preview is loading, image-window clicks do not start crop gestures or select guides.
-2. **Auto-angle guide:** A detected candidate line within 10 screen pixels of the pointer is selected first. Its angle is applied through the rotation slider, and the matching candidate is highlighted. This takes priority over crop handles and crop creation when they overlap.
-3. **Photo boundary:** If no guide was hit, clicks outside the actual rotated photo polygon are ignored, including the empty corners inside its axis-aligned bounds.
-4. **New crop:** If there is no active crop, or the current crop covers the full image, clicking inside the photo polygon starts drawing a crop.
-5. **Crop edge or corner:** For a partial crop, the 24-pixel edge hit zones are checked. A nearby corner selects its corner grip; otherwise a nearby edge selects that edge for resizing.
+2. **Crop edge or corner:** For a partial crop inside the photo polygon, the 24-pixel edge hit zones are checked first. A nearby corner selects its corner grip; otherwise a nearby edge selects that edge for resizing.
+3. **Auto-angle guide:** A detected candidate line within 10 screen pixels of the pointer is selected next. Its angle is applied through the rotation slider, and the matching candidate is highlighted. This takes priority over crop interior movement and crop creation, but not crop edges or corners.
+4. **Photo boundary:** If no guide was hit, clicks outside the actual rotated photo polygon are ignored, including the empty corners inside its axis-aligned bounds.
+5. **New crop:** If there is no active crop, or the current crop covers the full image, clicking inside the photo polygon starts drawing a crop.
 6. **Crop interior:** A click within the crop but outside all edge hit zones moves the crop.
 7. **Empty photo area:** Clicking inside the photo polygon but outside the partial crop starts drawing a replacement crop.
 
 ## Overlapping Targets
 
-- Horizon guides have priority over crop edges, corners, and interior movement. To adjust a crop where a guide crosses it, click away from the guide within the crop's handle or interior area.
+- Crop edges and corners have priority over horizon guides. Guides have priority over crop interior movement and replacement-crop drawing. To select a guide that overlaps a crop edge or corner, click on the guide where it is outside the edge hit zone.
 - If two guide hit zones overlap, the nearest line is selected. If distances are exactly equal, the later candidate in the current ranked list wins.
 - A guide is selectable along its displayed segment; clicking beyond its endpoints does not select it.
-- Hovering within a guide's hit zone shows a pointing-hand cursor. Other crop cursor behavior remains unchanged.
+- Hovering within a guide's hit zone, away from crop edges and corners, shows a pointing-hand cursor. Other crop cursor behavior remains unchanged.
 
 ## Future Changes
 
