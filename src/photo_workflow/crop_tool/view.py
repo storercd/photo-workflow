@@ -313,15 +313,17 @@ class CropView(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         image_rect = self._image_rect()
-        candidate_index = self._horizon_candidate_at(event.position(), image_rect)
-        if candidate_index is not None:
-            self.horizon_candidate_selected.emit(candidate_index)
-            event.accept()
-            return
         point = event.position()
-        if not self._rotated_image_polygon(image_rect).containsPoint(
+        inside_photo = self._rotated_image_polygon(image_rect).containsPoint(
             point, Qt.FillRule.WindingFill
-        ):
+        )
+        if not (inside_photo and self._is_on_crop_grip(point, image_rect)):
+            candidate_index = self._horizon_candidate_at(point, image_rect)
+            if candidate_index is not None:
+                self.horizon_candidate_selected.emit(candidate_index)
+                event.accept()
+                return
+        if not inside_photo:
             return
         crop_plane = self._rotated_bounds_rect(image_rect)
         normalized = self._to_normalized(point, crop_plane)
@@ -347,7 +349,10 @@ class CropView(QWidget):
         crop_plane = self._rotated_bounds_rect(image_rect)
         point = event.position()
         if self._drag_kind is None:
-            if self._horizon_candidate_at(point, image_rect) is not None:
+            on_grip = self._rotated_image_polygon(image_rect).containsPoint(
+                point, Qt.FillRule.WindingFill
+            ) and self._is_on_crop_grip(point, image_rect)
+            if not on_grip and self._horizon_candidate_at(point, image_rect) is not None:
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
             else:
                 self._update_hover_cursor(point, image_rect)
@@ -644,6 +649,12 @@ class CropView(QWidget):
             return CropRect(left, top, right, bottom)
         except ValueError:
             return None
+
+    def _is_on_crop_grip(self, point: QPointF, image_rect: QRectF) -> bool:
+        """Return whether a partial crop's edge or corner is under the pointer."""
+        if self._crop is None or self._is_full_crop(self._crop):
+            return False
+        return self._hit_test(point, self._crop_rect(image_rect)) not in (None, "move")
 
     def _update_hover_cursor(self, point: QPointF, image_rect: QRectF) -> None:
         """Set a resize or move cursor when hovering over crop controls."""

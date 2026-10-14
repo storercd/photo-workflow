@@ -238,6 +238,36 @@ def test_clicking_horizon_guide_emits_its_candidate_index() -> None:
     app.quit()
 
 
+def test_crop_grip_takes_priority_over_overlapping_horizon_guide() -> None:
+    """Crop edges win over a guide, while guides still beat the crop interior."""
+    app = QApplication.instance() or QApplication([])
+    view = CropView()
+    view.resize(500, 400)
+    image = QImage(QSize(400, 300), QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.white)
+    view.set_image(image, 400, 300)
+    view.set_crop(CropRect(0.1, 0.1, 0.9, 0.9))
+    view.set_horizon_candidates(
+        (
+            HorizonCandidate(-2, 400, (0, 0.9), (1, 0.9)),
+            HorizonCandidate(4, 350, (0, 0.5), (1, 0.5)),
+        ),
+        selected_index=0,
+    )
+    selections: list[int] = []
+    view.horizon_candidate_selected.connect(selections.append)
+
+    QTest.mousePress(view, Qt.MouseButton.LeftButton, pos=QPoint(250, 350))
+    assert selections == []
+    assert view._drag_kind == "bottom"
+    QTest.mouseRelease(view, Qt.MouseButton.LeftButton, pos=QPoint(250, 350))
+
+    QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=QPoint(250, 200))
+    assert selections == [1]
+    view.close()
+    app.quit()
+
+
 def test_cropped_preview_shows_the_selected_source_region() -> None:
     """The read-only result pane maps the active crop to the source pixels."""
     app = QApplication.instance() or QApplication([])
