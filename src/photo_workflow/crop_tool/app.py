@@ -499,6 +499,7 @@ class CropWindow(QMainWindow):
         self._current_crop: CropRect | None = None
         self._ratio_base_crop: CropRect | None = None
         self._current_rotation = 0.0
+        self._crop_touched = False
         self._starting_crop: CropRect | None = None
         self._starting_rotation: float | None = None
         self._horizon_candidates: tuple[HorizonCandidate, ...] = ()
@@ -1183,6 +1184,9 @@ class CropWindow(QMainWindow):
         if self._starting_crop is not None or crop is None:
             return
         self._starting_crop = crop
+        self._crop_touched = not (
+            crop.left == 0 and crop.top == 0 and crop.right == 1 and crop.bottom == 1
+        )
         self._starting_rotation = round(self._current_rotation, 1)
         self._update_revert_button()
 
@@ -1306,6 +1310,7 @@ class CropWindow(QMainWindow):
         self._ratio_base_crop = None
         self._current_metadata = self._metadata_cache.get(self._current_path)
         self._current_rotation = 0.0
+        self._crop_touched = False
         self._starting_crop = None
         self._starting_rotation = None
         self.revert_button.setEnabled(False)
@@ -1496,6 +1501,7 @@ class CropWindow(QMainWindow):
         constrained_crop = self._set_preview_crop(crop)
         if constrained_crop is None:
             return
+        self._crop_touched = True
         self._current_crop = constrained_crop
         self._ratio_base_crop = None
         self._mark_dirty()
@@ -1667,6 +1673,7 @@ class CropWindow(QMainWindow):
                 self._set_preview_image(image, width, height)
         if self._current_crop is not None:
             self._set_preview_crop(self._current_crop)
+            self.view.set_crop_passive(not self._crop_touched)
             self._select_crop_ratio(self._current_crop)
         self._mark_dirty()
 

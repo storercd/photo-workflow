@@ -53,6 +53,7 @@ class CropView(QWidget):
         self._initial_crop: CropRect | None = None
         self._horizon_candidates: tuple[HorizonCandidate, ...] = ()
         self._selected_horizon_candidate = -1
+        self._passive_crop = False
 
     def set_image(self, image: QImage, image_width: int, image_height: int) -> None:
         """Set the displayed preview and source dimensions."""
@@ -83,11 +84,17 @@ class CropView(QWidget):
             The constrained crop, or `None` when no crop is active.
         """
         self._crop = self._constrain_crop(crop) if crop is not None else None
+        self._passive_crop = False
         self._snap_ratio = (
             self._matching_snap_ratio(self._crop) if self._crop is not None else None
         )
         self.update()
         return self._crop
+
+    def set_crop_passive(self, passive: bool) -> None:
+        """Mark the crop as an untouched suggestion that new drags replace."""
+        self._passive_crop = passive and self._crop is not None
+        self.update()
 
     def set_rotation(self, angle_degrees: float) -> None:
         """Rotate the photo beneath the upright crop frame."""
@@ -179,7 +186,11 @@ class CropView(QWidget):
         painter.fillPath(mask.subtracted(cutout), QColor(0, 0, 0, 145))
         self._draw_horizon_candidates(painter, image_rect)
         frame_color = SNAPPED_CROP_COLOR if self._snap_ratio is not None else QColor("#f4f2ec")
-        painter.setPen(QPen(frame_color, 2 if self._snap_ratio is not None else 1.5))
+        frame_pen = QPen(frame_color, 2 if self._snap_ratio is not None else 1.5)
+        if self._passive_crop:
+            frame_pen.setStyle(Qt.PenStyle.DashLine)
+            frame_pen.setColor(QColor(244, 242, 236, 150))
+        painter.setPen(frame_pen)
         painter.drawRect(crop_rect)
         if self._snap_ratio is not None:
             self._draw_snap_label(painter, crop_rect, self._snap_ratio)
@@ -328,7 +339,7 @@ class CropView(QWidget):
         crop_plane = self._rotated_bounds_rect(image_rect)
         normalized = self._to_normalized(point, crop_plane)
         crop_rect = self._crop_rect(image_rect)
-        if self._crop is None or self._is_full_crop(self._crop):
+        if self._is_unclaimed_crop():
             self._drag_kind = "draw"
             self._drag_anchor = normalized
         else:
@@ -652,14 +663,18 @@ class CropView(QWidget):
 
     def _is_on_crop_grip(self, point: QPointF, image_rect: QRectF) -> bool:
         """Return whether a partial crop's edge or corner is under the pointer."""
-        if self._crop is None or self._is_full_crop(self._crop):
+        if self._is_unclaimed_crop():
             return False
         return self._hit_test(point, self._crop_rect(image_rect)) not in (None, "move")
+
+    def _is_unclaimed_crop(self) -> bool:
+        """Return whether a drag should draw a new crop instead of editing one."""
+        return self._crop is None or self._passive_crop or self._is_full_crop(self._crop)
 
     def _update_hover_cursor(self, point: QPointF, image_rect: QRectF) -> None:
         """Set a resize or move cursor when hovering over crop controls."""
         crop_rect = self._crop_rect(image_rect)
-        drag_kind = self._hit_test(point, crop_rect)
+        drag_kind = None if self._passive_crop else self._hit_test(point, crop_rect)
         cursors = {
             "move": Qt.CursorShape.SizeAllCursor,
             "left": Qt.CursorShape.SizeHorCursor,
@@ -684,6 +699,7 @@ class CropView(QWidget):
         if crop == self._crop:
             return
         self._crop = crop
+        self._passive_crop = False
         self._snap_ratio = self._matching_snap_ratio(crop)
         self.update()
         self.crop_changed.emit(crop)
