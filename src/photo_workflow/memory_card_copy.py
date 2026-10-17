@@ -84,9 +84,19 @@ def run_memory_card_import(
     log_stage_elapsed("memory card deletion", delete_start_time)
 
     eject_start_time = time.perf_counter()
-    eject_memory_card(card_root)
+    try:
+        eject_memory_card(card_root)
+    except subprocess.CalledProcessError as error:
+        details = (error.stderr or error.stdout or "").strip()
+        LOGGER.warning(
+            "could not eject %s (diskutil exit %s): %s; eject it manually",
+            card_root,
+            error.returncode,
+            details or "no output",
+        )
+    else:
+        LOGGER.info(format_eject_message(card_root))
     log_stage_elapsed("memory card eject", eject_start_time)
-    LOGGER.info(format_eject_message(card_root))
 
     free_space_gb = 0.0
     free_space_percent = 0.0
