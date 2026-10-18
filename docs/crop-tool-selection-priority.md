@@ -7,7 +7,7 @@ When the optional side-by-side view is enabled, dragging inside the cropped-resu
 ## Left-Click Priority
 
 1. **Loading state:** While the selected preview is loading, image-window clicks do not start crop gestures or select guides.
-2. **Crop edge or corner:** For a partial crop inside the photo polygon, the 24-pixel edge hit zones are checked first. A nearby corner selects its corner grip; otherwise a nearby edge selects that edge for resizing.
+2. **Crop edge or corner:** For a crop (including one covering the full image, which can be dragged inward) inside the photo polygon, the 24-pixel edge hit zones are checked first. A nearby corner selects its corner grip; otherwise a nearby edge selects that edge for resizing.
 3. **Auto-angle guide:** A detected candidate line within 10 screen pixels of the pointer is selected next. Its angle is applied through the rotation slider, and the matching candidate is highlighted. This takes priority over crop interior movement and crop creation, but not crop edges or corners.
 4. **Photo boundary:** If no guide was hit, clicks outside the actual rotated photo polygon are ignored, including the empty corners inside its axis-aligned bounds.
 5. **New crop:** If there is no active crop, or the current crop covers the full image, clicking inside the photo polygon starts drawing a crop.
