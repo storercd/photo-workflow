@@ -67,6 +67,7 @@ from photo_workflow.crop_tool.horizon import (
     detect_horizon_candidates,
     qimage_to_rgb_array,
 )
+from photo_workflow.crop_tool.lightroom import find_lightroom_preview
 from photo_workflow.crop_tool.metadata import (
     PhotoMetadata,
     extract_preview,
@@ -131,6 +132,7 @@ class WorkerSignals(QObject):
 
     metadata = Signal(str, object)
     preview = Signal(str, object, bool)
+    preview_source = Signal(str, str)
     error = Signal(str, str)
     finished = Signal(str)
     saved = Signal(str, int, object, float, str)
@@ -316,27 +318,33 @@ class CropDropArea(QWidget):
 class PhotoLoadTask(QRunnable):
     """Read metadata and progressively extract preview images off the UI thread."""
 
-    def __init__(self, raw_path: Path) -> None:
+    def __init__(self, raw_path: Path, lightroom_catalog: Path | None = None) -> None:
         """Initialize a task for one RAW photo."""
         super().__init__()
         self.raw_path = raw_path
+        self.lightroom_catalog = lightroom_catalog
         self.signals = WorkerSignals()
 
     def run(self) -> None:
         """Load metadata, then emit quick and higher-quality preview images."""
         xmp_path = self.raw_path.with_suffix(".xmp")
         orientation = 1
+        metadata = None
         try:
             metadata = read_photo_metadata(self.raw_path, xmp_path)
             orientation = metadata.orientation
             self.signals.metadata.emit(str(self.raw_path), metadata)
         except Exception as error:
             self.signals.error.emit(str(self.raw_path), str(error))
-        self._emit_previews(orientation)
+        self._emit_previews(orientation, metadata)
         self.signals.finished.emit(str(self.raw_path))
 
-    def _emit_previews(self, orientation: int) -> None:
-        """Emit decoded preview image, trying available tags in preference order."""
+    def _emit_previews(
+        self, orientation: int, metadata: PhotoMetadata | None = None
+    ) -> None:
+        """Emit a Lightroom cached preview if present, else the embedded RAW preview."""
+        if self._emit_lightroom_preview(metadata):
+            return
         preview_tags = PREVIEW_TAGS_BY_SUFFIX[self.raw_path.suffix.lower()]
         for preview_index, tag in enumerate(preview_tags):
             try:
@@ -349,8 +357,35 @@ class PhotoLoadTask(QRunnable):
                     self.signals.error.emit(str(self.raw_path), str(error))
                 continue
             if not image.isNull():
+                self.signals.preview_source.emit(str(self.raw_path), f"Embedded {tag}")
                 self.signals.preview.emit(str(self.raw_path), image, True)
                 break
+
+    def _emit_lightroom_preview(self, metadata: PhotoMetadata | None) -> bool:
+        """
+        Emit Lightroom's already-oriented cached preview when one exists.
+
+        Returns:
+            Whether a preview was emitted; any lookup failure falls back silently.
+        """
+        if self.lightroom_catalog is None or metadata is None or is_cropped(metadata):
+            return False
+        try:
+            source = find_lightroom_preview(
+                self.lightroom_catalog,
+                self.raw_path,
+                target_long_edge=PREVIEW_MAX_DIMENSION,
+            )
+            if source is None:
+                return False
+            image = decode_preview(source.read_bytes())
+        except Exception:
+            return False
+        if image.isNull() or not matches_aspect(image, metadata):
+            return False
+        self.signals.preview_source.emit(str(self.raw_path), f"Lightroom {source.name}")
+        self.signals.preview.emit(str(self.raw_path), image, True)
+        return True
 
 
 class PhotoSaveTask(QRunnable):
@@ -484,6 +519,7 @@ class CropWindow(QMainWindow):
         self._settings = settings
         self._debug = debug
         self._ratios, self._snap_tolerance, self._grow_on_ratio_change = load_crop_settings()
+        self._lightroom_catalog = load_lightroom_catalog()
         self._photos: list[Path] = []
         self._all_photos: list[Path] = []
         self._photo_ratings: dict[Path, tuple[int, str | None]] = {}
@@ -538,6 +574,7 @@ class CropWindow(QMainWindow):
         self._queued_loads: set[Path] = set()
         self._metadata_cache: dict[Path, PhotoMetadata] = {}
         self._preview_cache: OrderedDict[Path, QImage] = OrderedDict()
+        self._preview_sources: dict[Path, str] = {}
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(self._start_save)
@@ -1121,7 +1158,8 @@ class CropWindow(QMainWindow):
         metrics = (
             f"DEBUG | Cache: {cache_count}/{PREVIEW_CACHE_SIZE} | "
             f"In-flight: {in_flight} | Queued: {queued} | "
-            f"Ratings: {ratings_status}"
+            f"Ratings: {ratings_status} | "
+            f"Source: {self._preview_sources.get(self._current_path, '-')}"
         )
         self._status_label.setText(metrics)
 
@@ -1299,6 +1337,7 @@ class CropWindow(QMainWindow):
         """Select a photo, restore cached state, and queue nearby previews."""
         self._current_index = index
         self._current_path = self._photos[index]
+        self._update_status_bar()
         self._record_session_state(self._current_path.parent, self._current_path)
         self.previous_button.setEnabled(
             self._ratings_loaded and self._current_index > 0
@@ -1391,9 +1430,10 @@ class CropWindow(QMainWindow):
 
     def _start_photo_load(self, raw_path: Path) -> None:
         """Submit one selected load task to the bounded thread pool."""
-        task = PhotoLoadTask(raw_path)
+        task = PhotoLoadTask(raw_path, self._lightroom_catalog)
         task.signals.metadata.connect(self._metadata_loaded)
         task.signals.preview.connect(self._preview_loaded)
+        task.signals.preview_source.connect(self._preview_source_loaded)
         task.signals.error.connect(self._load_error)
         task.signals.finished.connect(self._load_finished)
         self._active_load_tasks[raw_path] = task
@@ -1437,6 +1477,11 @@ class CropWindow(QMainWindow):
             self._set_preview_loading(True)
         self._select_crop_ratio(metadata.crop)
         self._update_crop_mode()
+
+    def _preview_source_loaded(self, path_text: str, source: str) -> None:
+        """Remember which source supplied a photo's preview for the debug bar."""
+        self._preview_sources[Path(path_text)] = source
+        self._update_status_bar()
 
     def _preview_loaded(self, path_text: str, image: QImage, high_quality: bool) -> None:
         """Cache previews and display progressive updates for the selected photo."""
@@ -1942,6 +1987,22 @@ class CropWindow(QMainWindow):
         event.accept()
 
 
+def is_cropped(metadata: PhotoMetadata) -> bool:
+    """Return whether a photo already has a crop or straighten angle applied."""
+    crop = metadata.crop
+    full = (crop.left, crop.top, crop.right, crop.bottom) == (0, 0, 1, 1)
+    return not full or metadata.crop_angle != 0
+
+
+def matches_aspect(image: QImage, metadata: PhotoMetadata, tolerance: float = 0.01) -> bool:
+    """Return whether a preview has the uncropped photo's aspect ratio."""
+    if not image.height() or not metadata.image_height:
+        return False
+    actual = image.width() / image.height()
+    expected = metadata.image_width / metadata.image_height
+    return abs(actual - expected) / expected <= tolerance
+
+
 def decode_preview(image_bytes: bytes, *, fallback_orientation: int = 1) -> QImage:
     """
     Decode an embedded JPEG and fall back to the RAW orientation when needed.
@@ -2046,6 +2107,23 @@ def load_crop_settings(
         raise ValueError("crop_tool.snap_tolerance must be between 0 and 1")
     grow_on_ratio_change = bool(settings.get("grow_on_ratio_change", True))
     return ratios, tolerance, grow_on_ratio_change
+
+
+def load_lightroom_catalog(config_path: Path = DEFAULT_CONFIG_PATH) -> Path | None:
+    """
+    Return the optional Lightroom catalog whose cached previews should be preferred.
+
+    Returns:
+        The configured `.lrcat` path, or `None` when unset or missing.
+    """
+    if not config_path.is_file():
+        return None
+    with config_path.open("rb") as config_file:
+        value = tomllib.load(config_file).get("crop_tool", {}).get("lightroom_catalog")
+    if not value:
+        return None
+    catalog = Path(value).expanduser()
+    return catalog if catalog.is_file() else None
 
 
 def parse_aspect_ratios(values: list[str]) -> tuple[AspectRatio, ...]:
