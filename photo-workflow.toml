@@ -21,6 +21,9 @@ snap_tolerance = 0.05
 # shrinking it (capped at the image bounds). Set to false to restore the
 # old shrink-to-fit behavior.
 grow_on_ratio_change = true
+# Prefer Lightroom Classic's cached preview (with your edits) when available.
+# Comment out to always use the RAW's embedded preview.
+lightroom_catalog = "~/Pictures/Lightroom/Lightroom Catalog.lrcat"
 
 # Dashboard launcher icons. app_name is passed to `open -a` (macOS Launch Services),
 # so it does not need to be an exact install path. Adjust names to match your
