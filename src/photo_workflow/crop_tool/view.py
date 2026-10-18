@@ -328,22 +328,25 @@ class CropView(QWidget):
         inside_photo = self._rotated_image_polygon(image_rect).containsPoint(
             point, Qt.FillRule.WindingFill
         )
-        if not (inside_photo and self._is_on_crop_grip(point, image_rect)):
+        on_grip = self._is_on_crop_grip(point, image_rect)
+        if not on_grip:
             candidate_index = self._horizon_candidate_at(point, image_rect)
             if candidate_index is not None:
                 self.horizon_candidate_selected.emit(candidate_index)
                 event.accept()
                 return
-        if not inside_photo:
+        if not (inside_photo or on_grip):
             return
         crop_plane = self._rotated_bounds_rect(image_rect)
         normalized = self._to_normalized(point, crop_plane)
         crop_rect = self._crop_rect(image_rect)
-        if self._is_unclaimed_crop():
+        if self._crop is None or self._passive_crop:
             self._drag_kind = "draw"
             self._drag_anchor = normalized
         else:
             self._drag_kind = self._hit_test(point, crop_rect)
+            if self._drag_kind == "move" and self._is_full_crop(self._crop):
+                self._drag_kind = None
             if self._drag_kind is None:
                 self._drag_kind = "draw"
                 self._drag_anchor = normalized
@@ -360,9 +363,7 @@ class CropView(QWidget):
         crop_plane = self._rotated_bounds_rect(image_rect)
         point = event.position()
         if self._drag_kind is None:
-            on_grip = self._rotated_image_polygon(image_rect).containsPoint(
-                point, Qt.FillRule.WindingFill
-            ) and self._is_on_crop_grip(point, image_rect)
+            on_grip = self._is_on_crop_grip(point, image_rect)
             if not on_grip and self._horizon_candidate_at(point, image_rect) is not None:
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
             else:
@@ -663,7 +664,7 @@ class CropView(QWidget):
 
     def _is_on_crop_grip(self, point: QPointF, image_rect: QRectF) -> bool:
         """Return whether a partial crop's edge or corner is under the pointer."""
-        if self._is_unclaimed_crop():
+        if self._crop is None or self._passive_crop:
             return False
         return self._hit_test(point, self._crop_rect(image_rect)) not in (None, "move")
 
