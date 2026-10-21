@@ -30,6 +30,7 @@ from photo_workflow.crop_tool.app import (
     decode_preview,
     find_photo_index,
     load_crop_settings,
+    load_preview_replaces_view,
     parse_aspect_ratios,
     prefetch_indices,
     resolve_drop_path,
@@ -429,6 +430,32 @@ def test_compact_navigation_and_filename_reveal_controls(
     assert calls == [("open", ["-R", str(raw_path.resolve())])]
     window.close()
     app.quit()
+
+
+def test_preview_replaces_view_when_configured() -> None:
+    """With the setting on, Live Preview hides the crop view and restores it."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    window._preview_replaces_view = True
+    window.show()
+
+    window.side_by_side_button.click()
+    assert window.view.isHidden()
+    assert not window.cropped_preview.isHidden()
+
+    window.side_by_side_button.click()
+    assert not window.view.isHidden()
+    assert window.cropped_preview.parentWidget().isHidden()
+    window.close()
+    del app
+
+
+def test_load_preview_replaces_view(tmp_path: Path) -> None:
+    """The replace-view option defaults on and reads from TOML."""
+    assert load_preview_replaces_view(tmp_path / "missing.toml") is True
+    config_path = tmp_path / "photo-workflow.toml"
+    config_path.write_text("[crop_tool]\npreview_replaces_view = false\n", encoding="utf-8")
+    assert load_preview_replaces_view(config_path) is False
 
 
 def test_side_by_side_preview_is_optional_and_tracks_editing_state() -> None:

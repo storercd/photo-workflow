@@ -21,6 +21,9 @@ snap_tolerance = 0.05
 # shrinking it (capped at the image bounds). Set to false to restore the
 # old shrink-to-fit behavior.
 grow_on_ratio_change = true
+# When true, the Live Preview hotkey (P) swaps the crop view for the cropped
+# result (pannable) instead of showing it side by side. Good for small screens.
+preview_replaces_view = true
 # Prefer Lightroom Classic's cached preview (with your edits) when available.
 # Comment out to always use the RAW's embedded preview.
 lightroom_catalog = "~/Pictures/Lightroom/Lightroom Catalog.lrcat"
