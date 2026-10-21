@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import qtawesome as qta
 from PySide6.QtCore import (
     QBuffer,
     QByteArray,
+    QEvent,
     QIODevice,
     QObject,
     QProcess,
@@ -87,7 +89,9 @@ from photo_workflow.crop_tool.model import (
 from photo_workflow.crop_tool.preferences import (
     CropPreferences,
     PreferencesDialog,
+    is_mouse_binding,
     load_preferences,
+    mouse_button_for_binding,
     save_preferences,
 )
 from photo_workflow.crop_tool.view import CroppedPreview, CropView
@@ -342,9 +346,7 @@ class PhotoLoadTask(QRunnable):
         self._emit_previews(orientation, metadata)
         self.signals.finished.emit(str(self.raw_path))
 
-    def _emit_previews(
-        self, orientation: int, metadata: PhotoMetadata | None = None
-    ) -> None:
+    def _emit_previews(self, orientation: int, metadata: PhotoMetadata | None = None) -> None:
         """Emit a Lightroom cached preview if present, else the embedded RAW preview."""
         if self._emit_lightroom_preview(metadata):
             return
@@ -422,9 +424,7 @@ class PhotoSaveTask(QRunnable):
             error = ""
         except Exception as exception:
             error = str(exception)
-        self.signals.saved.emit(
-            str(self.raw_path), self.version, self.crop, self.crop_angle, error
-        )
+        self.signals.saved.emit(str(self.raw_path), self.version, self.crop, self.crop_angle, error)
 
 
 class HorizonAnalysisTask(QRunnable):
@@ -446,9 +446,7 @@ class HorizonAnalysisTask(QRunnable):
         except Exception as exception:
             candidates = []
             error = str(exception)
-        self.signals.horizon.emit(
-            str(self.raw_path), candidates, error, self.apply_best
-        )
+        self.signals.horizon.emit(str(self.raw_path), candidates, error, self.apply_best)
 
 
 class PhotoLabelSaveTask(QRunnable):
@@ -528,6 +526,8 @@ class CropWindow(QMainWindow):
         self._lightroom_catalog = self._preferences.catalog_path()
         self._preview_replaces_view = self._preferences.preview_replaces_view
         self._ratio_shortcuts: list[QShortcut] = []
+        self._alt_shortcuts: list[QShortcut] = []
+        self._mouse_bindings: dict[Qt.MouseButton, Callable[[], object]] = {}
         self._photos: list[Path] = []
         self._all_photos: list[Path] = []
         self._photo_ratings: dict[Path, tuple[int, str | None]] = {}
@@ -588,6 +588,7 @@ class CropWindow(QMainWindow):
         self._save_timer.timeout.connect(self._start_save)
         self._build_ui()
         self._build_shortcuts()
+        QApplication.instance().installEventFilter(self)
         if initial_folder is not None:
             resolved = resolve_drop_path(initial_folder)
             if resolved is not None:
@@ -1048,9 +1049,7 @@ class CropWindow(QMainWindow):
         if not self._ratings_loaded:
             return
         filtered_photos = [
-            path
-            for path in self._all_photos
-            if self._photo_matches_rating_filters(path)
+            path for path in self._all_photos if self._photo_matches_rating_filters(path)
         ]
         if filtered_photos == self._photos:
             self.previous_button.setEnabled(self._current_index > 0)
@@ -1134,9 +1133,7 @@ class CropWindow(QMainWindow):
             self.label_indicator.setVisible(False)
             return
         color = COLOR_LABEL_HEX.get(label, "#8c9299")
-        self.label_indicator.setStyleSheet(
-            f"background-color: {color}; border-radius: 5px;"
-        )
+        self.label_indicator.setStyleSheet(f"background-color: {color}; border-radius: 5px;")
         self.label_indicator.setToolTip(f"Color label: {label}")
         self.label_indicator.setVisible(True)
 
@@ -1275,6 +1272,66 @@ class CropWindow(QMainWindow):
         self._add_shortcut(QKeySequence.StandardKey.Open, self._choose_folder)
         self._add_shortcut(QKeySequence.StandardKey.Save, self._start_save)
         self._build_ratio_shortcuts()
+        self._build_alternate_hotkeys()
+
+    def _hotkey_callbacks(self) -> dict[str, Callable[[], object]]:
+        """
+        Return the actions that accept user-defined alternate hotkeys.
+
+        Returns:
+            Callbacks keyed by hotkey action id.
+        """
+        return {
+            "previous_image": lambda: self.navigate(-1),
+            "next_image": lambda: self.navigate(1),
+            "auto_level": self._auto_level_clicked,
+            "toggle_lock": self._toggle_lock,
+            "toggle_snap": self._toggle_snap,
+            "live_preview": self.side_by_side_button.click,
+            "show_horizon": self._show_horizon_clicked,
+            "flag": self._apply_flag_color,
+        }
+
+    def _build_alternate_hotkeys(self) -> None:
+        """Install the user-defined keyboard and mouse bindings."""
+        for shortcut in self._alt_shortcuts:
+            shortcut.setEnabled(False)
+            shortcut.deleteLater()
+        self._alt_shortcuts.clear()
+        self._mouse_bindings.clear()
+        callbacks = self._hotkey_callbacks()
+        for action, binding in self._preferences.hotkeys.items():
+            callback = callbacks.get(action)
+            if callback is None:
+                continue
+            if is_mouse_binding(binding):
+                button = mouse_button_for_binding(binding)
+                if button is not None:
+                    self._mouse_bindings[button] = callback
+                continue
+            shortcut = QShortcut(QKeySequence(binding), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(callback)
+            self._alt_shortcuts.append(shortcut)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        """
+        Trigger mouse-button bindings while this window is active.
+
+        Returns:
+            Whether the event was consumed.
+        """
+        if (
+            event.type() == QEvent.Type.MouseButtonPress
+            and self._mouse_bindings
+            and self.isActiveWindow()
+            and QApplication.activeModalWidget() is None
+        ):
+            callback = self._mouse_bindings.get(event.button())
+            if callback is not None:
+                callback()
+                return True
+        return super().eventFilter(watched, event)
 
     def _build_ratio_shortcuts(self) -> None:
         """Install the numeric hotkeys for the current ratio presets."""
@@ -1316,6 +1373,7 @@ class CropWindow(QMainWindow):
             self.ratio_combo.blockSignals(False)
             self._ratio_selected(0)
             self._build_ratio_shortcuts()
+        self._build_alternate_hotkeys()
 
     def _apply_ratio_index(self, index: int) -> None:
         """Apply a ratio preset by index from a numeric shortcut."""
@@ -1394,9 +1452,7 @@ class CropWindow(QMainWindow):
         self._current_path = self._photos[index]
         self._update_status_bar()
         self._record_session_state(self._current_path.parent, self._current_path)
-        self.previous_button.setEnabled(
-            self._ratings_loaded and self._current_index > 0
-        )
+        self.previous_button.setEnabled(self._ratings_loaded and self._current_index > 0)
         self.next_button.setEnabled(
             self._ratings_loaded and self._current_index < len(self._photos) - 1
         )
@@ -1555,9 +1611,7 @@ class CropWindow(QMainWindow):
             self.auto_level_button.setEnabled(True)
             self.show_horizon_button.setEnabled(True)
             if self._current_metadata is not None:
-                self._current_metadata = self._set_loaded_crop(
-                    path, self._current_metadata
-                )
+                self._current_metadata = self._set_loaded_crop(path, self._current_metadata)
                 self._set_preview_loading(False)
 
     def _evict_excess_previews(self) -> None:
@@ -1703,9 +1757,7 @@ class CropWindow(QMainWindow):
         self.auto_level_button.setEnabled(path in self._preview_cache)
         self.show_horizon_button.setEnabled(path in self._preview_cache)
         auto_message = error or "Auto level to the strongest candidate"
-        self.auto_level_button.setToolTip(
-            f"{auto_message} ({key_hint(AUTO_LEVEL_KEY)})"
-        )
+        self.auto_level_button.setToolTip(f"{auto_message} ({key_hint(AUTO_LEVEL_KEY)})")
         self.show_horizon_button.setToolTip(
             f"{error or 'Show detected candidates without changing the angle'} "
             f"({key_hint(SHOW_HORIZON_KEY)})"
@@ -1973,9 +2025,7 @@ class CropWindow(QMainWindow):
         self.lock_checkbox.setIcon(
             qta.icon("fa5s.lock" if locked else "fa5s.lock-open", color="#f4f2ec")
         )
-        self.lock_checkbox.setToolTip(
-            f"Crop ratio {'locked' if locked else 'unlocked'} (L)"
-        )
+        self.lock_checkbox.setToolTip(f"Crop ratio {'locked' if locked else 'unlocked'} (L)")
 
     def _update_snap_icon(self, enabled: bool) -> None:
         """Reflect snapping state with a magnet or red disabled-state icon."""

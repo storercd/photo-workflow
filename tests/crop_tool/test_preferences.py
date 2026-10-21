@@ -5,16 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QEvent, QPointF, QSettings, Qt
+from PySide6.QtGui import QMouseEvent, QShortcut
 from PySide6.QtWidgets import QApplication
 
 from photo_workflow.crop_tool.app import CropWindow
 from photo_workflow.crop_tool.preferences import (
+    LEGACY_IMPORTED_KEY,
     CropPreferences,
     PreferencesDialog,
     load_preferences,
     parse_aspect_ratios,
     save_preferences,
+    validate_preferences,
 )
 
 
@@ -130,6 +133,49 @@ def test_window_applies_preferences(tmp_path: Path) -> None:
     ]
     assert len(window._ratio_shortcuts) == 2
     assert window._snap_tolerance == pytest.approx(0.2)
-    assert load_preferences(settings, tmp_path / "missing.toml").aspect_ratios == ("4:5", "3:2")
+    assert load_preferences(settings, tmp_path / "missing.toml").aspect_ratios == (
+        "4:5",
+        "3:2",
+    )
     window.close()
     del app
+
+
+def test_alternate_hotkeys_round_trip_and_trigger(tmp_path: Path) -> None:
+    """Alternate key and mouse bindings persist and drive navigation."""
+    app = QApplication.instance() or QApplication([])
+    settings = make_settings(tmp_path)
+    hotkeys = {
+        "next_image": "Mouse:Forward",
+        "previous_image": "Mouse:Back",
+        "flag": "X",
+    }
+    settings.setValue(LEGACY_IMPORTED_KEY, True)
+    save_preferences(settings, CropPreferences(hotkeys=hotkeys))
+    assert load_preferences(settings).hotkeys == hotkeys
+
+    window = CropWindow(settings=settings)
+    calls: list[int] = []
+    window.navigate = calls.append  # type: ignore[method-assign]
+    window._build_alternate_hotkeys()
+    assert any(s.key().toString() == "X" for s in window.findChildren(QShortcut))
+    window.isActiveWindow = lambda: True  # type: ignore[method-assign]
+    pos = QPointF(1, 1)
+    event = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        pos,
+        pos,
+        Qt.MouseButton.ForwardButton,
+        Qt.MouseButton.ForwardButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    assert window.eventFilter(window, event)
+    assert calls == [1]
+    window.close()
+    del app
+
+
+def test_duplicate_hotkeys_are_invalid() -> None:
+    """Two actions cannot share one binding."""
+    with pytest.raises(ValueError, match="assigned to both"):
+        validate_preferences(CropPreferences(hotkeys={"flag": "X", "toggle_snap": "X"}))
