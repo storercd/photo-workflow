@@ -185,8 +185,8 @@ Lightroom color-label filters can be combined; the photo count indicates when
 the visible list is filtered. Use the angle slider to rotate the image beneath
 the crop, Auto to apply a detected horizon, or Show to select a suggested line.
 The optional Live Preview displays the cropped result in place of the crop view
-(still pannable); set `crop_tool.preview_replaces_view = false` in
-`photo-workflow.toml` to show it beside the crop view instead. Revert restores the
+(still pannable); turn off "Live Preview replaces the crop view" in Preferences
+to show it beside the crop view instead. Revert restores the
 crop and angle from when the current photo was opened.
 
 Use `Left`/`Right` to navigate, `L` to toggle ratio lock, `S` to toggle
@@ -196,19 +196,16 @@ snapping, `P` to toggle Live Preview, and `1`-`8` to select a configured ratio.
 Lightroom-compatible XMP sidecars, creating one on the first edit when needed;
 RAW files are not modified. ExifTool must be on `PATH`.
 
-Configure ratios, the relative snap tolerance, and ratio-switch growth behavior
-in `photo-workflow.toml`:
-
-```toml
-[crop_tool]
-aspect_ratios = ["1:1", "4:5", "5:4", "3:2", "2:3", "4:3", "3:4", "16:9"]
-snap_tolerance = 0.05
-grow_on_ratio_change = true
-```
+Configure ratios, the relative snap tolerance, ratio-switch growth behavior, the
+Live Preview layout, and the optional Lightroom catalog in **Preferences**
+(`Cmd+,`, or Tools > Preferences…). These are stored per user via `QSettings`
+(not in the repo). On first launch, any existing `[crop_tool]` section in
+`photo-workflow.toml` is imported once as a starting point; after that the TOML
+section is ignored.
 
 Pressing a ratio hotkey (`1`-`8`) after hand-drawing a crop grows the crop
 outward to the preset ratio by default, keeping every edge you already
-placed, up to the image bounds. Set `grow_on_ratio_change = false` to
+placed, up to the image bounds. Turn off "Grow crop" in Preferences to
 instead shrink the crop to fit within its drawn bounds.
 
 ## Fonts
