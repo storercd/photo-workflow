@@ -29,9 +29,6 @@ from photo_workflow.crop_tool.app import (
     CropWindow,
     decode_preview,
     find_photo_index,
-    load_crop_settings,
-    load_preview_replaces_view,
-    parse_aspect_ratios,
     prefetch_indices,
     resolve_drop_path,
     update_saved_crop_cache,
@@ -331,18 +328,6 @@ def test_crop_drop_area_accepts_and_emits_folder_drop(tmp_path: Path) -> None:
     app.quit()
 
 
-def test_parse_aspect_ratios_reads_ratio_labels() -> None:
-    """Convert integer and decimal ratio strings into labeled crop ratios."""
-    ratios = parse_aspect_ratios(["4:5", "16:9", "1.91:1"])
-
-    assert [(ratio.width, ratio.height, ratio.label) for ratio in ratios] == [
-        (4, 5, "4:5"),
-        (16, 9, "16:9"),
-        (191, 100, "1.91:1"),
-    ]
-    assert ratios[2].value == pytest.approx(1.91)
-
-
 def test_save_status_keeps_a_fixed_toolbar_width() -> None:
     """Save-state text changes do not resize the toolbar status slot."""
     app = QApplication.instance() or QApplication([])
@@ -448,14 +433,6 @@ def test_preview_replaces_view_when_configured() -> None:
     assert window.cropped_preview.parentWidget().isHidden()
     window.close()
     del app
-
-
-def test_load_preview_replaces_view(tmp_path: Path) -> None:
-    """The replace-view option defaults on and reads from TOML."""
-    assert load_preview_replaces_view(tmp_path / "missing.toml") is True
-    config_path = tmp_path / "photo-workflow.toml"
-    config_path.write_text("[crop_tool]\npreview_replaces_view = false\n", encoding="utf-8")
-    assert load_preview_replaces_view(config_path) is False
 
 
 def test_side_by_side_preview_is_optional_and_tracks_editing_state() -> None:
@@ -704,47 +681,6 @@ def test_label_save_failure_reports_status_without_updating_ratings(
     assert window.save_label.text() == "Flag failed: boom"
     window.close()
     app.quit()
-
-
-@pytest.mark.parametrize("value", ["bad", "1:0", "0:1", "-4:5"])
-def test_parse_aspect_ratios_rejects_invalid_values(value: str) -> None:
-    """Reject malformed or nonpositive aspect-ratio settings clearly."""
-    with pytest.raises(ValueError, match="Invalid aspect ratio"):
-        parse_aspect_ratios([value])
-
-
-def test_load_crop_settings_reads_custom_ratios_and_tolerance(tmp_path: Path) -> None:
-    """Load user-adjustable ratios, snap tolerance, and grow behavior from TOML."""
-    config_path = tmp_path / "photo-workflow.toml"
-    config_path.write_text(
-        '[crop_tool]\naspect_ratios = ["4:5", "3:2"]\nsnap_tolerance = 0.04\n'
-        "grow_on_ratio_change = false\n",
-        encoding="utf-8",
-    )
-
-    ratios, tolerance, grow_on_ratio_change = load_crop_settings(config_path)
-
-    assert [ratio.label for ratio in ratios] == ["4:5", "3:2"]
-    assert tolerance == pytest.approx(0.04)
-    assert grow_on_ratio_change is False
-
-
-def test_load_crop_settings_defaults_to_wider_snap_range(tmp_path: Path) -> None:
-    """The default relative snap tolerance is five percent when no config exists."""
-    ratios, tolerance, grow_on_ratio_change = load_crop_settings(tmp_path / "missing.toml")
-
-    assert ratios
-    assert tolerance == pytest.approx(0.05)
-    assert grow_on_ratio_change is True
-
-
-def test_load_crop_settings_rejects_out_of_range_tolerance(tmp_path: Path) -> None:
-    """Reject snap tolerances outside the supported normalized range."""
-    config_path = tmp_path / "photo-workflow.toml"
-    config_path.write_text("[crop_tool]\nsnap_tolerance = 1.1\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="snap_tolerance"):
-        load_crop_settings(config_path)
 
 
 def test_decode_preview_bounds_large_images() -> None:

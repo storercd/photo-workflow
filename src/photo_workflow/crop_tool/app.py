@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import argparse
 import sys
-import tomllib
 from collections import OrderedDict
 from dataclasses import replace
-from fractions import Fraction
 from pathlib import Path
 
 import qtawesome as qta
@@ -46,6 +44,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -61,7 +60,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from photo_workflow.config import DEFAULT_CONFIG_PATH
 from photo_workflow.crop_tool.horizon import (
     HorizonCandidate,
     detect_horizon_candidates,
@@ -77,7 +75,6 @@ from photo_workflow.crop_tool.metadata import (
     write_photo_label,
 )
 from photo_workflow.crop_tool.model import (
-    DEFAULT_ASPECT_RATIOS,
     AspectRatio,
     CropRect,
     aspect_ratio_for_crop,
@@ -86,6 +83,12 @@ from photo_workflow.crop_tool.model import (
     fit_crop_to_ratio,
     rotated_image_size,
     transform_crop_for_rotation,
+)
+from photo_workflow.crop_tool.preferences import (
+    CropPreferences,
+    PreferencesDialog,
+    load_preferences,
+    save_preferences,
 )
 from photo_workflow.crop_tool.view import CroppedPreview, CropView
 
@@ -518,9 +521,13 @@ class CropWindow(QMainWindow):
         self.resize(1280, 820)
         self._settings = settings
         self._debug = debug
-        self._ratios, self._snap_tolerance, self._grow_on_ratio_change = load_crop_settings()
-        self._lightroom_catalog = load_lightroom_catalog()
-        self._preview_replaces_view = load_preview_replaces_view()
+        self._preferences = load_preferences(settings)
+        self._ratios = self._preferences.ratios()
+        self._snap_tolerance = self._preferences.snap_tolerance
+        self._grow_on_ratio_change = self._preferences.grow_on_ratio_change
+        self._lightroom_catalog = self._preferences.catalog_path()
+        self._preview_replaces_view = self._preferences.preview_replaces_view
+        self._ratio_shortcuts: list[QShortcut] = []
         self._photos: list[Path] = []
         self._all_photos: list[Path] = []
         self._photo_ratings: dict[Path, tuple[int, str | None]] = {}
@@ -854,6 +861,7 @@ class CropWindow(QMainWindow):
         layout.addLayout(toolbar)
         layout.addWidget(self.preview_container, 1)
         self.setCentralWidget(container)
+        self._build_menu()
         container.path_dropped.connect(self._open_dropped_path)
         self._populate_ratios()
         self._build_status_bar()
@@ -1246,6 +1254,14 @@ class CropWindow(QMainWindow):
         for ratio in self._ratios:
             self.ratio_combo.addItem(ratio.label, ratio)
 
+    def _build_menu(self) -> None:
+        """Add the menu bar entry for preferences."""
+        preferences_action = QAction("Preferences…", self)
+        preferences_action.setMenuRole(QAction.MenuRole.PreferencesRole)
+        preferences_action.setShortcut(QKeySequence.StandardKey.Preferences)
+        preferences_action.triggered.connect(self._show_preferences)
+        self.menuBar().addMenu("Tools").addAction(preferences_action)
+
     def _build_shortcuts(self) -> None:
         """Install navigation, crop-mode, snap, open, and save shortcuts."""
         self._add_shortcut(Qt.Key.Key_Left, lambda: self.navigate(-1))
@@ -1258,11 +1274,48 @@ class CropWindow(QMainWindow):
         self._add_shortcut(FLAG_COLOR_KEY, self._apply_flag_color)
         self._add_shortcut(QKeySequence.StandardKey.Open, self._choose_folder)
         self._add_shortcut(QKeySequence.StandardKey.Save, self._start_save)
+        self._build_ratio_shortcuts()
+
+    def _build_ratio_shortcuts(self) -> None:
+        """Install the numeric hotkeys for the current ratio presets."""
+        for shortcut in self._ratio_shortcuts:
+            shortcut.setEnabled(False)
+            shortcut.deleteLater()
+        self._ratio_shortcuts.clear()
         for index in range(min(9, len(self._ratios))):
-            self._add_shortcut(
-                Qt.Key(int(Qt.Key.Key_1) + index),
-                lambda selected_index=index + 1: self._apply_ratio_index(selected_index),
+            shortcut = QShortcut(QKeySequence(Qt.Key(int(Qt.Key.Key_1) + index)), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(
+                lambda selected_index=index + 1: self._apply_ratio_index(selected_index)
             )
+            self._ratio_shortcuts.append(shortcut)
+
+    def _show_preferences(self) -> None:
+        """Open the preferences dialog and apply accepted changes."""
+        dialog = PreferencesDialog(self._preferences, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._apply_preferences(dialog.preferences())
+
+    def _apply_preferences(self, preferences: CropPreferences) -> None:
+        """Persist and apply new preferences without restarting."""
+        ratios_changed = preferences.aspect_ratios != self._preferences.aspect_ratios
+        self._preferences = preferences
+        if self._settings is not None:
+            save_preferences(self._settings, preferences)
+        self._snap_tolerance = preferences.snap_tolerance
+        self._grow_on_ratio_change = preferences.grow_on_ratio_change
+        self._preview_replaces_view = preferences.preview_replaces_view
+        self._lightroom_catalog = preferences.catalog_path()
+        self._set_side_by_side_visible(self.side_by_side_button.isChecked())
+        if ratios_changed:
+            self._ratios = preferences.ratios()
+            self.ratio_combo.blockSignals(True)
+            self.ratio_combo.clear()
+            self._populate_ratios()
+            self.ratio_combo.blockSignals(False)
+            self._ratio_selected(0)
+            self._build_ratio_shortcuts()
 
     def _apply_ratio_index(self, index: int) -> None:
         """Apply a ratio preset by index from a numeric shortcut."""
@@ -2082,86 +2135,6 @@ def update_saved_crop_cache(
     )
     metadata_cache[raw_path] = updated_metadata
     return updated_metadata
-
-
-def load_crop_settings(
-    config_path: Path = DEFAULT_CONFIG_PATH,
-) -> tuple[tuple[AspectRatio, ...], float, bool]:
-    """
-    Load configurable ratios, snap tolerance, and ratio-grow behavior.
-
-    Returns:
-        The ratio list, relative snap tolerance, and whether switching to a
-        preset ratio should grow the crop (instead of shrinking it) by
-        default.
-
-    Raises:
-        ValueError: If the snap tolerance or configured ratios are invalid.
-    """
-    if not config_path.is_file():
-        return DEFAULT_ASPECT_RATIOS, 0.05, True
-    with config_path.open("rb") as config_file:
-        settings = tomllib.load(config_file).get("crop_tool", {})
-    raw_ratios = settings.get("aspect_ratios")
-    ratios = parse_aspect_ratios(raw_ratios) if raw_ratios is not None else DEFAULT_ASPECT_RATIOS
-    tolerance = float(settings.get("snap_tolerance", 0.05))
-    if tolerance < 0 or tolerance > 1:
-        raise ValueError("crop_tool.snap_tolerance must be between 0 and 1")
-    grow_on_ratio_change = bool(settings.get("grow_on_ratio_change", True))
-    return ratios, tolerance, grow_on_ratio_change
-
-
-def load_preview_replaces_view(config_path: Path = DEFAULT_CONFIG_PATH) -> bool:
-    """Return whether Live Preview should replace the crop view instead of sitting beside it."""
-    if not config_path.is_file():
-        return True
-    with config_path.open("rb") as config_file:
-        settings = tomllib.load(config_file).get("crop_tool", {})
-    return bool(settings.get("preview_replaces_view", True))
-
-
-def load_lightroom_catalog(config_path: Path = DEFAULT_CONFIG_PATH) -> Path | None:
-    """
-    Return the optional Lightroom catalog whose cached previews should be preferred.
-
-    Returns:
-        The configured `.lrcat` path, or `None` when unset or missing.
-    """
-    if not config_path.is_file():
-        return None
-    with config_path.open("rb") as config_file:
-        value = tomllib.load(config_file).get("crop_tool", {}).get("lightroom_catalog")
-    if not value:
-        return None
-    catalog = Path(value).expanduser()
-    return catalog if catalog.is_file() else None
-
-
-def parse_aspect_ratios(values: list[str]) -> tuple[AspectRatio, ...]:
-    """
-    Parse integer or decimal ratio labels such as `4:5` and `1.91:1`.
-
-    Returns:
-        The parsed aspect ratios.
-
-    Raises:
-        ValueError: If a ratio is malformed or the list is empty.
-    """
-    ratios = []
-    for value in values:
-        try:
-            width_text, height_text = value.split(":", maxsplit=1)
-            ratio = Fraction(width_text) / Fraction(height_text)
-        except (ValueError, ZeroDivisionError) as error:
-            raise ValueError(
-                f"Invalid aspect ratio {value!r}; expected positive width:height"
-            ) from error
-        if ratio <= 0:
-            raise ValueError(f"Invalid aspect ratio {value!r}; values must be positive")
-        ratios.append(AspectRatio(ratio.numerator, ratio.denominator, value))
-    if not ratios:
-        raise ValueError("crop_tool.aspect_ratios must contain at least one ratio")
-    return tuple(ratios)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
