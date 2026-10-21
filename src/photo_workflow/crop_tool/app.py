@@ -520,6 +520,7 @@ class CropWindow(QMainWindow):
         self._debug = debug
         self._ratios, self._snap_tolerance, self._grow_on_ratio_change = load_crop_settings()
         self._lightroom_catalog = load_lightroom_catalog()
+        self._preview_replaces_view = load_preview_replaces_view()
         self._photos: list[Path] = []
         self._all_photos: list[Path] = []
         self._photo_ratings: dict[Path, tuple[int, str | None]] = {}
@@ -1167,6 +1168,7 @@ class CropWindow(QMainWindow):
         """Show or hide the read-only crop result pane."""
         result_panel = self.cropped_preview.parentWidget()
         result_panel.setVisible(visible)
+        self.view.setVisible(not (visible and self._preview_replaces_view))
         description = "Hide" if visible else "Show"
         self.side_by_side_button.setToolTip(
             f"{description} Live Preview ({key_hint(TOGGLE_LIVE_PREVIEW_KEY)})"
@@ -2107,6 +2109,15 @@ def load_crop_settings(
         raise ValueError("crop_tool.snap_tolerance must be between 0 and 1")
     grow_on_ratio_change = bool(settings.get("grow_on_ratio_change", True))
     return ratios, tolerance, grow_on_ratio_change
+
+
+def load_preview_replaces_view(config_path: Path = DEFAULT_CONFIG_PATH) -> bool:
+    """Return whether Live Preview should replace the crop view instead of sitting beside it."""
+    if not config_path.is_file():
+        return True
+    with config_path.open("rb") as config_file:
+        settings = tomllib.load(config_file).get("crop_tool", {})
+    return bool(settings.get("preview_replaces_view", True))
 
 
 def load_lightroom_catalog(config_path: Path = DEFAULT_CONFIG_PATH) -> Path | None:

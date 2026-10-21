@@ -184,7 +184,9 @@ for CR2, it uses the embedded `PreviewImage`. Star-rating thresholds and
 Lightroom color-label filters can be combined; the photo count indicates when
 the visible list is filtered. Use the angle slider to rotate the image beneath
 the crop, Auto to apply a detected horizon, or Show to select a suggested line.
-The optional Live Preview pane displays the cropped result. Revert restores the
+The optional Live Preview displays the cropped result in place of the crop view
+(still pannable); set `crop_tool.preview_replaces_view = false` in
+`photo-workflow.toml` to show it beside the crop view instead. Revert restores the
 crop and angle from when the current photo was opened.
 
 Use `Left`/`Right` to navigate, `L` to toggle ratio lock, `S` to toggle
