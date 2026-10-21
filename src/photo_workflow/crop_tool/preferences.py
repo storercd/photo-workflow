@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from pathlib import Path
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QFocusEvent, QKeyEvent, QKeySequence, QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLineEdit,
     QMessageBox,
@@ -28,6 +30,65 @@ from photo_workflow.crop_tool.model import DEFAULT_ASPECT_RATIOS, AspectRatio
 
 DEFAULT_SNAP_TOLERANCE = 0.05
 LEGACY_IMPORTED_KEY = "preferences/legacy_toml_imported"
+MOUSE_PREFIX = "Mouse:"
+MOUSE_BUTTON_NAMES: dict[Qt.MouseButton, str] = {
+    Qt.MouseButton.MiddleButton: "Middle",
+    Qt.MouseButton.RightButton: "Right",
+    Qt.MouseButton.BackButton: "Back",
+    Qt.MouseButton.ForwardButton: "Forward",
+    Qt.MouseButton.TaskButton: "Task",
+    Qt.MouseButton.ExtraButton4: "Extra4",
+    Qt.MouseButton.ExtraButton5: "Extra5",
+    Qt.MouseButton.ExtraButton6: "Extra6",
+}
+HOTKEY_ACTIONS: dict[str, str] = {
+    "previous_image": "Previous image",
+    "next_image": "Next image",
+    "auto_level": "Auto-level",
+    "toggle_lock": "Toggle lock",
+    "toggle_snap": "Toggle snap",
+    "live_preview": "Live Preview",
+    "show_horizon": "Show horizon",
+    "flag": "Flag photo",
+}
+
+
+def mouse_binding(button: Qt.MouseButton) -> str | None:
+    """Return the stored binding text for a bindable mouse button."""
+    name = MOUSE_BUTTON_NAMES.get(button)
+    return f"{MOUSE_PREFIX}{name}" if name else None
+
+
+def is_mouse_binding(binding: str) -> bool:
+    """Return whether a binding refers to a mouse button."""
+    return binding.startswith(MOUSE_PREFIX)
+
+
+def mouse_button_for_binding(binding: str) -> Qt.MouseButton | None:
+    """Return the mouse button for a `Mouse:<name>` binding."""
+    name = binding.removeprefix(MOUSE_PREFIX)
+    return next((button for button, n in MOUSE_BUTTON_NAMES.items() if n == name), None)
+
+
+def normalize_hotkeys(hotkeys: dict[str, str]) -> dict[str, str]:
+    """
+    Drop unknown actions and blank or unparseable bindings.
+
+    Returns:
+        The usable bindings keyed by action id.
+    """
+    result = {}
+    for action, raw in hotkeys.items():
+        binding = raw.strip()
+        if action not in HOTKEY_ACTIONS or not binding:
+            continue
+        if is_mouse_binding(binding):
+            if mouse_button_for_binding(binding) is None:
+                continue
+        elif QKeySequence(binding).isEmpty():
+            continue
+        result[action] = binding
+    return result
 
 
 @dataclass(frozen=True)
@@ -39,6 +100,7 @@ class CropPreferences:
     grow_on_ratio_change: bool = True
     preview_replaces_view: bool = True
     lightroom_catalog: str = ""
+    hotkeys: dict[str, str] = field(default_factory=dict)
 
     def ratios(self) -> tuple[AspectRatio, ...]:
         """Return the parsed aspect-ratio presets."""
@@ -99,6 +161,14 @@ def validate_preferences(preferences: CropPreferences) -> None:
     preferences.ratios()
     if not 0 <= preferences.snap_tolerance <= 1:
         raise ValueError("Snap tolerance must be between 0 and 1")
+    seen: dict[str, str] = {}
+    for action, binding in preferences.hotkeys.items():
+        if binding in seen:
+            raise ValueError(
+                f"{binding!r} is assigned to both {HOTKEY_ACTIONS[seen[binding]]!r} "
+                f"and {HOTKEY_ACTIONS[action]!r}"
+            )
+        seen[binding] = action
 
 
 def load_preferences(
@@ -133,9 +203,15 @@ def load_preferences(
             "preferences/grow_on_ratio_change", defaults.grow_on_ratio_change, type=bool
         ),
         preview_replaces_view=settings.value(
-            "preferences/preview_replaces_view", defaults.preview_replaces_view, type=bool
+            "preferences/preview_replaces_view",
+            defaults.preview_replaces_view,
+            type=bool,
         ),
         lightroom_catalog=settings.value("preferences/lightroom_catalog", "", type=str),
+        hotkeys=normalize_hotkeys({
+            action: settings.value(f"preferences/hotkey/{action}", "", type=str)
+            for action in HOTKEY_ACTIONS
+        }),
     )
     try:
         validate_preferences(preferences)
@@ -151,6 +227,8 @@ def save_preferences(settings: QSettings, preferences: CropPreferences) -> None:
     settings.setValue("preferences/grow_on_ratio_change", preferences.grow_on_ratio_change)
     settings.setValue("preferences/preview_replaces_view", preferences.preview_replaces_view)
     settings.setValue("preferences/lightroom_catalog", preferences.lightroom_catalog)
+    for action in HOTKEY_ACTIONS:
+        settings.setValue(f"preferences/hotkey/{action}", preferences.hotkeys.get(action, ""))
     settings.sync()
 
 
@@ -189,6 +267,76 @@ def _read_legacy_toml(config_path: Path) -> CropPreferences | None:
     return imported
 
 
+class HotkeyEdit(QPushButton):
+    """Button that records the next key press or extra mouse button as a binding."""
+
+    def __init__(self, binding: str = "", parent: QWidget | None = None) -> None:
+        """Create the editor showing an optional initial binding."""
+        super().__init__(parent)
+        self._binding = binding
+        self._capturing = False
+        self.clicked.connect(self._start_capture)
+        self._refresh()
+
+    def binding(self) -> str:
+        """Return the recorded binding, or an empty string."""
+        return self._binding
+
+    def set_binding(self, binding: str) -> None:
+        """Set the binding programmatically."""
+        self._binding = binding
+        self._capturing = False
+        self._refresh()
+
+    def _start_capture(self) -> None:
+        self._capturing = True
+        self.setText("Press a key or mouse button… (Esc cancels, Delete clears)")
+        self.setFocus()
+
+    def _refresh(self) -> None:
+        text = self._binding
+        if text and not is_mouse_binding(text):
+            text = QKeySequence(text).toString(QKeySequence.SequenceFormat.NativeText)
+        self.setText(text or "None")
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        """Record a key combination while capturing."""
+        if not self._capturing:
+            super().keyPressEvent(event)
+            return
+        key = event.key()
+        if key == Qt.Key.Key_Escape:
+            self._capturing = False
+            self._refresh()
+        elif key in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
+            self.set_binding("")
+        elif key not in (
+            Qt.Key.Key_Shift,
+            Qt.Key.Key_Control,
+            Qt.Key.Key_Alt,
+            Qt.Key.Key_Meta,
+        ):
+            self.set_binding(QKeySequence(event.keyCombination()).toString())
+        event.accept()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        """Record a non-primary mouse button while capturing."""
+        if self._capturing:
+            binding = mouse_binding(event.button())
+            if binding:
+                self.set_binding(binding)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802
+        """Cancel capturing when focus leaves."""
+        if self._capturing:
+            self._capturing = False
+            self._refresh()
+        super().focusOutEvent(event)
+
+
 class PreferencesDialog(QDialog):
     """Modal editor for `CropPreferences`."""
 
@@ -214,6 +362,13 @@ class PreferencesDialog(QDialog):
         catalog_row.addWidget(self.catalog_edit, 1)
         catalog_row.addWidget(browse_button)
 
+        self.hotkey_edits = {action: HotkeyEdit() for action in HOTKEY_ACTIONS}
+        hotkey_form = QFormLayout()
+        for action, label in HOTKEY_ACTIONS.items():
+            hotkey_form.addRow(label, self.hotkey_edits[action])
+        hotkey_box = QGroupBox("Alternate hotkeys (arrow keys and defaults always work)")
+        hotkey_box.setLayout(hotkey_form)
+
         form = QFormLayout()
         form.addRow("Aspect ratios", self.ratios_edit)
         form.addRow("Snap tolerance", self.tolerance_spin)
@@ -233,6 +388,7 @@ class PreferencesDialog(QDialog):
         )
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+        layout.addWidget(hotkey_box)
         layout.addWidget(buttons)
         self.setMinimumWidth(520)
         self._populate(preferences)
@@ -245,6 +401,11 @@ class PreferencesDialog(QDialog):
             grow_on_ratio_change=self.grow_check.isChecked(),
             preview_replaces_view=self.replace_check.isChecked(),
             lightroom_catalog=self.catalog_edit.text().strip(),
+            hotkeys={
+                action: edit.binding()
+                for action, edit in self.hotkey_edits.items()
+                if edit.binding()
+            },
         )
 
     def _populate(self, preferences: CropPreferences) -> None:
@@ -254,11 +415,16 @@ class PreferencesDialog(QDialog):
         self.grow_check.setChecked(preferences.grow_on_ratio_change)
         self.replace_check.setChecked(preferences.preview_replaces_view)
         self.catalog_edit.setText(preferences.lightroom_catalog)
+        for action, edit in self.hotkey_edits.items():
+            edit.set_binding(preferences.hotkeys.get(action, ""))
 
     def _browse_catalog(self) -> None:
         """Choose a Lightroom catalog file."""
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose Lightroom catalog", self.catalog_edit.text(), "Lightroom (*.lrcat)"
+            self,
+            "Choose Lightroom catalog",
+            self.catalog_edit.text(),
+            "Lightroom (*.lrcat)",
         )
         if path:
             self.catalog_edit.setText(path)
