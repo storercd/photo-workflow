@@ -26,28 +26,36 @@ def test_resolve_bundled_command_icon_returns_none_for_unknown_command() -> None
     assert launchers.resolve_bundled_command_icon("some-other-tool") is None
 
 
-def test_resolve_application_path_returns_path_for_existing_app(
+def test_resolve_application_path_finds_bundle_without_running_osascript(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """Verify a resolvable application name returns its bundle path."""
+    """Verify lookup inspects the filesystem and never launches the app via AppleScript."""
     app_path = tmp_path / "Aftershoot.app"
     app_path.mkdir()
+    monkeypatch.setattr(launchers, "APPLICATION_SEARCH_DIRECTORIES", (tmp_path,))
 
-    monkeypatch.setattr(
-        launchers.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args, 0, stdout=f"{app_path}\n", stderr=""
-        ),
-    )
+    def fail_run(*args, **kwargs):
+        raise AssertionError("subprocess must not be used when the bundle is found")
 
-    resolved = launchers.resolve_application_path("Aftershoot")
+    monkeypatch.setattr(launchers.subprocess, "run", fail_run)
 
-    assert resolved == app_path
+    assert launchers.resolve_application_path("Aftershoot") == app_path
 
 
-def test_resolve_application_path_returns_none_when_resolution_fails(monkeypatch) -> None:
-    """Verify a failed AppleScript lookup returns None instead of raising."""
+def test_resolve_application_path_finds_bundle_in_same_named_folder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Verify Adobe-style Name/Name.app installs are found."""
+    app_path = tmp_path / "Adobe Photoshop 2026" / "Adobe Photoshop 2026.app"
+    app_path.mkdir(parents=True)
+    monkeypatch.setattr(launchers, "APPLICATION_SEARCH_DIRECTORIES", (tmp_path,))
+
+    assert launchers.resolve_application_path("Adobe Photoshop 2026") == app_path
+
+
+def test_resolve_application_path_returns_none_when_not_found(tmp_path: Path, monkeypatch) -> None:
+    """Verify a missing app returns None, including when mdfind fails."""
+    monkeypatch.setattr(launchers, "APPLICATION_SEARCH_DIRECTORIES", (tmp_path,))
 
     def raise_called_process_error(*args, **kwargs):
         raise subprocess.CalledProcessError(1, args)
@@ -55,24 +63,6 @@ def test_resolve_application_path_returns_none_when_resolution_fails(monkeypatch
     monkeypatch.setattr(launchers.subprocess, "run", raise_called_process_error)
 
     assert launchers.resolve_application_path("Nonexistent App") is None
-
-
-def test_resolve_application_path_returns_none_when_path_does_not_exist(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    """Verify a resolved but missing bundle path returns None."""
-    missing_path = tmp_path / "Missing.app"
-
-    monkeypatch.setattr(
-        launchers.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args, 0, stdout=f"{missing_path}\n", stderr=""
-        ),
-    )
-
-    assert launchers.resolve_application_path("Missing") is None
 
 
 def test_launch_app_opens_named_application(monkeypatch) -> None:

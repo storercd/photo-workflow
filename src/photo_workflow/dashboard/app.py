@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -332,6 +333,11 @@ class DashboardWindow(QMainWindow):
         self.target_folder_checkbox = QCheckBox("Open last imported folder in supporting apps")
         self.target_folder_checkbox.setChecked(True)
         layout.addWidget(self.target_folder_checkbox)
+
+        if sys.platform != "darwin":
+            group.setTitle("Launch (unavailable: macOS only)")
+            group.setToolTip("App launching relies on macOS and is not supported here yet.")
+            group.setEnabled(False)
 
         return group
 
