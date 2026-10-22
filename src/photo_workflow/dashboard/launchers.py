@@ -26,11 +26,43 @@ class LaunchError(RuntimeError):
     """Raised when a dashboard application shortcut fails to launch."""
 
 
+APPLICATION_SEARCH_DIRECTORIES = (
+    Path("/Applications"),
+    Path("/Applications/Utilities"),
+    Path("/System/Applications"),
+    Path("/System/Applications/Utilities"),
+    Path.home() / "Applications",
+)
+
+
 def resolve_application_path(app_name: str) -> Path | None:
-    """Return the installed .app bundle path for a named application, if found."""
+    """
+    Return the installed .app bundle path for a named application, if found.
+
+    This must never launch the application: AppleScript's `path to application`
+    starts the app as a side effect, so bundles are located on disk instead.
+
+    Returns:
+        The bundle path, or None if the application is not installed.
+    """
+    for directory in APPLICATION_SEARCH_DIRECTORIES:
+        # Adobe installs each app inside a same-named folder.
+        for candidate in (
+            directory / f"{app_name}.app",
+            directory / app_name / f"{app_name}.app",
+        ):
+            if candidate.exists():
+                return candidate
+
     try:
         result = subprocess.run(
-            ["osascript", "-e", f'POSIX path of (path to application "{app_name}")'],
+            [
+                "mdfind",
+                "-name",
+                f"{app_name}.app",
+                "-onlyin",
+                "/Applications",
+            ],
             capture_output=True,
             text=True,
             timeout=APPLICATION_RESOLUTION_TIMEOUT_SECONDS,
@@ -39,8 +71,11 @@ def resolve_application_path(app_name: str) -> Path | None:
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         return None
 
-    resolved_path = Path(result.stdout.strip())
-    return resolved_path if resolved_path.exists() else None
+    for line in result.stdout.splitlines():
+        path = Path(line.strip())
+        if path.name == f"{app_name}.app" and path.exists():
+            return path
+    return None
 
 
 def resolve_bundled_command_icon(executable: str) -> Path | None:
