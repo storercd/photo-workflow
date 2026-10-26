@@ -181,9 +181,15 @@ class CropView(QWidget):
 
         mask = QPainterPath()
         mask.addPolygon(self._rotated_image_polygon(image_rect))
-        cutout = QPainterPath()
-        cutout.addRect(crop_rect)
-        painter.fillPath(mask.subtracted(cutout), QColor(0, 0, 0, 145))
+        # Avoid path boolean ops: they misbehave when crop and image edges coincide.
+        shade = QPainterPath()
+        shade.setFillRule(Qt.FillRule.OddEvenFill)
+        shade.addRect(QRectF(self.rect()).adjusted(-2, -2, 2, 2))
+        shade.addRect(crop_rect)
+        painter.save()
+        painter.setClipPath(mask)
+        painter.fillPath(shade, QColor(0, 0, 0, 145))
+        painter.restore()
         self._draw_horizon_candidates(painter, image_rect)
         frame_color = SNAPPED_CROP_COLOR if self._snap_ratio is not None else QColor("#f4f2ec")
         frame_pen = QPen(frame_color, 2 if self._snap_ratio is not None else 1.5)
