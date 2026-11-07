@@ -67,7 +67,10 @@ from photo_workflow.crop_tool.horizon import (
     detect_horizon_candidates,
     qimage_to_rgb_array,
 )
-from photo_workflow.crop_tool.lightroom import find_lightroom_preview
+from photo_workflow.crop_tool.lightroom import (
+    find_lightroom_preview,
+    xmp_lacks_catalog_edits,
+)
 from photo_workflow.crop_tool.metadata import (
     PhotoMetadata,
     extract_preview,
@@ -112,6 +115,9 @@ RATIO_MATCH_TOLERANCE = 0.005
 AUTO_LEVEL_KEY = Qt.Key.Key_A
 SHOW_HORIZON_KEY = Qt.Key.Key_H
 TOGGLE_LIVE_PREVIEW_KEY = Qt.Key.Key_P
+XMP_DIRTY_WARNING = (
+    "⚠ LIGHTROOM EDITS NOT SAVED TO XMP\nSave metadata in Lightroom (Cmd+S) first"
+)
 FLAG_COLOR_KEY = Qt.Key.Key_F
 COLOR_LABELS = ("Red", "Yellow", "Green", "Blue", "Purple")
 COLOR_LABEL_HEX = {
@@ -140,6 +146,7 @@ class WorkerSignals(QObject):
     metadata = Signal(str, object)
     preview = Signal(str, object, bool)
     preview_source = Signal(str, str)
+    xmp_dirty = Signal(str, bool)
     error = Signal(str, str)
     finished = Signal(str)
     saved = Signal(str, int, object, float, str)
@@ -322,6 +329,38 @@ class CropDropArea(QWidget):
         return None
 
 
+def xmp_out_of_sync(catalog: Path, raw_path: Path) -> bool | None:
+    """
+    Return whether Lightroom develop edits are missing from the XMP.
+
+    Lightroom's own dirty flag is ignored: it also fires for rating and label changes.
+
+    Returns:
+        `True` when edits are unsaved, `False` when in sync, `None` if not cataloged.
+    """
+    return xmp_lacks_catalog_edits(catalog, raw_path, raw_path.with_suffix(".xmp"))
+
+
+class XmpStatusTask(QRunnable):
+    """Re-check Lightroom's unsaved-metadata flag for one photo off the UI thread."""
+
+    def __init__(self, raw_path: Path, lightroom_catalog: Path) -> None:
+        """Initialize a status check for one RAW photo."""
+        super().__init__()
+        self.raw_path = raw_path
+        self.lightroom_catalog = lightroom_catalog
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        """Emit the flag; lookup failures are ignored."""
+        try:
+            dirty = xmp_out_of_sync(self.lightroom_catalog, self.raw_path)
+        except Exception:
+            return
+        if dirty is not None:
+            self.signals.xmp_dirty.emit(str(self.raw_path), dirty)
+
+
 class PhotoLoadTask(QRunnable):
     """Read metadata and progressively extract preview images off the UI thread."""
 
@@ -343,8 +382,20 @@ class PhotoLoadTask(QRunnable):
             self.signals.metadata.emit(str(self.raw_path), metadata)
         except Exception as error:
             self.signals.error.emit(str(self.raw_path), str(error))
+        self._emit_xmp_status()
         self._emit_previews(orientation, metadata)
         self.signals.finished.emit(str(self.raw_path))
+
+    def _emit_xmp_status(self) -> None:
+        """Report unsaved Lightroom edits; lookup failures are ignored."""
+        if self.lightroom_catalog is None:
+            return
+        try:
+            dirty = xmp_out_of_sync(self.lightroom_catalog, self.raw_path)
+        except Exception:
+            return
+        if dirty is not None:
+            self.signals.xmp_dirty.emit(str(self.raw_path), dirty)
 
     def _emit_previews(self, orientation: int, metadata: PhotoMetadata | None = None) -> None:
         """Emit a Lightroom cached preview if present, else the embedded RAW preview."""
@@ -583,6 +634,7 @@ class CropWindow(QMainWindow):
         self._metadata_cache: dict[Path, PhotoMetadata] = {}
         self._preview_cache: OrderedDict[Path, QImage] = OrderedDict()
         self._preview_sources: dict[Path, str] = {}
+        self._xmp_dirty: dict[Path, bool] = {}
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(self._start_save)
@@ -1450,6 +1502,8 @@ class CropWindow(QMainWindow):
         """Select a photo, restore cached state, and queue nearby previews."""
         self._current_index = index
         self._current_path = self._photos[index]
+        self._refresh_xmp_warning()
+        self._recheck_xmp_status()
         self._update_status_bar()
         self._record_session_state(self._current_path.parent, self._current_path)
         self.previous_button.setEnabled(self._ratings_loaded and self._current_index > 0)
@@ -1545,6 +1599,7 @@ class CropWindow(QMainWindow):
         task.signals.metadata.connect(self._metadata_loaded)
         task.signals.preview.connect(self._preview_loaded)
         task.signals.preview_source.connect(self._preview_source_loaded)
+        task.signals.xmp_dirty.connect(self._xmp_dirty_loaded)
         task.signals.error.connect(self._load_error)
         task.signals.finished.connect(self._load_finished)
         self._active_load_tasks[raw_path] = task
@@ -1588,6 +1643,30 @@ class CropWindow(QMainWindow):
             self._set_preview_loading(True)
         self._select_crop_ratio(metadata.crop)
         self._update_crop_mode()
+
+    def _xmp_dirty_loaded(self, path_text: str, dirty: bool) -> None:
+        """Record Lightroom's unsaved-metadata flag and refresh the warning."""
+        self._xmp_dirty[Path(path_text)] = dirty
+        self._refresh_xmp_warning()
+
+    def _recheck_xmp_status(self) -> None:
+        """Query the catalog again for the current photo."""
+        if self._lightroom_catalog is None or self._current_path is None:
+            return
+        task = XmpStatusTask(self._current_path, self._lightroom_catalog)
+        task.signals.xmp_dirty.connect(self._xmp_dirty_loaded)
+        self._load_pool.start(task)
+
+    def changeEvent(self, event: QEvent) -> None:
+        """Re-check unsaved Lightroom edits when returning to this window."""
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self._recheck_xmp_status()
+
+    def _refresh_xmp_warning(self) -> None:
+        """Show the watermark only when the current photo has unsaved Lightroom edits."""
+        dirty = self._current_path is not None and self._xmp_dirty.get(self._current_path, False)
+        self.view.set_warning(XMP_DIRTY_WARNING if dirty else None)
 
     def _preview_source_loaded(self, path_text: str, source: str) -> None:
         """Remember which source supplied a photo's preview for the debug bar."""

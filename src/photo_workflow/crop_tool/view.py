@@ -54,6 +54,7 @@ class CropView(QWidget):
         self._horizon_candidates: tuple[HorizonCandidate, ...] = ()
         self._selected_horizon_candidate = -1
         self._passive_crop = False
+        self._warning: str | None = None
 
     def set_image(self, image: QImage, image_width: int, image_height: int) -> None:
         """Set the displayed preview and source dimensions."""
@@ -131,10 +132,45 @@ class CropView(QWidget):
         )
         self.update()
 
+    def set_warning(self, text: str | None) -> None:
+        """Show a large corner watermark warning, or clear it with `None`."""
+        self._warning = text
+        self.update()
+
     def paintEvent(self, event: object) -> None:
+        """Paint the image surface, then the warning watermark on top."""
+        painter = QPainter(self)
+        self._paint_content(painter, event)
+        if self._warning:
+            self._draw_warning(painter, self._warning)
+
+    def _draw_warning(self, painter: QPainter, text: str) -> None:
+        """Draw a bold translucent red banner in the top-left corner."""
+        painter.save()
+        font = painter.font()
+        font.setBold(True)
+        font.setPixelSize(max(18, min(self.width() // 22, 40)))
+        painter.setFont(font)
+        lines = text.split("\n")
+        metrics = painter.fontMetrics()
+        pad = 14
+        width = max(metrics.horizontalAdvance(line) for line in lines) + pad * 2
+        height = metrics.lineSpacing() * len(lines) + pad * 2
+        box = QRectF(16, 16, width, height)
+        painter.setPen(QPen(QColor(255, 255, 255, 220), 3))
+        painter.setBrush(QColor(200, 30, 30, 205))
+        painter.drawRoundedRect(box, 10, 10)
+        painter.setPen(QColor("white"))
+        painter.drawText(
+            box.adjusted(pad, pad, -pad, -pad),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+            text,
+        )
+        painter.restore()
+
+    def _paint_content(self, painter: QPainter, event: object) -> None:
         """Paint the preview, shaded crop mask, and crop guides."""
         del event
-        painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.fillRect(self.rect(), CANVAS_COLOR)
         if self._image.isNull():
