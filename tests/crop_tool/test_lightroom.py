@@ -3,6 +3,9 @@
 import sqlite3
 from pathlib import Path
 
+import pytest
+
+from photo_workflow.crop_tool import lightroom
 from photo_workflow.crop_tool.lightroom import xmp_is_dirty, xmp_lacks_catalog_edits
 
 
@@ -65,8 +68,12 @@ def _develop_catalog(path: Path, root: Path, text: str) -> None:
     connection.close()
 
 
-def test_edits_missing_from_xmp_without_develop_settings(tmp_path: Path) -> None:
+def test_edits_missing_from_xmp_without_develop_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A sidecar with no develop settings is stale when the catalog has edits."""
+    monkeypatch.setattr(lightroom, "require_exiftool", lambda: "exiftool")
+    monkeypatch.setattr(lightroom, "_read_json", lambda *args: {})
     folder = tmp_path / "shoot"
     folder.mkdir()
     catalog = tmp_path / "test.lrcat"
