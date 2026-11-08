@@ -399,7 +399,8 @@ class PhotoLoadTask(QRunnable):
 
     def _emit_previews(self, orientation: int, metadata: PhotoMetadata | None = None) -> None:
         """Emit a Lightroom cached preview if present, else the embedded RAW preview."""
-        if self._emit_lightroom_preview(metadata):
+        reason = self._emit_lightroom_preview(metadata)
+        if reason is None:
             return
         preview_tags = PREVIEW_TAGS_BY_SUFFIX[self.raw_path.suffix.lower()]
         for preview_index, tag in enumerate(preview_tags):
@@ -413,19 +414,24 @@ class PhotoLoadTask(QRunnable):
                     self.signals.error.emit(str(self.raw_path), str(error))
                 continue
             if not image.isNull():
-                self.signals.preview_source.emit(str(self.raw_path), f"Embedded {tag}")
+                self.signals.preview_source.emit(str(self.raw_path), f"Embedded {tag}{reason}")
                 self.signals.preview.emit(str(self.raw_path), image, True)
                 break
 
-    def _emit_lightroom_preview(self, metadata: PhotoMetadata | None) -> bool:
+    def _emit_lightroom_preview(self, metadata: PhotoMetadata | None) -> str | None:
         """
         Emit Lightroom's already-oriented cached preview when one exists.
 
         Returns:
-            Whether a preview was emitted; any lookup failure falls back silently.
+            `None` when a preview was emitted, otherwise a debug-bar suffix naming
+            why the embedded RAW preview is used instead.
         """
-        if self.lightroom_catalog is None or metadata is None or is_cropped(metadata):
-            return False
+        if self.lightroom_catalog is None:
+            return ""
+        if metadata is None:
+            return " (no metadata)"
+        if is_cropped(metadata):
+            return " (already cropped)"
         try:
             source = find_lightroom_preview(
                 self.lightroom_catalog,
@@ -433,15 +439,15 @@ class PhotoLoadTask(QRunnable):
                 target_long_edge=PREVIEW_MAX_DIMENSION,
             )
             if source is None:
-                return False
+                return " (no Lightroom preview)"
             image = decode_preview(source.read_bytes())
         except Exception:
-            return False
+            return " (Lightroom lookup failed)"
         if image.isNull() or not matches_aspect(image, metadata):
-            return False
+            return " (Lightroom preview aspect mismatch)"
         self.signals.preview_source.emit(str(self.raw_path), f"Lightroom {source.name}")
         self.signals.preview.emit(str(self.raw_path), image, True)
-        return True
+        return None
 
 
 class PhotoSaveTask(QRunnable):
