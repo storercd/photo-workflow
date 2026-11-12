@@ -50,6 +50,7 @@ HOTKEY_ACTIONS: dict[str, str] = {
     "live_preview": "Live Preview",
     "show_horizon": "Show horizon",
     "flag": "Flag photo",
+    "copy_previous_crop": "Copy previous crop",
 }
 
 
