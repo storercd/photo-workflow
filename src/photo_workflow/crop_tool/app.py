@@ -119,6 +119,7 @@ XMP_DIRTY_WARNING = (
     "⚠ LIGHTROOM EDITS NOT SAVED TO XMP\nSave metadata in Lightroom (Cmd+S) first"
 )
 FLAG_COLOR_KEY = Qt.Key.Key_F
+COPY_PREVIOUS_CROP_KEY = Qt.Key.Key_C
 COLOR_LABELS = ("Red", "Yellow", "Green", "Blue", "Purple")
 COLOR_LABEL_HEX = {
     "Red": "#e45858",
@@ -598,6 +599,7 @@ class CropWindow(QMainWindow):
         self._navigation_direction = 1
         self._current_metadata: PhotoMetadata | None = None
         self._current_crop: CropRect | None = None
+        self._previous_photo_crop: CropRect | None = None
         self._ratio_base_crop: CropRect | None = None
         self._current_rotation = 0.0
         self._crop_touched = False
@@ -1327,6 +1329,7 @@ class CropWindow(QMainWindow):
         self._add_shortcut(TOGGLE_LIVE_PREVIEW_KEY, self.side_by_side_button.click)
         self._add_shortcut(SHOW_HORIZON_KEY, self._show_horizon_clicked)
         self._add_shortcut(FLAG_COLOR_KEY, self._apply_flag_color)
+        self._add_shortcut(COPY_PREVIOUS_CROP_KEY, self._copy_previous_crop)
         self._add_shortcut(QKeySequence.StandardKey.Open, self._choose_folder)
         self._add_shortcut(QKeySequence.StandardKey.Save, self._start_save)
         self._build_ratio_shortcuts()
@@ -1348,6 +1351,7 @@ class CropWindow(QMainWindow):
             "live_preview": self.side_by_side_button.click,
             "show_horizon": self._show_horizon_clicked,
             "flag": self._apply_flag_color,
+            "copy_previous_crop": self._copy_previous_crop,
         }
 
     def _build_alternate_hotkeys(self) -> None:
@@ -1516,6 +1520,8 @@ class CropWindow(QMainWindow):
         self.next_button.setEnabled(
             self._ratings_loaded and self._current_index < len(self._photos) - 1
         )
+        if self._current_crop is not None:
+            self._previous_photo_crop = self._current_crop
         self._current_crop = None
         self._ratio_base_crop = None
         self._current_metadata = self._metadata_cache.get(self._current_path)
@@ -1745,6 +1751,11 @@ class CropWindow(QMainWindow):
         self._ratio_base_crop = None
         self._mark_dirty()
         self._select_crop_ratio(constrained_crop)
+
+    def _copy_previous_crop(self) -> None:
+        """Apply the crop of the photo last navigated away from to this photo."""
+        if self._previous_photo_crop is not None:
+            self._crop_edited(self._previous_photo_crop)
 
     def _revert_current_photo(self) -> None:
         """Restore this photo's starting crop and angle and queue them for saving."""
