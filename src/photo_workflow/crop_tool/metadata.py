@@ -368,8 +368,27 @@ def _create_sidecar(
         temporary_path.unlink(missing_ok=True)
 
 
-def _create_label_sidecar(xmp_path: Path, label: str) -> None:
-    """Create a minimal standalone XMP sidecar atomically holding only a color label."""
+def write_photo_rating(xmp_path: Path, rating: int) -> None:
+    """Write the Lightroom star rating (0-5) without touching crop fields."""
+    rating = min(max(rating, 0), 5)
+    exiftool = require_exiftool()
+    if not xmp_path.exists():
+        if rating == 0:
+            return
+        _create_label_sidecar(xmp_path, rating=rating)
+        return
+    subprocess.run(
+        [exiftool, f"-XMP-xmp:Rating={rating}", str(xmp_path)],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+
+def _create_label_sidecar(
+    xmp_path: Path, label: str | None = None, rating: int | None = None
+) -> None:
+    """Create a minimal standalone XMP sidecar atomically holding a color label or rating."""
     ElementTree.register_namespace("x", XMP_NS)
     ElementTree.register_namespace("rdf", RDF_NS)
     ElementTree.register_namespace("xmp", XAP_NS)
@@ -377,7 +396,10 @@ def _create_label_sidecar(xmp_path: Path, label: str) -> None:
     rdf = ElementTree.SubElement(root, f"{{{RDF_NS}}}RDF")
     description = ElementTree.SubElement(rdf, f"{{{RDF_NS}}}Description")
     description.set(f"{{{RDF_NS}}}about", "")
-    description.set(f"{{{XAP_NS}}}Label", label)
+    if label is not None:
+        description.set(f"{{{XAP_NS}}}Label", label)
+    if rating is not None:
+        description.set(f"{{{XAP_NS}}}Rating", str(rating))
 
     xmp_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=xmp_path.parent, suffix=".xmp", delete=False) as temp_file:
