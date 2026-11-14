@@ -18,7 +18,8 @@ APPLICATION_LAUNCH_TIMEOUT_SECONDS = 5
 # (expected at <package>/resources/icon.png). Add an entry here for any new
 # in-house tool that should show its own icon instead of the generic fallback.
 BUNDLED_COMMAND_ICON_PACKAGES = {
-    "photo-workflow-crop": "photo_workflow.crop_tool",
+    "photo-workflow-editor": "photo_workflow.editor",
+    "photo-workflow-crop": "photo_workflow.editor",
 }
 
 
@@ -140,12 +141,12 @@ def launch_command(command: tuple[str, ...], target_folder: Path | None = None) 
     May propagate LaunchError if the command could not be started.
     """
     executable, *arguments = command
-    if executable == "photo-workflow-crop":
-        args = [sys.executable, "-m", "photo_workflow.crop_tool.app", *arguments]
+    if executable in ("photo-workflow-editor", "photo-workflow-crop"):
+        args = [sys.executable, "-m", "photo_workflow.editor.app", *arguments]
         if target_folder is not None:
             args.append(str(target_folder))
         LOGGER.info("launching command %s", " ".join(args))
-        _popen_launch(args, description="Photo Workflow Crop")
+        _popen_launch(args, description="Photo Workflow Editor")
         return
 
     args = list(command)

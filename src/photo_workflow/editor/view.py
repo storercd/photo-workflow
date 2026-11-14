@@ -8,9 +8,9 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPolygonF, QTransform
 from PySide6.QtWidgets import QWidget
 
-from photo_workflow.crop_tool.ball import BallCandidate
-from photo_workflow.crop_tool.horizon import HorizonCandidate
-from photo_workflow.crop_tool.model import (
+from photo_workflow.editor.ball import BallCandidate
+from photo_workflow.editor.horizon import HorizonCandidate
+from photo_workflow.editor.model import (
     AspectRatio,
     CropRect,
     closest_aspect_ratio,

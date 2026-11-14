@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from pathlib import Path
 
-from photo_workflow.crop_tool.model import (
+from photo_workflow.editor.model import (
     CropRect,
     display_crop_to_lightroom,
     lightroom_crop_to_display,

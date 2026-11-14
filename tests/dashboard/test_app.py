@@ -57,7 +57,7 @@ def test_resolve_launcher_icon_uses_bundled_icon_for_own_command() -> None:
 
     icon = dashboard_app.resolve_launcher_icon(
         app_config.DashboardAppLauncher(
-            name="Photo Workflow Crop", command=("photo-workflow-crop",)
+            name="Photo Workflow Editor", command=("photo-workflow-editor",)
         )
     )
 

@@ -65,7 +65,7 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
-from photo_workflow.crop_tool.ball import (
+from photo_workflow.editor.ball import (
     DEFAULT_SENSITIVITY,
     SENSITIVITY_HIGH,
     SENSITIVITY_LOW,
@@ -73,16 +73,16 @@ from photo_workflow.crop_tool.ball import (
     BallCandidate,
     detect_ball_candidates,
 )
-from photo_workflow.crop_tool.horizon import (
+from photo_workflow.editor.horizon import (
     HorizonCandidate,
     detect_horizon_candidates,
     qimage_to_rgb_array,
 )
-from photo_workflow.crop_tool.lightroom import (
+from photo_workflow.editor.lightroom import (
     find_lightroom_preview,
     xmp_lacks_catalog_edits,
 )
-from photo_workflow.crop_tool.metadata import (
+from photo_workflow.editor.metadata import (
     PhotoMetadata,
     extract_preview,
     read_photo_metadata,
@@ -91,7 +91,7 @@ from photo_workflow.crop_tool.metadata import (
     write_photo_label,
     write_photo_rating,
 )
-from photo_workflow.crop_tool.model import (
+from photo_workflow.editor.model import (
     AspectRatio,
     CropRect,
     aspect_ratio_for_crop,
@@ -101,7 +101,7 @@ from photo_workflow.crop_tool.model import (
     rotated_image_size,
     transform_crop_for_rotation,
 )
-from photo_workflow.crop_tool.preferences import (
+from photo_workflow.editor.preferences import (
     CropPreferences,
     PreferencesDialog,
     is_mouse_binding,
@@ -109,7 +109,7 @@ from photo_workflow.crop_tool.preferences import (
     mouse_button_for_binding,
     save_preferences,
 )
-from photo_workflow.crop_tool.view import CroppedPreview, CropView
+from photo_workflow.editor.view import CroppedPreview, CropView
 
 PREVIEW_TAGS_BY_SUFFIX = {
     ".cr2": ("PreviewImage",),
@@ -634,7 +634,7 @@ class CropWindow(QMainWindow):
     ) -> None:
         """Create the window, controls, and background worker pools."""
         super().__init__()
-        self.setWindowTitle("Photo Workflow Crop")
+        self.setWindowTitle("Photo Workflow Editor")
         self.resize(1280, 820)
         self._settings = settings
         self._debug = debug
@@ -2630,7 +2630,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     Returns:
         The parsed command-line arguments.
     """
-    parser = argparse.ArgumentParser(prog="photo-workflow-crop")
+    parser = argparse.ArgumentParser(prog="photo-workflow-editor")
     parser.add_argument("folder", nargs="?", type=Path)
     parser.add_argument(
         "--debug",

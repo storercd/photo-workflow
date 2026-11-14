@@ -21,8 +21,8 @@ VALID_COPY_VERIFICATION_METHODS = {"basic", "crc32"}
 DEFAULT_DASHBOARD_APPS = (
     {"name": "FastRawViewer", "app_name": "FastRawViewer", "supports_target_folder": True},
     {
-        "name": "Photo Workflow Crop",
-        "command": ["photo-workflow-crop"],
+        "name": "Photo Workflow Editor",
+        "command": ["photo-workflow-editor"],
         "supports_target_folder": True,
     },
     {"name": "Lightroom Classic", "app_name": "Adobe Lightroom Classic"},
