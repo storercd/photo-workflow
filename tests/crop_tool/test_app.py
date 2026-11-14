@@ -1408,3 +1408,13 @@ def test_parse_args_handles_debug_flag() -> None:
     args_folder_debug = crop_app.parse_args(["/path/to/photos", "--debug"])
     assert args_folder_debug.debug
     assert args_folder_debug.folder == Path("/path/to/photos")
+
+
+def test_ball_button_stays_visible_in_review_mode() -> None:
+    """The ball toggle is not hidden with the crop-only tools."""
+    window = CropWindow()
+    window.show()
+    window._toggle_review_mode()
+
+    assert not window.angle_group.isVisible()
+    assert window.ball_button.isVisible()
