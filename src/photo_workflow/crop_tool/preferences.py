@@ -49,6 +49,7 @@ HOTKEY_ACTIONS: dict[str, str] = {
     "toggle_snap": "Toggle snap",
     "live_preview": "Live Preview",
     "show_horizon": "Show horizon",
+    "ball_detection": "Detect ball",
     "flag": "Flag photo",
     "copy_previous_crop": "Copy previous crop",
 }

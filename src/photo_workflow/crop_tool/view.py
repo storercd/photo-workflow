@@ -8,6 +8,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPolygonF, QTransform
 from PySide6.QtWidgets import QWidget
 
+from photo_workflow.crop_tool.ball import BallCandidate
 from photo_workflow.crop_tool.horizon import HorizonCandidate
 from photo_workflow.crop_tool.model import (
     AspectRatio,
@@ -53,6 +54,8 @@ class CropView(QWidget):
         self._initial_crop: CropRect | None = None
         self._horizon_candidates: tuple[HorizonCandidate, ...] = ()
         self._selected_horizon_candidate = -1
+        self._ball_candidates: tuple[BallCandidate, ...] = ()
+        self._ball_ring_color = QColor("#ff6b9d")
         self._passive_crop = False
         self._warning: str | None = None
 
@@ -112,6 +115,16 @@ class CropView(QWidget):
         """Set image-anchored candidate lines and the guide to emphasize."""
         self._horizon_candidates = candidates
         self._selected_horizon_candidate = selected_index
+        self.update()
+
+    def set_ball_candidates(self, candidates: tuple[BallCandidate, ...]) -> None:
+        """Set image-anchored ball circles to outline; the first is emphasized."""
+        self._ball_candidates = candidates
+        self.update()
+
+    def set_ball_ring_color(self, color: QColor) -> None:
+        """Set the color of the strongest ball ring."""
+        self._ball_ring_color = color
         self.update()
 
     def set_crop_mode(
@@ -213,6 +226,7 @@ class CropView(QWidget):
         crop_rect = self._crop_rect(image_rect)
         if crop_rect is None:
             self._draw_horizon_candidates(painter, image_rect)
+            self._draw_ball_candidates(painter, image_rect)
             return
 
         mask = QPainterPath()
@@ -227,6 +241,7 @@ class CropView(QWidget):
         painter.fillPath(shade, QColor(0, 0, 0, 145))
         painter.restore()
         self._draw_horizon_candidates(painter, image_rect)
+        self._draw_ball_candidates(painter, image_rect)
         frame_color = SNAPPED_CROP_COLOR if self._snap_ratio is not None else QColor("#f4f2ec")
         frame_pen = QPen(frame_color, 2 if self._snap_ratio is not None else 1.5)
         if self._passive_crop:
@@ -292,6 +307,26 @@ class CropView(QWidget):
                 (candidate.line_end[1] - 0.5) * image_rect.height(),
             )
             painter.drawLine(start, end)
+        painter.restore()
+
+    def _draw_ball_candidates(self, painter: QPainter, image_rect: QRectF) -> None:
+        """Outline ball candidates in the same image-local transform as the preview."""
+        if not self._ball_candidates:
+            return
+        painter.save()
+        painter.translate(image_rect.center())
+        painter.rotate(self._rotation_angle)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for index, candidate in enumerate(self._ball_candidates):
+            best = index == 0
+            color = self._ball_ring_color if best else QColor("#f4f2ec")
+            painter.setPen(QPen(color, 3 if best else 1.5))
+            center = QPointF(
+                (candidate.center_x - 0.5) * image_rect.width(),
+                (candidate.center_y - 0.5) * image_rect.height(),
+            )
+            radius = candidate.radius * image_rect.width()
+            painter.drawEllipse(center, radius * 1.25, radius * 1.25)
         painter.restore()
 
     def _horizon_line_points(

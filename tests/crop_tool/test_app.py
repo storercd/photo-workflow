@@ -950,6 +950,35 @@ def test_auto_level_applies_best_candidate_and_clicking_alternate_updates_angle(
     app.quit()
 
 
+def test_ball_shortcut_toggles_detection_button() -> None:
+    """B toggles ball detection through its button."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in window.findChildren(QShortcut)}
+
+    assert "B" in window.ball_button.toolTip()
+    assert not window.ball_button.icon().isNull()
+    shortcuts["B"].activated.emit()
+    assert window.ball_button.isChecked()
+    shortcuts["B"].activated.emit()
+    assert not window.ball_button.isChecked()
+
+    window.close()
+    app.quit()
+
+
+def test_ball_ring_color_is_applied_to_view() -> None:
+    """Choosing a ring color updates the view."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+
+    window._set_ball_ring_color("#00ff00")
+
+    assert window.view._ball_ring_color.name() == "#00ff00"
+    window.close()
+    app.quit()
+
+
 def test_show_horizon_candidates_does_not_change_angle_until_candidate_selected() -> None:
     """Show reveals unselected guides and preserves rotation until user chooses one."""
     app = QApplication.instance() or QApplication([])
@@ -1379,3 +1408,13 @@ def test_parse_args_handles_debug_flag() -> None:
     args_folder_debug = crop_app.parse_args(["/path/to/photos", "--debug"])
     assert args_folder_debug.debug
     assert args_folder_debug.folder == Path("/path/to/photos")
+
+
+def test_ball_button_stays_visible_in_review_mode() -> None:
+    """The ball toggle is not hidden with the crop-only tools."""
+    window = CropWindow()
+    window.show()
+    window._toggle_review_mode()
+
+    assert not window.angle_group.isVisible()
+    assert window.ball_button.isVisible()
