@@ -16,6 +16,7 @@ from PySide6.QtCore import (
     QEvent,
     QIODevice,
     QObject,
+    QPoint,
     QProcess,
     QRectF,
     QRunnable,
@@ -45,6 +46,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QColorDialog,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -60,8 +62,17 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
+from photo_workflow.crop_tool.ball import (
+    DEFAULT_SENSITIVITY,
+    SENSITIVITY_HIGH,
+    SENSITIVITY_LOW,
+    SENSITIVITY_MEDIUM,
+    BallCandidate,
+    detect_ball_candidates,
+)
 from photo_workflow.crop_tool.horizon import (
     HorizonCandidate,
     detect_horizon_candidates,
@@ -115,6 +126,8 @@ PREVIEW_MAX_DIMENSION = 2560
 RATIO_MATCH_TOLERANCE = 0.005
 AUTO_LEVEL_KEY = Qt.Key.Key_A
 SHOW_HORIZON_KEY = Qt.Key.Key_H
+BALL_DETECTION_KEY = Qt.Key.Key_B
+DEFAULT_BALL_RING_COLOR = "#ff6b9d"
 TOGGLE_LIVE_PREVIEW_KEY = Qt.Key.Key_P
 XMP_DIRTY_WARNING = (
     "⚠ LIGHTROOM EDITS NOT SAVED TO XMP\nSave metadata in Lightroom (Cmd+S) first"
@@ -155,6 +168,7 @@ class WorkerSignals(QObject):
     finished = Signal(str)
     saved = Signal(str, int, object, float, str)
     horizon = Signal(str, object, str, bool)
+    ball = Signal(str, object, int, int)
     ratings = Signal(int, object, str)
     rating_progress = Signal(int, int, int)
     label_saved = Signal(str, object, str)
@@ -511,6 +525,28 @@ class HorizonAnalysisTask(QRunnable):
         self.signals.horizon.emit(str(self.raw_path), candidates, error, self.apply_best)
 
 
+class BallDetectionTask(QRunnable):
+    """Find ball candidates in a preview without blocking the interface."""
+
+    def __init__(self, raw_path: Path, image: QImage, sensitivity: int) -> None:
+        """Initialize a job with an immutable preview snapshot."""
+        super().__init__()
+        self.raw_path = raw_path
+        self.image = image.copy()
+        self.sensitivity = sensitivity
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        """Detect candidates, reporting none if analysis fails."""
+        try:
+            candidates = detect_ball_candidates(
+                qimage_to_rgb_array(self.image), sensitivity=self.sensitivity
+            )
+        except Exception:
+            candidates = []
+        self.signals.ball.emit(str(self.raw_path), candidates, self.image.width(), self.sensitivity)
+
+
 class PhotoLabelSaveTask(QRunnable):
     """Write one color-label update to a sidecar without touching crop fields."""
 
@@ -658,12 +694,25 @@ class CropWindow(QMainWindow):
             stored_flag_color = self._settings.value("flag_color", DEFAULT_FLAG_COLOR, type=str)
             if stored_flag_color in COLOR_LABELS:
                 self._flag_color = stored_flag_color
+        self._ball_sensitivity = DEFAULT_SENSITIVITY
+        self._ball_ring_color = DEFAULT_BALL_RING_COLOR
+        if self._settings is not None:
+            stored_sensitivity = self._settings.value(
+                "ball_sensitivity_value", DEFAULT_SENSITIVITY, type=int
+            )
+            if SENSITIVITY_LOW <= stored_sensitivity <= SENSITIVITY_HIGH:
+                self._ball_sensitivity = stored_sensitivity
+            stored_ring = self._settings.value("ball_ring_color", DEFAULT_BALL_RING_COLOR, type=str)
+            if QColor(stored_ring).isValid():
+                self._ball_ring_color = stored_ring
         self._load_failures: set[Path] = set()
         self._save_pool = QThreadPool(self)
         self._save_pool.setMaxThreadCount(1)
         self._active_load_tasks: dict[Path, PhotoLoadTask] = {}
         self._active_rating_tasks: dict[int, RatingScanTask] = {}
         self._active_horizon_tasks: dict[Path, HorizonAnalysisTask] = {}
+        self._active_ball_tasks: dict[Path, tuple[int, int]] = {}
+        self._ball_cache: dict[tuple[Path, int, int], tuple[BallCandidate, ...]] = {}
         self._active_save_tasks: dict[int, PhotoSaveTask] = {}
         self._loading: set[Path] = set()
         self._queued_loads: set[Path] = set()
@@ -884,6 +933,18 @@ class CropWindow(QMainWindow):
             self.show_horizon_button,
         ):
             angle_layout.addWidget(control)
+        self.ball_button = QToolButton()
+        self.ball_button.setIcon(qta.icon("fa5s.volleyball-ball", color="#f4f2ec"))
+        self.ball_button.setToolTip(
+            f"Detect ball ({key_hint(BALL_DETECTION_KEY)}); "
+            "right-click for ring color and sensitivity"
+        )
+        self.ball_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.ball_button.setAccessibleName("Detect ball")
+        self.ball_button.setCheckable(True)
+        self.ball_button.setFixedSize(28, 28)
+        self.ball_button.setAutoRaise(True)
+        angle_layout.addWidget(self.ball_button)
         self.side_by_side_button = QToolButton()
         self.side_by_side_button.setIcon(qta.icon("fa5s.columns", color="#f4f2ec"))
         self.side_by_side_button.setToolTip(
@@ -1002,6 +1063,9 @@ class CropWindow(QMainWindow):
         self.rotation_reset.clicked.connect(lambda: self.rotation_slider.setValue(0))
         self.auto_level_button.clicked.connect(self._auto_level_clicked)
         self.show_horizon_button.clicked.connect(self._toggle_horizon_visibility)
+        self.ball_button.toggled.connect(self._ball_toggled)
+        self.ball_button.customContextMenuRequested.connect(self._show_ball_menu)
+        self.view.set_ball_ring_color(QColor(self._ball_ring_color))
         self.side_by_side_button.toggled.connect(self._set_side_by_side_visible)
         self.revert_button.clicked.connect(self._revert_current_photo)
         self.view.horizon_candidate_selected.connect(self._horizon_guide_selected)
@@ -1399,6 +1463,7 @@ class CropWindow(QMainWindow):
         self._add_shortcut(Qt.Key.Key_S, self._toggle_snap)
         self._add_shortcut(TOGGLE_LIVE_PREVIEW_KEY, self.side_by_side_button.click)
         self._add_shortcut(SHOW_HORIZON_KEY, self._show_horizon_clicked)
+        self._add_shortcut(BALL_DETECTION_KEY, self.ball_button.click)
         self._add_shortcut(FLAG_COLOR_KEY, self._apply_flag_color)
         self._add_shortcut(COPY_PREVIOUS_CROP_KEY, self._copy_previous_crop)
         self._add_shortcut(QKeySequence.StandardKey.Open, self._choose_folder)
@@ -1522,6 +1587,7 @@ class CropWindow(QMainWindow):
             "toggle_snap": self._toggle_snap,
             "live_preview": self.side_by_side_button.click,
             "show_horizon": self._show_horizon_clicked,
+            "ball_detection": self.ball_button.click,
             "flag": self._apply_flag_color,
             "copy_previous_crop": self._copy_previous_crop,
         }
@@ -1895,6 +1961,100 @@ class CropWindow(QMainWindow):
         else:
             width, height = image.width(), image.height()
         self._set_preview_image(image, width, height)
+        self._refresh_ball_detection(image)
+
+    def _refresh_ball_detection(self, image: QImage | None = None) -> None:
+        """Show cached ball circles for the current photo, or detect them if toggled on."""
+        path = self._current_path
+        if path is None or not self.ball_button.isChecked():
+            self.view.set_ball_candidates(())
+            return
+        image = image if image is not None else self._preview_cache.get(path)
+        if image is None or image.isNull():
+            self.view.set_ball_candidates(())
+            return
+        key = (path, image.width(), self._ball_sensitivity)
+        cached = self._ball_cache.get(key)
+        if cached is not None:
+            self.view.set_ball_candidates(cached)
+            return
+        self.view.set_ball_candidates(())
+        if self._active_ball_tasks.get(path) == key[1:]:
+            return
+        task = BallDetectionTask(path, image, self._ball_sensitivity)
+        task.signals.ball.connect(self._ball_detection_finished)
+        self._active_ball_tasks[path] = key[1:]
+        self._load_pool.start(task)
+
+    def _ball_detection_finished(
+        self, path_text: str, candidates: list[BallCandidate], width: int, sensitivity: int
+    ) -> None:
+        """Cache results and display them if still relevant."""
+        path = Path(path_text)
+        if self._active_ball_tasks.get(path) == (width, sensitivity):
+            self._active_ball_tasks.pop(path, None)
+        self._ball_cache[(path, width, sensitivity)] = tuple(candidates)
+        if len(self._ball_cache) > PREVIEW_CACHE_SIZE * 2:
+            self._ball_cache.pop(next(iter(self._ball_cache)))
+        if path == self._current_path:
+            self._refresh_ball_detection()
+
+    def _ball_toggled(self, checked: bool) -> None:
+        """Run or hide ball detection for the current and subsequent photos."""
+        self.ball_button.setToolTip(
+            f"{'Hide' if checked else 'Detect'} ball ({key_hint(BALL_DETECTION_KEY)}); "
+            "right-click for ring color and sensitivity"
+        )
+        self._refresh_ball_detection()
+
+    def _show_ball_menu(self, position: QPoint) -> None:
+        """Offer ring color, sensitivity presets, and a fine sensitivity slider."""
+        menu = QMenu(self)
+        menu.addAction("Ring color…", self._choose_ball_ring_color)
+        menu.addSeparator()
+        menu.addSection("Sensitivity")
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(SENSITIVITY_LOW, SENSITIVITY_HIGH)
+        slider.setSingleStep(5)
+        slider.setPageStep(10)
+        slider.setTracking(False)
+        slider.setValue(self._ball_sensitivity)
+        slider.setToolTip("Left: fewer false circles. Right: finds more balls.")
+        slider.valueChanged.connect(self._set_ball_sensitivity)
+        slider_action = QWidgetAction(menu)
+        slider_action.setDefaultWidget(slider)
+        menu.addAction(slider_action)
+        presets = (
+            ("Low (fewer false circles)", SENSITIVITY_LOW),
+            ("Medium", SENSITIVITY_MEDIUM),
+            ("High (finds more)", SENSITIVITY_HIGH),
+        )
+        for label, level in presets:
+            action = menu.addAction(label)
+            action.triggered.connect(lambda _checked=False, v=level: slider.setValue(v))
+        menu.exec(self.ball_button.mapToGlobal(position))
+
+    def _set_ball_sensitivity(self, level: int) -> None:
+        """Apply and persist the sensitivity, then redo detection for this photo."""
+        if level == self._ball_sensitivity:
+            return
+        self._ball_sensitivity = level
+        if self._settings is not None:
+            self._settings.setValue("ball_sensitivity_value", level)
+        self._refresh_ball_detection()
+
+    def _choose_ball_ring_color(self) -> None:
+        """Let the user pick and persist the ball ring color."""
+        color = QColorDialog.getColor(QColor(self._ball_ring_color), self, "Ball ring color")
+        if color.isValid():
+            self._set_ball_ring_color(color.name())
+
+    def _set_ball_ring_color(self, color: str) -> None:
+        """Apply and persist the ball ring color."""
+        self._ball_ring_color = color
+        self.view.set_ball_ring_color(QColor(color))
+        if self._settings is not None:
+            self._settings.setValue("ball_ring_color", color)
 
     def _load_error(self, path_text: str, message: str) -> None:
         """Show a load failure for the active photo without blocking navigation."""
@@ -2060,6 +2220,7 @@ class CropWindow(QMainWindow):
         self._horizon_candidates = ()
         self._selected_horizon_candidate = -1
         self.view.set_horizon_candidates(())
+        self.view.set_ball_candidates(())
         self.show_horizon_button.setChecked(False)
         self._update_horizon_visibility_icon(False)
         self.auto_level_button.setToolTip(
