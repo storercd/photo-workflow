@@ -664,6 +664,40 @@ def test_apply_flag_color_toggles_the_active_color_on_current_photo(
     app.quit()
 
 
+def test_review_mode_swaps_toolbar_and_number_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review mode hides crop controls, disables ratio keys, and maps 0-9 to stars/colors."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    raw_path = Path("photo.cr3")
+    window._photo_ratings = {raw_path: (0, None)}
+    window._current_path = raw_path
+    window._ratings_loaded = True
+    started_tasks = []
+    monkeypatch.setattr(window._label_pool, "start", started_tasks.append)
+
+    assert not window.aspect_group.isHidden()
+    window._toggle_review_mode()
+
+    assert not window.review_group.isHidden()
+    assert window.aspect_group.isHidden()
+    assert "Review" in window.mode_button.toolTip()
+    assert not any(shortcut.isEnabled() for shortcut in window._ratio_shortcuts)
+
+    window._review_key(4)
+    window._review_key(7)
+
+    assert started_tasks[0].rating == 4
+    assert started_tasks[1].label == "Yellow"
+    window._rating_save_finished(str(raw_path), 4, "")
+    window._label_save_finished(str(raw_path), "Yellow", "")
+    assert window._photo_ratings[raw_path] == (4, "Yellow")
+
+    window._review_key(5 + 1)
+    assert started_tasks[2].label == "Red"
+    window.close()
+    app.quit()
+
+
 def test_label_save_failure_reports_status_without_updating_ratings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

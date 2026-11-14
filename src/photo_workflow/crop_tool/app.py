@@ -78,6 +78,7 @@ from photo_workflow.crop_tool.metadata import (
     read_photo_ratings,
     write_photo_crop,
     write_photo_label,
+    write_photo_rating,
 )
 from photo_workflow.crop_tool.model import (
     AspectRatio,
@@ -129,6 +130,8 @@ COLOR_LABEL_HEX = {
     "Purple": "#aa70d6",
 }
 DEFAULT_FLAG_COLOR = "Red"
+# Lightroom / FastRawViewer: 6 red, 7 yellow, 8 green, 9 blue.
+REVIEW_COLOR_KEYS = {6: "Red", 7: "Yellow", 8: "Green", 9: "Blue"}
 
 
 def shortcut_modifier() -> str:
@@ -155,6 +158,7 @@ class WorkerSignals(QObject):
     ratings = Signal(int, object, str)
     rating_progress = Signal(int, int, int)
     label_saved = Signal(str, object, str)
+    rating_saved = Signal(str, int, str)
 
 
 class ClickableLabel(QLabel):
@@ -528,6 +532,27 @@ class PhotoLabelSaveTask(QRunnable):
         self.signals.label_saved.emit(str(self.raw_path), self.label, error)
 
 
+class PhotoRatingSaveTask(QRunnable):
+    """Write one star-rating update to a sidecar without touching crop fields."""
+
+    def __init__(self, raw_path: Path, rating: int) -> None:
+        """Initialize a rating write for one RAW photo's XMP sidecar."""
+        super().__init__()
+        self.raw_path = raw_path
+        self.rating = rating
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        """Write the star rating and report success or failure."""
+        xmp_path = self.raw_path.with_suffix(".xmp")
+        try:
+            write_photo_rating(xmp_path, self.rating)
+            error = ""
+        except Exception as exception:
+            error = str(exception)
+        self.signals.rating_saved.emit(str(self.raw_path), self.rating, error)
+
+
 RATING_SCAN_BATCH_SIZE = 50
 
 
@@ -625,6 +650,9 @@ class CropWindow(QMainWindow):
         self._label_pool = QThreadPool(self)
         self._label_pool.setMaxThreadCount(1)
         self._active_label_tasks: dict[Path, PhotoLabelSaveTask] = {}
+        self._active_rating_write_tasks: dict[Path, PhotoRatingSaveTask] = {}
+        self._review_mode = False
+        self._review_shortcuts: list[QShortcut] = []
         self._flag_color = DEFAULT_FLAG_COLOR
         if self._settings is not None:
             stored_flag_color = self._settings.value("flag_color", DEFAULT_FLAG_COLOR, type=str)
@@ -895,11 +923,51 @@ class CropWindow(QMainWindow):
         status_width = self.save_label.fontMetrics().horizontalAdvance("Saving...") + 8
         self.save_label.setFixedWidth(status_width)
         self.save_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.mode_button = QToolButton()
+        self.mode_button.setFixedSize(32, 28)
+        self.mode_button.setAutoRaise(True)
+        self.mode_button.setAccessibleName("Toggle Crop/Review mode")
+        self.review_group = QGroupBox("Review")
+        review_layout = QHBoxLayout(self.review_group)
+        review_layout.setContentsMargins(0, 0, 0, 0)
+        review_layout.setSpacing(2)
+        self.star_buttons: list[QToolButton] = []
+        for value in range(1, 6):
+            button = QToolButton()
+            button.setFixedSize(26, 28)
+            button.setAutoRaise(True)
+            button.setAccessibleName(f"Set {value} star rating")
+            button.clicked.connect(lambda checked=False, stars=value: self._set_rating(stars))
+            review_layout.addWidget(button)
+            self.star_buttons.append(button)
+        self.clear_rating_button = QToolButton()
+        self.clear_rating_button.setFixedSize(26, 28)
+        self.clear_rating_button.setAutoRaise(True)
+        self.clear_rating_button.setIcon(qta.icon("fa5s.ban", color="#8c9299"))
+        self.clear_rating_button.setToolTip("Clear star rating (0)")
+        self.clear_rating_button.setAccessibleName("Clear star rating")
+        self.clear_rating_button.clicked.connect(lambda: self._set_rating(0))
+        review_layout.addWidget(self.clear_rating_button)
+        self.color_buttons: dict[str, QToolButton] = {}
+        key_for_color = {color: key for key, color in REVIEW_COLOR_KEYS.items()}
+        for color in COLOR_LABELS:
+            button = QToolButton()
+            button.setFixedSize(26, 28)
+            button.setAutoRaise(True)
+            button.setAccessibleName(f"Toggle {color} color label")
+            hint = f" ({key_for_color[color]})" if color in key_for_color else ""
+            button.setToolTip(f"Toggle {color} label{hint}")
+            button.clicked.connect(lambda checked=False, value=color: self._toggle_color(value))
+            review_layout.addWidget(button)
+            self.color_buttons[color] = button
+        self.review_group.setVisible(False)
+        toolbar.addWidget(self.mode_button)
         toolbar.addWidget(self.open_button)
         toolbar.addWidget(navigation_panel)
         toolbar.addWidget(self.rating_filter_panel)
         toolbar.addWidget(self.label_indicator)
         toolbar.addWidget(self.position_label, 1)
+        toolbar.addWidget(self.review_group)
         toolbar.addWidget(self.angle_group)
         toolbar.addWidget(self.side_by_side_button)
         toolbar.addWidget(self.revert_button)
@@ -947,6 +1015,8 @@ class CropWindow(QMainWindow):
         self.view.crop_changed.connect(self._crop_edited)
         self._update_lock_icon(self.lock_checkbox.isChecked())
         self._update_crop_mode()
+        self.mode_button.clicked.connect(self._toggle_review_mode)
+        self._apply_review_mode()
 
     def _set_star_filter(self, minimum_stars: int | None) -> None:
         self._star_filter = minimum_stars
@@ -1185,6 +1255,7 @@ class CropWindow(QMainWindow):
         )
         self.position_label.setText(self._current_path.name)
         self._update_label_indicator()
+        self._update_review_buttons()
 
     def _update_label_indicator(self) -> None:
         """Show a small color swatch when the current photo has a color label."""
@@ -1333,7 +1404,108 @@ class CropWindow(QMainWindow):
         self._add_shortcut(QKeySequence.StandardKey.Open, self._choose_folder)
         self._add_shortcut(QKeySequence.StandardKey.Save, self._start_save)
         self._build_ratio_shortcuts()
+        self._build_review_shortcuts()
         self._build_alternate_hotkeys()
+
+    def _build_review_shortcuts(self) -> None:
+        """Install 0-5 (star rating) and 6-9 (color label) hotkeys used in Review mode."""
+        for digit in range(10):
+            shortcut = QShortcut(QKeySequence(Qt.Key(int(Qt.Key.Key_0) + digit)), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(lambda value=digit: self._review_key(value))
+            self._review_shortcuts.append(shortcut)
+        self._apply_review_mode()
+
+    def _review_key(self, digit: int) -> None:
+        if digit <= 5:
+            self._set_rating(digit)
+        else:
+            self._toggle_color(REVIEW_COLOR_KEYS.get(digit))
+
+    def _toggle_review_mode(self) -> None:
+        self._review_mode = not self._review_mode
+        self._apply_review_mode()
+
+    def _apply_review_mode(self) -> None:
+        """Switch the toolbar, number keys, and mode icon between Crop and Review."""
+        review = self._review_mode
+        for shortcut in self._review_shortcuts:
+            shortcut.setEnabled(review)
+        for shortcut in self._ratio_shortcuts:
+            shortcut.setEnabled(not review)
+        for widget in (
+            self.angle_group,
+            self.side_by_side_button,
+            self.revert_button,
+            self.aspect_group,
+            self.flag_button,
+        ):
+            widget.setVisible(not review)
+        self.review_group.setVisible(review)
+        if review:
+            self.mode_button.setIcon(qta.icon("fa5s.star", color="#e5bd48"))
+            self.mode_button.setToolTip(
+                "Review Mode: 0-5 set stars, 6-9 set colors (click for Crop Mode)"
+            )
+        else:
+            self.mode_button.setIcon(qta.icon("fa5s.crop-alt", color="#f4f2ec"))
+            self.mode_button.setToolTip(
+                "Crop Mode: number keys pick aspect ratios (click for Review Mode)"
+            )
+        self._update_review_buttons()
+
+    def _update_review_buttons(self) -> None:
+        """Reflect the current photo's rating and label on the Review toolbar."""
+        stars, label = self._photo_ratings.get(self._current_path, (0, None))
+        enabled = self._current_path is not None and self._ratings_loaded
+        for index, button in enumerate(self.star_buttons, start=1):
+            button.setIcon(
+                qta.icon("fa5s.star", color="#e5bd48" if index <= stars else "#4a4f55")
+            )
+            button.setToolTip(f"{index} star{'s' if index > 1 else ''} ({index})")
+            button.setEnabled(enabled)
+        self.clear_rating_button.setEnabled(enabled)
+        for color, button in self.color_buttons.items():
+            active = label == color
+            button.setIcon(
+                qta.icon(
+                    "fa5s.square" if active else "fa5.square",
+                    options=[{"color": COLOR_LABEL_HEX[color]}],
+                )
+            )
+            button.setEnabled(enabled)
+
+    def _set_rating(self, stars: int) -> None:
+        """Write a star rating to the current photo."""
+        if self._current_path is None or not self._ratings_loaded:
+            return
+        task = PhotoRatingSaveTask(self._current_path, stars)
+        task.signals.rating_saved.connect(self._rating_save_finished)
+        self._active_rating_write_tasks[self._current_path] = task
+        self._label_pool.start(task)
+
+    def _rating_save_finished(self, path_text: str, stars: int, error: str) -> None:
+        raw_path = Path(path_text)
+        self._active_rating_write_tasks.pop(raw_path, None)
+        if error:
+            self.save_label.setText(f"Rating failed: {error}")
+            return
+        _, label = self._photo_ratings.get(raw_path, (0, None))
+        self._photo_ratings[raw_path] = (stars, label)
+        if raw_path == self._current_path:
+            self._update_review_buttons()
+        self._refresh_rating_filter()
+
+    def _toggle_color(self, color: str | None) -> None:
+        """Toggle a specific color label on the current photo."""
+        if color is None or self._current_path is None or not self._ratings_loaded:
+            return
+        _, current_label = self._photo_ratings.get(self._current_path, (0, None))
+        new_label = None if current_label == color else color
+        task = PhotoLabelSaveTask(self._current_path, new_label)
+        task.signals.label_saved.connect(self._label_save_finished)
+        self._active_label_tasks[self._current_path] = task
+        self._label_pool.start(task)
 
     def _hotkey_callbacks(self) -> dict[str, Callable[[], object]]:
         """
@@ -1435,6 +1607,8 @@ class CropWindow(QMainWindow):
             self.ratio_combo.blockSignals(False)
             self._ratio_selected(0)
             self._build_ratio_shortcuts()
+            for shortcut in self._ratio_shortcuts:
+                shortcut.setEnabled(not self._review_mode)
         self._build_alternate_hotkeys()
 
     def _apply_ratio_index(self, index: int) -> None:
@@ -2183,6 +2357,7 @@ class CropWindow(QMainWindow):
         self._active_horizon_tasks.clear()
         self._active_save_tasks.clear()
         self._active_label_tasks.clear()
+        self._active_rating_write_tasks.clear()
         if self._settings is not None:
             self._settings.sync()
         event.accept()
