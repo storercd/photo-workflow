@@ -23,7 +23,7 @@ SECRET_R2_SECRET_KEY = "r2_secret_access_key"  # noqa: S105
 DEFAULT_FTP_PORT = 2121
 DEFAULT_AUTOCROP_RATIOS = ("1:1", "4:5", "1.91:1")
 # Working name of the option that holds processing back while the user is active.
-IDLE_PROCESSING_LABEL = "Idle processing"
+IDLE_PROCESSING_LABEL = "Idle Processing"
 DEFAULT_IDLE_DELAY_SECONDS = 3.0
 MAX_IDLE_DELAY_SECONDS = 120.0
 

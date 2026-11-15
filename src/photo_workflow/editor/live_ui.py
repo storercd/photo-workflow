@@ -218,6 +218,7 @@ class LiveStatusPanel(QFrame):
     """Per-stage counts, feature toggles, warnings, and the Clean action."""
 
     stage_toggled = Signal(object, bool)
+    idle_toggled = Signal(bool)
     warning_selected = Signal(int, str)
     warnings_cleared = Signal()
     clean_requested = Signal()
@@ -285,8 +286,14 @@ class LiveStatusPanel(QFrame):
             self.toggles[stage] = toggle
             self.error_labels[stage] = error
             self.count_labels[stage] = count
+        self.idle_button = QPushButton(IDLE_PROCESSING_LABEL)
+        self.idle_button.setCheckable(True)
+        self.idle_button.setToolTip(
+            "Only process while the mouse and keyboard are idle (delay is in Preferences → Live)"
+        )
+        self.idle_button.toggled.connect(self.idle_toggled.emit)
         self.completed_label = QLabel("Completed: 0")
-        self.held_label = QLabel(f"Waiting for idle ({IDLE_PROCESSING_LABEL})")
+        self.held_label = QLabel("Waiting for idle")
         self.held_label.setStyleSheet(HELD_STYLE)
         self.held_label.setWordWrap(True)
         self.held_label.setToolTip("Processing resumes when the mouse and keyboard are still")
@@ -295,12 +302,16 @@ class LiveStatusPanel(QFrame):
         layout = QVBoxLayout(self)
         layout.addLayout(header)
         layout.addLayout(grid)
+        layout.addWidget(self.idle_button)
         layout.addWidget(self.completed_label)
         layout.addWidget(self.held_label)
         layout.addStretch(1)
 
     def set_enabled_stages(self, settings: LiveSettings) -> None:
-        """Reflect the feature toggles without emitting `stage_toggled`."""
+        """Reflect the feature toggles and idle option without emitting their signals."""
+        self.idle_button.blockSignals(True)
+        self.idle_button.setChecked(settings.idle_processing)
+        self.idle_button.blockSignals(False)
         for stage, toggle in self.toggles.items():
             if SPECS[stage].toggleable:
                 toggle.blockSignals(True)

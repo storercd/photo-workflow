@@ -291,3 +291,26 @@ def test_idle_monitor_holds_while_active_and_releases_after_a_quiet_spell(
     monitor.configure(replace(pipeline.settings, idle_processing=False))
     assert not pipeline.held
     window.close()
+
+
+def test_idle_button_toggles_and_persists_idle_processing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The status panel button switches Idle Processing, and settings changes update it."""
+    make_live_photo(tmp_path / "live")
+    window = make_window(tmp_path, monkeypatch)
+    window._toggle_live_mode()
+    panel = window.live_dock.panel
+    pipeline = window._live.pipeline
+    assert panel.idle_button.text() == "Idle Processing"
+    assert not panel.idle_button.isChecked()
+
+    panel.idle_button.click()
+    assert window._live_settings.idle_processing
+    assert pipeline.held
+    assert live_settings.load_live_settings(window._settings).idle_processing
+
+    window._apply_live_settings(replace(window._live_settings, idle_processing=False))
+    assert not panel.idle_button.isChecked()
+    assert not pipeline.held
+    window.close()

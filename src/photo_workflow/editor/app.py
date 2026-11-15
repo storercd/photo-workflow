@@ -1254,6 +1254,7 @@ class CropWindow(QMainWindow):
         self.mode_button.clicked.connect(self._toggle_review_mode)
         self.live_button.clicked.connect(self._toggle_live_mode)
         self.live_dock.panel.stage_toggled.connect(self._live_stage_toggled)
+        self.live_dock.panel.idle_toggled.connect(self._live_idle_toggled)
         self.live_dock.panel.warning_selected.connect(self._live_warning_selected)
         self.live_dock.panel.warnings_cleared.connect(self._live_warnings_cleared)
         self.live_dock.panel.clean_requested.connect(self._live_clean_requested)
@@ -2006,6 +2007,7 @@ class CropWindow(QMainWindow):
         self._live_settings = live
         if self._settings is not None:
             save_live_settings(self._settings, live)
+        self.live_dock.panel.set_enabled_stages(live)
         if self._live is None:
             return
         if folder_changed:
@@ -2024,6 +2026,10 @@ class CropWindow(QMainWindow):
             save_live_settings(self._settings, self._live_settings)
         if self._live is not None:
             self._live.pipeline.toggle(stage, enabled)
+
+    def _live_idle_toggled(self, checked: bool) -> None:
+        """Switch Idle Processing from the status panel button and remember the choice."""
+        self._apply_live_settings(replace(self._live_settings, idle_processing=checked))
 
     def _live_warning_selected(self, warning_id: int, photo_text: str) -> None:
         """Jump to a warning's photo and dismiss the warning."""
