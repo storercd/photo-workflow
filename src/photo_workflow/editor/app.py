@@ -777,6 +777,7 @@ class CropWindow(QMainWindow):
         self._save_timer.timeout.connect(self._start_save)
         self._build_ui()
         self._build_shortcuts()
+        self._wheel_delta = 0
         QApplication.instance().installEventFilter(self)
         if initial_folder is not None:
             resolved = resolve_drop_path(initial_folder)
@@ -1786,6 +1787,18 @@ class CropWindow(QMainWindow):
             if callback is not None:
                 callback()
                 return True
+        if (
+            event.type() == QEvent.Type.Wheel
+            and self.isActiveWindow()
+            and QApplication.activeModalWidget() is None
+        ):
+            # 120 units is one physical wheel click; accumulate for smooth/trackpad devices.
+            self._wheel_delta += event.angleDelta().y()
+            steps = int(self._wheel_delta / 120)
+            if steps:
+                self._wheel_delta -= steps * 120
+                self.navigate(-steps)
+            return True
         return super().eventFilter(watched, event)
 
     def _build_ratio_shortcuts(self) -> None:
