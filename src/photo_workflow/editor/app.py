@@ -689,7 +689,9 @@ class CropWindow(QMainWindow):
         self._label_pool.setMaxThreadCount(1)
         self._active_label_tasks: dict[Path, PhotoLabelSaveTask] = {}
         self._active_rating_write_tasks: dict[Path, PhotoRatingSaveTask] = {}
-        self._review_mode = False
+        self._review_mode = (
+            settings is not None and settings.value("review_mode", False, type=bool)
+        )
         self._review_shortcuts: list[QShortcut] = []
         self._flag_color = DEFAULT_FLAG_COLOR
         if self._settings is not None:
@@ -1517,11 +1519,14 @@ class CropWindow(QMainWindow):
 
     def _toggle_review_mode(self) -> None:
         self._review_mode = not self._review_mode
+        if self._settings is not None:
+            self._settings.setValue("review_mode", self._review_mode)
         self._apply_review_mode()
 
     def _apply_review_mode(self) -> None:
         """Switch the toolbar, number keys, and mode icon between Crop and Review."""
         review = self._review_mode
+        self.setWindowTitle(f"Photo Workflow Editor — {'Review' if review else 'Crop'} Mode")
         for shortcut in self._review_shortcuts:
             shortcut.setEnabled(review)
         for shortcut in self._ratio_shortcuts:
