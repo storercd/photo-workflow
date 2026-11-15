@@ -82,3 +82,16 @@ def test_explicit_kelvin_overrides_estimate() -> None:
     assert abs(fixed.temperature - 9000) < 50
     assert fixed.gains[0] > 1 > fixed.gains[2]
     assert estimate_adjustment(warm, kelvin=6500).gains == (1.0, 1.0, 1.0)
+
+
+def test_kelvin_is_relative_to_the_as_shot_reference() -> None:
+    """The camera's as-shot temperature is neutral, and typed values shift away from it."""
+    warm = scene(40, 200, tint=(1.0, 0.85, 0.6))
+
+    neutral = estimate_adjustment(warm, kelvin=5200, reference=5200)
+    shifted = estimate_adjustment(warm, kelvin=7000, reference=5200)
+
+    assert neutral.gains == (1.0, 1.0, 1.0)
+    assert abs(neutral.temperature - 5200) < 50
+    assert shifted.gains[0] > 1 > shifted.gains[2]
+    assert abs(shifted.temperature - 7000) < 50

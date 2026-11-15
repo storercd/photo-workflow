@@ -93,6 +93,7 @@ from photo_workflow.editor.lightroom import (
 from photo_workflow.editor.metadata import (
     PhotoMetadata,
     extract_preview,
+    read_as_shot_kelvin,
     read_photo_metadata,
     read_photo_ratings,
     write_photo_crop,
@@ -175,6 +176,7 @@ class WorkerSignals(QObject):
     preview = Signal(str, object, bool)
     preview_source = Signal(str, str)
     preview_adjusted = Signal(str, object, object, object)
+    as_shot_kelvin = Signal(str, float)
     xmp_dirty = Signal(str, bool)
     error = Signal(str, str)
     finished = Signal(str)
@@ -406,6 +408,7 @@ class PhotoLoadTask(QRunnable):
         self.raw_path = raw_path
         self.lightroom_catalog = lightroom_catalog
         self.temperature = temperature
+        self.reference_kelvin = REFERENCE_KELVIN
         self.signals = WorkerSignals()
 
     def run(self) -> None:
@@ -420,8 +423,19 @@ class PhotoLoadTask(QRunnable):
         except Exception as error:
             self.signals.error.emit(str(self.raw_path), str(error))
         self._emit_xmp_status()
+        self._emit_as_shot_kelvin()
         self._emit_previews(orientation, metadata)
         self.signals.finished.emit(str(self.raw_path))
+
+    def _emit_as_shot_kelvin(self) -> None:
+        """Report the camera's white balance so auto lighting can use it as the neutral point."""
+        try:
+            kelvin = read_as_shot_kelvin(self.raw_path)
+        except Exception:
+            return
+        if kelvin is not None:
+            self.reference_kelvin = min(max(kelvin, MIN_KELVIN), MAX_KELVIN)
+            self.signals.as_shot_kelvin.emit(str(self.raw_path), self.reference_kelvin)
 
     def _emit_xmp_status(self) -> None:
         """Report unsaved Lightroom edits; lookup failures are ignored."""
@@ -459,7 +473,7 @@ class PhotoLoadTask(QRunnable):
     def _emit_adjusted_preview(self, image: QImage) -> None:
         """Emit an auto-lit copy of the embedded preview so the original stays untouched."""
         try:
-            adjusted, adjustment = auto_light_image(image, self.temperature)
+            adjusted, adjustment = auto_light_image(image, self.temperature, self.reference_kelvin)
         except Exception as error:
             self.signals.error.emit(str(self.raw_path), f"Auto lighting failed: {error}")
             return
@@ -754,6 +768,7 @@ class CropWindow(QMainWindow):
         self._adjusted_cache: dict[Path, QImage] = {}
         self._lighting_adjustments: dict[Path, LightingAdjustment] = {}
         self._wb_override: float | None = None
+        self._as_shot_kelvin: dict[Path, float] = {}
         self._xmp_dirty: dict[Path, bool] = {}
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -1990,6 +2005,7 @@ class CropWindow(QMainWindow):
         task.signals.preview.connect(self._preview_loaded)
         task.signals.preview_source.connect(self._preview_source_loaded)
         task.signals.preview_adjusted.connect(self._preview_adjusted_loaded)
+        task.signals.as_shot_kelvin.connect(self._as_shot_kelvin_loaded)
         task.signals.xmp_dirty.connect(self._xmp_dirty_loaded)
         task.signals.error.connect(self._load_error)
         task.signals.finished.connect(self._load_finished)
@@ -2081,11 +2097,17 @@ class CropWindow(QMainWindow):
         if path == self._current_path and self.auto_light_button.isChecked():
             self._show_image(self._preview_cache[path])
 
+    def _as_shot_kelvin_loaded(self, path_text: str, kelvin: float) -> None:
+        """Remember a photo's camera white balance, the neutral point for its auto lighting."""
+        self._as_shot_kelvin[Path(path_text)] = kelvin
+
     def _ensure_adjusted(self, path: Path, original: QImage) -> None:
         """Compute a missing auto-lit copy now, once the photo's background load is done."""
         if path in self._adjusted_cache or path in self._loading:
             return
-        image, adjustment = auto_light_image(original, self._wb_override)
+        image, adjustment = auto_light_image(
+            original, self._wb_override, self._as_shot_kelvin.get(path, REFERENCE_KELVIN)
+        )
         self._adjusted_cache[path] = image
         self._lighting_adjustments[path] = adjustment
 

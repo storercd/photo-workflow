@@ -301,6 +301,21 @@ def require_exiftool() -> str:
     return exiftool
 
 
+def read_as_shot_kelvin(raw_path: Path) -> float | None:
+    """
+    Read the camera's as-shot white-balance color temperature from a RAW file.
+
+    Returns:
+        The temperature in Kelvin, or `None` when the file does not record one.
+    """
+    record = _read_json(require_exiftool(), raw_path, "-n", "-ColorTempAsShot", "-ColorTemperature")
+    for tag in ("ColorTempAsShot", "ColorTemperature"):
+        value = record.get(tag)
+        if isinstance(value, int | float) and value > 0:
+            return float(value)
+    return None
+
+
 def _read_json(exiftool: str, path: Path, *tags: str) -> dict[str, object]:
     """
     Read selected ExifTool tags as a JSON object.

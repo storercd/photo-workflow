@@ -9,7 +9,7 @@ milliseconds. This is a heuristic approximation meant for culling, not a RAW dev
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from math import log
 
 import cv2
@@ -61,6 +61,7 @@ class LightingAdjustment:
     highlights: float = 0.0
     contrast: float = 0.0
     vibrance: float = 0.0
+    reference_kelvin: float = field(default=REFERENCE_KELVIN, compare=False)
 
     @property
     def is_neutral(self) -> bool:
@@ -71,7 +72,7 @@ class LightingAdjustment:
     def temperature(self) -> float:
         """The white-balance color temperature, in Kelvin, implied by the gains."""
         red, _, blue = self.gains
-        return kelvin_from_gains(red, blue)
+        return kelvin_from_gains(red, blue, self.reference_kelvin)
 
     def describe(self) -> str:
         """
@@ -125,21 +126,23 @@ def _blackbody_rgb(kelvin: float) -> NDArray[np.float64]:
     return rgb / rgb[1]
 
 
-def gains_from_kelvin(kelvin: float) -> tuple[float, float, float]:
+def gains_from_kelvin(
+    kelvin: float, reference: float = REFERENCE_KELVIN
+) -> tuple[float, float, float]:
     """
     Convert a white-balance color temperature into RGB gains.
 
-    The photo is assumed lit by a blackbody at `kelvin` and rendered as if neutral at
-    6500 K, so lower values cool the image and higher values warm it.
+    The preview is assumed neutral at `reference` (the camera's as-shot temperature),
+    so values below it cool the image and values above it warm it.
 
     Returns:
         Red, green (always 1.0), and blue gains.
     """
-    gains = _blackbody_rgb(REFERENCE_KELVIN) / _blackbody_rgb(kelvin)
+    gains = _blackbody_rgb(reference) / _blackbody_rgb(kelvin)
     return float(gains[0]), 1.0, float(gains[2])
 
 
-def kelvin_from_gains(red: float, blue: float) -> float:
+def kelvin_from_gains(red: float, blue: float, reference: float = REFERENCE_KELVIN) -> float:
     """
     Find the color temperature whose red/blue balance matches the given gains.
 
@@ -150,7 +153,7 @@ def kelvin_from_gains(red: float, blue: float) -> float:
     low, high = MIN_KELVIN, MAX_KELVIN
     for _ in range(24):
         middle = (low + high) / 2
-        gains = gains_from_kelvin(middle)
+        gains = gains_from_kelvin(middle, reference)
         if log(gains[0] / gains[2]) < target:
             low = middle
         else:
@@ -158,21 +161,24 @@ def kelvin_from_gains(red: float, blue: float) -> float:
     return (low + high) / 2
 
 
-def estimate_adjustment(rgb: NDArray[np.uint8], kelvin: float | None = None) -> LightingAdjustment:
+def estimate_adjustment(
+    rgb: NDArray[np.uint8], kelvin: float | None = None, reference: float = REFERENCE_KELVIN
+) -> LightingAdjustment:
     """
     Choose automatic corrections by analyzing a downscaled copy of the preview.
 
     Args:
         rgb: The preview pixels.
         kelvin: An explicit color temperature replacing the estimated white balance.
+        reference: The temperature at which the preview already looks neutral.
 
     Returns:
         The estimated adjustment, neutral when the preview already looks balanced.
     """
     sample = _downscale(rgb)
     values = sample.astype(np.float32) / 255
-    gains = _estimate_gains(values) if kelvin is None else gains_from_kelvin(kelvin)
-    adjustment = LightingAdjustment(gains=gains)
+    gains = _estimate_gains(values) if kelvin is None else gains_from_kelvin(kelvin, reference)
+    adjustment = LightingAdjustment(gains=gains, reference_kelvin=reference)
     adjustment = replace(adjustment, exposure_ev=_estimate_exposure(values, adjustment))
     levels = _luma(_apply_tone(values, adjustment))
     black, white = np.percentile(levels, [BLACK_PERCENTILE, WHITE_PERCENTILE])
@@ -207,7 +213,7 @@ def estimate_adjustment(rgb: NDArray[np.uint8], kelvin: float | None = None) -> 
         and adjustment.highlights < 0.05
         and adjustment.vibrance < MIN_VIBRANCE
     ):
-        return LightingAdjustment()
+        return LightingAdjustment(reference_kelvin=reference)
     return adjustment
 
 
@@ -233,7 +239,7 @@ def apply_adjustment(rgb: NDArray[np.uint8], adjustment: LightingAdjustment) -> 
 
 
 def auto_light_image(
-    image: QImage, kelvin: float | None = None
+    image: QImage, kelvin: float | None = None, reference: float = REFERENCE_KELVIN
 ) -> tuple[QImage, LightingAdjustment]:
     """
     Estimate and apply the automatic adjustment to a Qt image.
@@ -241,20 +247,21 @@ def auto_light_image(
     Args:
         image: The preview to adjust.
         kelvin: An explicit color temperature replacing the estimated white balance.
+        reference: The temperature at which the preview already looks neutral.
 
     Returns:
         The adjusted RGB888 image (or `image` itself when null or already balanced) and
         the adjustment that was applied.
     """
     if image.isNull():
-        return image, LightingAdjustment()
+        return image, LightingAdjustment(reference_kelvin=reference)
     rgb_image = image.convertToFormat(QImage.Format.Format_RGB888)
     width, height = rgb_image.width(), rgb_image.height()
     rows = np.frombuffer(rgb_image.constBits(), dtype=np.uint8).reshape(
         height, rgb_image.bytesPerLine()
     )
     rgb = np.ascontiguousarray(rows[:, : width * BYTES_PER_PIXEL].reshape(height, width, 3))
-    adjustment = estimate_adjustment(rgb, kelvin)
+    adjustment = estimate_adjustment(rgb, kelvin, reference)
     if adjustment.is_neutral:
         return image, adjustment
     adjusted = np.ascontiguousarray(apply_adjustment(rgb, adjustment))
