@@ -1624,7 +1624,7 @@ class CropWindow(QMainWindow):
         self.statusBar().setVisible(visible and self._debug)
 
     def _build_review_shortcuts(self) -> None:
-        """Install 0-5 (star rating; ` also clears) and 6-9 (color label) hotkeys used in Review mode."""
+        """Install 0-5 (stars; ` also clears) and 6-9 (color label) hotkeys for Review mode."""
         for digit in range(10):
             shortcut = QShortcut(QKeySequence(Qt.Key(int(Qt.Key.Key_0) + digit)), self)
             shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
