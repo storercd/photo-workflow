@@ -135,8 +135,10 @@ automatic crop*; changing either (or the ratios) re-runs AutoCrop on every photo
 | `editor/live_ui.py` | controller, status panel, hide/show tab, Clean confirmation |
 | `editor/app.py` | Live mode toggle, Live photo list, failure overlay |
 
-Pipeline state is held in memory only; after a restart it is re-derived from the folder and
-work re-runs.
+Finished stage progress is saved to `<live folder>/.pipeline-state.json` (`live/persistence.py`)
+and restored at launch, so a restart does not redo finished work. A stage is redone when its
+output file is missing, the original changed, its feature was toggled while the app was closed
+(Denoise, Mask, Lighting/Color), or the AutoCrop options changed.
 
 ## FTP feature
 

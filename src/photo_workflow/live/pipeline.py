@@ -20,6 +20,12 @@ from photo_workflow.live.api import (
 )
 from photo_workflow.live.ingest import rename_arrival
 from photo_workflow.live.layout import IMAGE_SUFFIXES, RAW_SUFFIXES, LiveLayout
+from photo_workflow.live.persistence import (
+    dump_state,
+    load_state,
+    restorable_records,
+    write_state,
+)
 from photo_workflow.live.settings import LiveSettings
 from photo_workflow.live.stages import (
     SPECS,
@@ -148,6 +154,8 @@ class LivePipeline:
         self._warning_ids = count(1)
         self._paused = False
         self._closed = False
+        self._saved_state: dict | None = None
+        self._written_state = ""
 
     def add_listener(self, listener: Callable[[], None]) -> None:
         """Call `listener` after every state change."""
@@ -163,17 +171,58 @@ class LivePipeline:
         """Register photos already in the Live folder and forget vanished ones."""
         found = set(self.layout.list_photos())
         with self._lock:
+            if self._saved_state is None:
+                self._saved_state = load_state(self.layout.root)
             for photo in list(self._state.images):
                 if photo not in found:
                     del self._state.images[photo]
             for photo in sorted(found - self._state.images.keys()):
                 self._register(photo)
+            self._saved_state = {}  # progress is restored only for the photos present at launch
         self.pump()
 
     def _register(self, photo: Path) -> None:
         stages = {stage: ImageStage() for stage in STAGE_ORDER}
         stages[StageId.FTP].status = StageStatus.DONE
+        restored = restorable_records(
+            self.layout.root,
+            self._saved_state or {},
+            photo,
+            self._enabled_flags(),
+            self._autocrop_flags(),
+        )
+        for stage, (status, outputs, message) in restored.items():
+            stages[stage].status = status
+            stages[stage].outputs = outputs
+            stages[stage].message = message
         self._state.images[photo] = stages
+
+    def _enabled_flags(self) -> dict[str, bool]:
+        return {stage.value: self.settings.is_enabled(stage) for stage in STAGE_ORDER}
+
+    def _autocrop_flags(self) -> list:
+        ratios, ball, force = _autocrop_options(self.settings)
+        return [list(ratios), ball, force]
+
+    def _save_state(self) -> None:
+        """Write finished progress next to the photos so a restart resumes where it left off."""
+        with self._lock:
+            if not self._state.images or not self.layout.root.is_dir() or self._saved_state is None:
+                return
+            text = dump_state(
+                self.layout.root,
+                self._state.images,
+                self._enabled_flags(),
+                self._autocrop_flags(),
+            )
+            if text == self._written_state:
+                return
+            try:
+                write_state(self.layout.root, text)
+            except OSError:
+                LOGGER.exception("could not save live pipeline state")
+                return
+            self._written_state = text
 
     def photos(self) -> list[Path]:
         """Return known photos in chronological order."""
@@ -335,6 +384,7 @@ class LivePipeline:
                 jobs.extend(self._claim(stage))
         for job, generation in jobs:
             self._executor.submit(self._run_job, job, generation)
+        self._save_state()
         self._emit()
 
     def _claim(self, stage: StageId) -> list[tuple[StageJob, int]]:
@@ -619,6 +669,8 @@ class LivePipeline:
                 lambda: not any(self._state.running.values()), CLEAN_DRAIN_TIMEOUT_SECONDS
             )
             self._state = _State(running=dict.fromkeys(STAGE_ORDER, 0))
+            self._saved_state = {}
+            self._written_state = ""
             self.layout.clean()
             self._paused = False
         LOGGER.info("cleaned live folder %s", self.layout.root)

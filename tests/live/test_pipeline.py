@@ -442,3 +442,34 @@ def test_toggling_ftp_does_not_redo_existing_images(tmp_path: Path) -> None:
     executor.run_all()
 
     assert len(denoise.calls) == 1
+
+
+def test_restart_keeps_finished_work_and_redoes_what_changed(tmp_path: Path) -> None:
+    """A new pipeline over the same folder resumes instead of redoing finished stages."""
+    photo = make_photo(tmp_path)
+    denoise = Recorder(".tif")
+    registry = StageRegistry()
+    registry.register(StageId.DENOISE, denoise)
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, {StageId.DENOISE})
+    pipeline.scan()
+    executor.run_all()
+    assert len(denoise.calls) == 1
+
+    again = Recorder(".tif")
+    registry = StageRegistry()
+    registry.register(StageId.DENOISE, again)
+    restarted, executor, _ = make_pipeline(tmp_path, registry, {StageId.DENOISE})
+    restarted.scan()
+    executor.run_all()
+    assert again.calls == []
+    assert restarted.status(photo, StageId.DENOISE) is StageStatus.DONE
+
+    # A missing output, a changed original, or a toggled feature means the work is redone.
+    denoise.calls[0].output_path(suffix=".tif").unlink()
+    redo = Recorder(".tif")
+    registry = StageRegistry()
+    registry.register(StageId.DENOISE, redo)
+    third, executor, _ = make_pipeline(tmp_path, registry, {StageId.DENOISE})
+    third.scan()
+    executor.run_all()
+    assert len(redo.calls) == 1
