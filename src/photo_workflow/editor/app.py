@@ -3188,6 +3188,10 @@ def decode_preview(image_bytes: bytes, *, fallback_orientation: int = 1) -> QIma
             )
         )
     image = reader.read()
+    # The TIFF handler touches the device when the reader is destroyed, so the reader
+    # must go before the buffer or the process crashes.
+    del reader
+    buffer.close()
     if (
         not image.isNull()
         and embedded_orientation == QImageIOHandler.Transformation.TransformationNone

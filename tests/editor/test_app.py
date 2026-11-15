@@ -1344,6 +1344,7 @@ def test_should_enable_session_restore_in_main_when_no_argument(
 
     monkeypatch.setattr(crop_app, "CropWindow", DummyCropWindow)
     monkeypatch.setattr(crop_app.QApplication, "exec", lambda self: 0)
+    monkeypatch.setattr(crop_app, "configure_live_logging", lambda: None)
 
     crop_app.main([])
     assert launched_args == [(None, True, False)]
@@ -1478,3 +1479,17 @@ def test_typed_kelvin_value_fixes_white_balance(monkeypatch) -> None:
     window._finish_wb_edit()
 
     assert window._wb_override == crop_app.MAX_KELVIN
+
+
+def test_decode_preview_of_a_tiff_does_not_crash() -> None:
+    """Decoding TIFF bytes repeatedly survives the reader/buffer teardown order."""
+    QApplication.instance() or QApplication([])
+    buffer = QBuffer()
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    image = QImage(40, 30, QImage.Format.Format_RGB32)
+    image.fill(0xFF336699)
+    assert image.save(buffer, "TIFF")
+
+    for _ in range(50):
+        decoded = decode_preview(bytes(buffer.data()))
+        assert (decoded.width(), decoded.height()) == (40, 30)
