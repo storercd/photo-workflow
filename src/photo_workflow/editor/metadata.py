@@ -44,6 +44,7 @@ class PhotoMetadata:
     crop: CropRect
     crop_angle: float = 0
     orientation: int = 1
+    auto_crop: bool = False
 
 
 def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
@@ -70,7 +71,12 @@ def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
     if orientation in {5, 6, 7, 8}:
         image_width, image_height = image_height, image_width
     crop_data = (
-        _read_json(exiftool, xmp_path, *(f"-XMP-crs:{tag}" for tag in XMP_TAGS))
+        _read_json(
+            exiftool,
+            xmp_path,
+            "-XMP-pwf:CropSource",
+            *(f"-XMP-crs:{tag}" for tag in XMP_TAGS),
+        )
         if xmp_path.is_file()
         else {}
     )
@@ -100,6 +106,7 @@ def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
         crop=display_crop,
         crop_angle=crop_angle,
         orientation=orientation,
+        auto_crop=str(crop_data.get("CropSource", "")).strip().lower() == "auto",
     )
 
 

@@ -9,6 +9,8 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication
 
 from photo_workflow.editor.app import CropWindow
+from photo_workflow.editor.metadata import PhotoMetadata
+from photo_workflow.editor.model import CropRect
 from photo_workflow.live import settings as live_settings
 from photo_workflow.live.features.mask import NO_SUBJECT_MESSAGE
 from photo_workflow.live.stages import StageId, StageStatus
@@ -197,4 +199,33 @@ def test_idle_message_opens_and_creates_the_live_folder(
     assert label.cursor().shape() != Qt.CursorShape.PointingHandCursor
     window._open_live_folder()
     assert opened == [str(root)]
+    window.close()
+
+
+def test_crop_source_indicator_follows_auto_crop_until_edited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An auto crop is marked in Live mode and becomes manual once the user edits it."""
+    photo = make_live_photo(tmp_path / "live")
+    window = make_window(tmp_path, monkeypatch)
+    window._toggle_live_mode()
+    window._current_path = photo
+    metadata = PhotoMetadata(6000, 4000, CropRect(0.1, 0.1, 0.9, 0.9), auto_crop=True)
+    window._current_metadata = metadata
+    window._metadata_cache[photo] = metadata
+
+    window._refresh_crop_source()
+    assert window.view.crop_source == "auto"
+
+    window._mark_dirty()
+    assert window.view.crop_source == "manual"
+    assert window._metadata_cache[photo].auto_crop is False
+
+    window._current_metadata = PhotoMetadata(6000, 4000, CropRect(0, 0, 1, 1))
+    window._refresh_crop_source()
+    assert window.view.crop_source == "manual"  # unmarked crops count as manual
+
+    window._live_mode = False
+    window._refresh_crop_source()
+    assert window.view.crop_source is None
     window.close()

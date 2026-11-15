@@ -114,6 +114,9 @@ automatic crop*; changing either (or the ratios) re-runs AutoCrop on every photo
   Crop mode needs no changes. A crop without a marker predates auto crop and counts as manual.
   `is_manual_crop` is what the stage checks; it always computes, but only overwrites a manual
   crop when Force is on.
+- **Viewer indicator:** in Live mode the crop frame is blue with an "Auto crop" label while
+  the sidecar is marked `auto`, and white with "Manual crop" otherwise. Any edit (crop or
+  angle) saves as manual, so the frame flips to manual at once.
 - **Detection:** the stage uses a `Detector`. The default (`SharedDetector`) reads
   `live.detection.get_detection(photo)` (cached by Mask) or runs `detect_photo(photo, source)`
   on the best source, and converts the normalized boxes to pixels of the photo's displayed

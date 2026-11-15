@@ -2129,6 +2129,7 @@ class CropWindow(QMainWindow):
 
     def _refresh_live_failure(self) -> None:
         """Gray out the current image with a large warning when a stage failed on it."""
+        self._refresh_crop_source()
         if self._current_path is None or self._live is None:
             self.view.set_failed(None)
             self.view.set_badge(None)
@@ -2136,6 +2137,14 @@ class CropWindow(QMainWindow):
         message = self._live.pipeline.failure(self._current_path)
         self.view.set_failed(f"⚠ PROCESSING FAILED\n{message}" if message else None)
         self.view.set_badge(self._live_mask_badge(self._current_path))
+
+    def _refresh_crop_source(self) -> None:
+        """In Live mode, color and label the crop frame as automatic or a manual override."""
+        metadata = self._current_metadata
+        if not self._live_mode or self._current_path is None or metadata is None:
+            self.view.set_crop_source(None)
+            return
+        self.view.set_crop_source("auto" if metadata.auto_crop else "manual")
 
     def _live_mask_badge(self, photo: Path) -> str | None:
         """Return a small note when Mask is on but found no subject in this photo."""
@@ -2368,6 +2377,7 @@ class CropWindow(QMainWindow):
             self._set_preview_loading(True)
         self._select_crop_ratio(metadata.crop)
         self._update_crop_mode()
+        self._refresh_crop_source()
 
     def _xmp_dirty_loaded(self, path_text: str, dirty: bool) -> None:
         """Record Lightroom's unsaved-metadata flag and refresh the warning."""
@@ -2868,9 +2878,20 @@ class CropWindow(QMainWindow):
         """Mark the current photo changed and debounce its XMP write."""
         self._version += 1
         self._dirty = True
+        self._mark_crop_manual()
         self._update_revert_button()
         self.save_label.setText("Unsaved")
         self._save_timer.start(SAVE_DELAY_MS)
+
+    def _mark_crop_manual(self) -> None:
+        """Saved edits are written as manual, so an auto crop becomes a manual override."""
+        path, metadata = self._current_path, self._current_metadata
+        if path is None or metadata is None or not metadata.auto_crop:
+            return
+        manual = replace(metadata, auto_crop=False)
+        self._current_metadata = manual
+        self._metadata_cache[path] = manual
+        self._refresh_crop_source()
 
     def _update_revert_button(self) -> None:
         """Enable Revert only when crop or angle differs from its starting state."""
