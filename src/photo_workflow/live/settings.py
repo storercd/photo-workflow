@@ -14,7 +14,7 @@ from PySide6.QtCore import QSettings
 from photo_workflow.editor.lighting import MAX_KELVIN, MIN_KELVIN
 from photo_workflow.editor.model import parse_aspect_ratios
 from photo_workflow.live.layout import LiveLayout, default_live_folder
-from photo_workflow.live.stages import SPECS, STAGE_ORDER, StageId
+from photo_workflow.live.stages import STAGE_ORDER, StageId
 
 LOGGER = logging.getLogger(__name__)
 KEYCHAIN_SERVICE = "photo-workflow-live"
@@ -65,12 +65,14 @@ class LiveSettings:
     """
     The Live configuration section.
 
-    Every feature is off by default; `enabled` holds the stages the user switched on.
-    AutoCrop is always on and never appears in `enabled`.
+    Every feature except AutoCrop is off by default; `enabled` holds the stages the user
+    switched on. AutoCrop is on by default and tracked by `autocrop_enabled` instead, so
+    settings saved before it could be disabled keep it on.
     """
 
     folder: str = ""
     enabled: frozenset[StageId] = field(default_factory=frozenset)
+    autocrop_enabled: bool = True
     ftp_port: int = DEFAULT_FTP_PORT
     ftp_username: str = ""
     ftp_password: str = ""
@@ -98,13 +100,15 @@ class LiveSettings:
         return LiveLayout(self.folder_path(camera_root))
 
     def is_enabled(self, stage: StageId) -> bool:
-        """Return whether a stage's feature is on; AutoCrop is always on."""
-        return not SPECS[stage].toggleable or stage in self.enabled
+        """Return whether a stage's feature is on."""
+        if stage is StageId.AUTOCROP:
+            return self.autocrop_enabled
+        return stage in self.enabled
 
     def with_enabled(self, stage: StageId, enabled: bool) -> LiveSettings:
-        """Return settings with one feature toggled; AutoCrop cannot be changed."""
-        if not SPECS[stage].toggleable:
-            return self
+        """Return settings with one feature toggled."""
+        if stage is StageId.AUTOCROP:
+            return replace(self, autocrop_enabled=enabled)
         stages = self.enabled | {stage} if enabled else self.enabled - {stage}
         return replace(self, enabled=frozenset(stages))
 
@@ -154,13 +158,14 @@ def load_live_settings(
     enabled = frozenset(
         StageId(name)
         for name in enabled_text.split(",")
-        if name in STAGE_ORDER and SPECS[StageId(name)].toggleable
+        if name in STAGE_ORDER and name != StageId.AUTOCROP.value
     )
     ratio_text = settings.value("live/autocrop_ratios", "", type=str)
     ratios = tuple(part.strip() for part in ratio_text.split(",") if part.strip())
     loaded = LiveSettings(
         folder=settings.value("live/folder", "", type=str),
         enabled=enabled,
+        autocrop_enabled=settings.value("live/autocrop_enabled", True, type=bool),
         ftp_port=settings.value("live/ftp_port", defaults.ftp_port, type=int),
         ftp_username=settings.value("live/ftp_username", "", type=str),
         ftp_password=store.get(SECRET_FTP_PASSWORD),
@@ -203,6 +208,7 @@ def save_live_settings(
     settings.setValue(
         "live/enabled", ",".join(stage.value for stage in STAGE_ORDER if stage in live.enabled)
     )
+    settings.setValue("live/autocrop_enabled", live.autocrop_enabled)
     settings.setValue("live/ftp_port", live.ftp_port)
     settings.setValue("live/ftp_username", live.ftp_username)
     settings.setValue("live/r2_account_id", live.r2_account_id)

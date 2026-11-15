@@ -89,6 +89,24 @@ class Flaky(StageImplementation):
         return StageResult.skipped("recovered")
 
 
+class Calls(StageImplementation):
+    """Stage that does no file work and only counts how often it ran."""
+
+    def __init__(self) -> None:
+        """Create the counter."""
+        self.calls: list[StageJob] = []
+
+    def process(self, job: StageJob) -> StageResult:
+        """
+        Remember the job.
+
+        Returns:
+            A done result with no outputs.
+        """
+        self.calls.append(job)
+        return StageResult.done()
+
+
 def make_photo(root: Path, name: str = PHOTO_NAME) -> Path:
     """
     Create a renamed original in a date folder.
@@ -155,13 +173,27 @@ def test_features_are_off_by_default_and_images_wait_at_blocking_export(tmp_path
     assert summaries[StageId.CLOUD_SYNC].count == 0
 
 
-def test_autocrop_cannot_be_disabled(tmp_path: Path) -> None:
-    """Toggling AutoCrop is ignored."""
-    pipeline, _, _ = make_pipeline(tmp_path)
-
+def test_autocrop_can_be_disabled_and_reenabled(tmp_path: Path) -> None:
+    """A disabled AutoCrop does no work and lets Export through; re-enabling runs it."""
+    make_photo(tmp_path)
+    autocrop = Calls()
+    registry = StageRegistry()
+    registry.register(StageId.AUTOCROP, autocrop)
+    pipeline, executor, _ = make_pipeline(tmp_path, registry)
     pipeline.toggle(StageId.AUTOCROP, False)
 
-    assert pipeline.settings.is_enabled(StageId.AUTOCROP)
+    pipeline.scan()
+    executor.run_all()
+
+    assert not pipeline.settings.is_enabled(StageId.AUTOCROP)
+    assert autocrop.calls == []
+    summary = {s.stage: s for s in pipeline.snapshot().stages}[StageId.AUTOCROP]
+    assert summary.waiting_disabled
+
+    pipeline.toggle(StageId.AUTOCROP, True)
+    executor.run_all()
+
+    assert len(autocrop.calls) == 1
 
 
 def test_stage_uses_most_advanced_earlier_output_and_falls_back(tmp_path: Path) -> None:

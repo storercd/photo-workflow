@@ -37,7 +37,6 @@ class StageSpec:
         id: The stage identifier.
         label: Human readable name shown in the status panel.
         subfolders: Output subfolders of the date folder; the first is the primary one.
-        toggleable: Whether the user can switch the feature off (AutoCrop cannot).
         blocks_when_disabled: When true, images wait at this stage while its feature is
             off. When false, a disabled stage is passed through and later stages fall
             back to the most advanced earlier source.
@@ -47,7 +46,6 @@ class StageSpec:
     id: StageId
     label: str
     subfolders: tuple[str, ...] = ()
-    toggleable: bool = True
     blocks_when_disabled: bool = False
     concurrency: int = 1
 
@@ -57,7 +55,7 @@ STAGES: tuple[StageSpec, ...] = (
     StageSpec(StageId.DENOISE, "Denoise", subfolders=("denoise",)),
     StageSpec(StageId.MASK, "Mask", subfolders=("mask",)),
     StageSpec(StageId.LIGHTING, "Lighting/Color", subfolders=("lighting", "output")),
-    StageSpec(StageId.AUTOCROP, "AutoCrop", toggleable=False),
+    StageSpec(StageId.AUTOCROP, "AutoCrop"),
     StageSpec(StageId.EXPORT, "Export", subfolders=("export",), blocks_when_disabled=True),
     StageSpec(StageId.CLOUD_SYNC, "Cloud Sync", blocks_when_disabled=True),
 )

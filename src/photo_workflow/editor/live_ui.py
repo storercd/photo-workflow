@@ -255,14 +255,8 @@ class LiveStatusPanel(QFrame):
         for row, stage in enumerate(STAGE_ORDER):
             spec = SPECS[stage]
             toggle = QCheckBox(spec.label)
-            toggle.setToolTip(
-                "Always on" if not spec.toggleable else f"Run {spec.label} on arriving photos"
-            )
-            if not spec.toggleable:
-                toggle.setChecked(True)
-                toggle.setEnabled(False)
-            else:
-                toggle.toggled.connect(lambda checked, s=stage: self.stage_toggled.emit(s, checked))
+            toggle.setToolTip(f"Run {spec.label} on arriving photos")
+            toggle.toggled.connect(lambda checked, s=stage: self.stage_toggled.emit(s, checked))
             error = QToolButton()
             error.setText("!")
             error.setAutoRaise(True)
@@ -313,10 +307,9 @@ class LiveStatusPanel(QFrame):
         self.idle_button.setChecked(settings.idle_processing)
         self.idle_button.blockSignals(False)
         for stage, toggle in self.toggles.items():
-            if SPECS[stage].toggleable:
-                toggle.blockSignals(True)
-                toggle.setChecked(settings.is_enabled(stage))
-                toggle.blockSignals(False)
+            toggle.blockSignals(True)
+            toggle.setChecked(settings.is_enabled(stage))
+            toggle.blockSignals(False)
 
     def update_status(
         self,

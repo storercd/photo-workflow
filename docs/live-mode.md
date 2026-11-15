@@ -27,7 +27,9 @@ overwritten. Clean wipes the whole Live folder, input included.
 ## Stages
 
 `FTP → Denoise → Mask → Lighting/Color → AutoCrop → Export → CloudSync`
-(`photo_workflow.live.stages.StageId`). AutoCrop is always on; the rest have a toggle.
+(`photo_workflow.live.stages.StageId`). Every stage has a toggle. All are off by default except AutoCrop, which is on unless
+the user switches it off to save processor time (a disabled AutoCrop passes through, so Export
+and viewing use whatever crop already exists).
 A stage starts on an image as soon as the image is eligible. Its input is the most
 advanced earlier output that exists (disabled/missing/skipped stages are passed over, down
 to the original), so later stages and the viewer always have something to use.

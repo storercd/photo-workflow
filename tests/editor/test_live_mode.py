@@ -86,7 +86,8 @@ def test_status_panel_toggle_persists_and_tab_hides_panel(
 
     assert window._live.pipeline.settings.is_enabled(StageId.DENOISE)
     assert window._settings.value("live/enabled", "", type=str) == "denoise"
-    assert not panel.toggles[StageId.AUTOCROP].isEnabled()
+    assert panel.toggles[StageId.AUTOCROP].isEnabled()
+    assert panel.toggles[StageId.AUTOCROP].isChecked()
     window.live_dock.toggle_panel()
     assert panel.isHidden()
     window.live_dock.toggle_panel()

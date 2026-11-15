@@ -1,7 +1,7 @@
 # To-do
 
 Things deliberately deferred during the Live mode proof of concept. All Live features
-(except the always-on AutoCrop) ship disabled by default; see `docs/live-mode.md`.
+(except AutoCrop, which is on by default but can be switched off) ship disabled by default; see `docs/live-mode.md`.
 
 ## Rollout
 

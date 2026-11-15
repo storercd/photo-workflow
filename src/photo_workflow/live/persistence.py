@@ -119,8 +119,11 @@ def _still_valid(
 ) -> bool:
     spec = SPECS[stage]
     if stage is StageId.AUTOCROP:
-        return state.get("autocrop") == autocrop
-    if not spec.toggleable or spec.blocks_when_disabled or stage is StageId.FTP:
+        return (
+            state.get("autocrop") == autocrop
+            and saved_enabled.get(stage.value) == enabled.get(stage.value)
+        )
+    if spec.blocks_when_disabled or stage is StageId.FTP:
         return True
     return saved_enabled.get(stage.value) == enabled.get(stage.value)
 

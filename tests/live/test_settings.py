@@ -56,12 +56,25 @@ def test_default_live_folder_replaces_only_final_camera_folder_name() -> None:
 
 
 def test_settings_default_to_everything_off_and_autocrop_on() -> None:
-    """Features are disabled by default; AutoCrop cannot be switched off."""
+    """Features are disabled by default except AutoCrop, which can be switched off and persists."""
     settings = LiveSettings()
 
     assert not any(settings.is_enabled(stage) for stage in StageId if stage != StageId.AUTOCROP)
     assert settings.is_enabled(StageId.AUTOCROP)
-    assert not settings.with_enabled(StageId.AUTOCROP, False).enabled
+    off = settings.with_enabled(StageId.AUTOCROP, False)
+    assert not off.is_enabled(StageId.AUTOCROP)
+    assert not off.enabled
+
+
+def test_autocrop_off_survives_save_and_load(tmp_path: Path) -> None:
+    """Disabling AutoCrop is persisted; settings saved without the key keep it on."""
+    settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+    store = MemorySecrets()
+    assert load_live_settings(settings, store).is_enabled(StageId.AUTOCROP)
+
+    save_live_settings(settings, LiveSettings(autocrop_enabled=False), store)
+
+    assert not load_live_settings(settings, store).is_enabled(StageId.AUTOCROP)
 
 
 def test_settings_round_trip_keeps_secrets_out_of_plain_settings(tmp_path: Path) -> None:

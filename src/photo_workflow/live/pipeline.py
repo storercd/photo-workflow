@@ -300,8 +300,7 @@ class LivePipeline:
             changed = [
                 stage
                 for stage in STAGE_ORDER
-                if SPECS[stage].toggleable
-                and previous.is_enabled(stage) != settings.is_enabled(stage)
+                if previous.is_enabled(stage) != settings.is_enabled(stage)
             ]
             for stage in changed:
                 self._apply_toggle(stage, settings.is_enabled(stage))
@@ -653,8 +652,7 @@ class LivePipeline:
     def _is_waiting_on_disabled(self, photo: Path, stage: StageId) -> bool:
         spec = SPECS[stage]
         return (
-            spec.toggleable
-            and not spec.blocks_when_disabled
+            not spec.blocks_when_disabled
             and stage is not StageId.FTP
             and not self.settings.is_enabled(stage)
             and self._eligible(photo, stage)

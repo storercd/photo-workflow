@@ -17,7 +17,7 @@ from photo_workflow.live.imaging import save_linear_rgb
 from photo_workflow.live.layout import LiveLayout
 from photo_workflow.live.pipeline import LivePipeline
 from photo_workflow.live.settings import LiveSettings
-from photo_workflow.live.stages import SPECS, STAGE_ORDER, StageId, StageStatus
+from photo_workflow.live.stages import STAGE_ORDER, StageId, StageStatus
 
 WIDTH, HEIGHT = 600, 400
 RATIOS = ("3:2", "1:1")
@@ -196,7 +196,7 @@ def test_regenerating_an_upstream_stage_reruns_the_whole_tail(rig: Rig) -> None:
 
 
 def test_all_features_start_disabled_by_default() -> None:
-    """A fresh settings object leaves every toggleable feature off and registers all stages."""
+    """A fresh settings object leaves every feature but AutoCrop off and registers all stages."""
     registry = StageRegistry()
     load_features(registry)
     settings = LiveSettings()
@@ -204,7 +204,10 @@ def test_all_features_start_disabled_by_default() -> None:
     assert all(registry.is_registered(stage) for stage in StageId)
     assert settings.enabled == frozenset()
     assert settings.is_enabled(StageId.AUTOCROP)
-    assert not any(settings.is_enabled(stage) for stage in STAGE_ORDER if SPECS[stage].toggleable)
+    assert settings.is_enabled(StageId.AUTOCROP)
+    assert not any(
+        settings.is_enabled(stage) for stage in STAGE_ORDER if stage is not StageId.AUTOCROP
+    )
 
 
 def test_running_service_status_is_listed_only_while_its_feature_is_on(rig: Rig) -> None:
