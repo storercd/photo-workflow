@@ -131,3 +131,13 @@ def test_feature_discovery_runs_without_features_and_keeps_stubs() -> None:
     load_features(registry)
 
     assert not registry.is_registered(StageId.DENOISE)
+
+
+def test_minimum_rating_round_trips_and_is_validated(tmp_path: Path) -> None:
+    """The Cloud Sync star filter is persisted; out-of-range values are rejected."""
+    store = make_settings(tmp_path)
+    save_live_settings(store, LiveSettings(r2_min_rating=3), MemorySecrets())
+
+    assert load_live_settings(store, MemorySecrets()).r2_min_rating == 3
+    with pytest.raises(ValueError, match="minimum rating"):
+        validate_live_settings(LiveSettings(r2_min_rating=6))

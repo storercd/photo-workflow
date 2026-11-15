@@ -1782,6 +1782,8 @@ class CropWindow(QMainWindow):
             return
         _, label = self._photo_ratings.get(raw_path, (0, None))
         self._photo_ratings[raw_path] = (stars, label)
+        if self._live is not None:
+            self._live.pipeline.invalidate(StageId.CLOUD_SYNC, raw_path, include_self=True)
         if raw_path == self._current_path:
             self._update_review_buttons()
         self._refresh_rating_filter()
