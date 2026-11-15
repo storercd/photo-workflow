@@ -15,11 +15,13 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -380,13 +382,24 @@ class PreferencesDialog(QDialog):
         buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).clicked.connect(
             lambda: self._populate(CropPreferences())
         )
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
-        layout.addWidget(hotkey_box)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.addLayout(form)
+        content_layout.addWidget(hotkey_box)
         if live is not None:
-            layout.addWidget(self._build_live_box(live, default_live_folder))
+            content_layout.addWidget(self._build_live_box(live, default_live_folder))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(content)
+        layout = QVBoxLayout(self)
+        layout.addWidget(scroll)
         layout.addWidget(buttons)
         self.setMinimumWidth(520)
+        screen = self.screen()
+        if screen is not None:
+            limit = int(screen.availableGeometry().height() * 0.85)
+            self.resize(self.width(), min(content.sizeHint().height() + 80, limit))
         self._populate(preferences)
 
     def _build_live_box(self, live: LiveSettings, default_folder: str) -> QGroupBox:

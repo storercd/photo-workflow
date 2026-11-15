@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QEvent, QPointF, QSettings, Qt
 from PySide6.QtGui import QMouseEvent, QShortcut
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QScrollArea
 
 from photo_workflow.editor.app import CropWindow
 from photo_workflow.editor.preferences import (
@@ -215,3 +215,19 @@ def test_live_preferences_show_and_return_every_setting() -> None:
     assert edited.auto_lighting is True
     dialog.close()
     del app
+
+
+def test_preferences_buttons_stay_visible_below_a_scrolling_form() -> None:
+    """The long Live form scrolls while OK/Cancel stay pinned outside the scroll area."""
+    QApplication.instance() or QApplication([])
+    dialog = PreferencesDialog(
+        CropPreferences(), None, live=LiveSettings(), default_live_folder="/tmp/live"
+    )
+    scroll = dialog.findChild(QScrollArea)
+    buttons = dialog.findChild(QDialogButtonBox)
+
+    assert scroll is not None
+    assert buttons is not None
+    assert not scroll.isAncestorOf(buttons)
+    assert scroll.isAncestorOf(dialog.ftp_user_edit)
+    dialog.close()
