@@ -1535,6 +1535,7 @@ class CropWindow(QMainWindow):
         ):
             widget.setVisible(not review)
         self.review_group.setVisible(review)
+        self.view.set_grid_visible(not review)
         if review:
             self.mode_button.setIcon(qta.icon("fa5s.star", color="#e5bd48"))
             self.mode_button.setToolTip(
