@@ -1421,6 +1421,7 @@ def test_ball_button_stays_visible_in_review_mode() -> None:
 
 
 def test_fixing_white_balance_turns_auto_light_back_on(monkeypatch) -> None:
+    """Pinning a color temperature must not leave the original showing."""
     QApplication.instance() or QApplication([])
     window = CropWindow()
     path = Path("a.cr3")
