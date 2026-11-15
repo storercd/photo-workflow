@@ -139,7 +139,7 @@ ALL_FEATURES = {
 
 
 def test_features_are_off_by_default_and_images_wait_at_blocking_export(tmp_path: Path) -> None:
-    """Soft stages pass through; Export holds images and flags them as waiting."""
+    """Soft stages pass through but show waiting work; Export holds images."""
     photo = make_photo(tmp_path)
     pipeline, executor, _ = make_pipeline(tmp_path)
 
@@ -150,7 +150,8 @@ def test_features_are_off_by_default_and_images_wait_at_blocking_export(tmp_path
     summaries = {summary.stage: summary for summary in pipeline.snapshot().stages}
     assert summaries[StageId.EXPORT].count == 1
     assert summaries[StageId.EXPORT].waiting_disabled
-    assert summaries[StageId.DENOISE].count == 0
+    assert summaries[StageId.DENOISE].count == 1
+    assert summaries[StageId.DENOISE].waiting_disabled
     assert summaries[StageId.CLOUD_SYNC].count == 0
 
 
@@ -406,3 +407,19 @@ def test_files_copied_into_the_live_folder_are_ingested_and_ready_for_denoise(
     assert set(pipeline.photos()) == {renamed, already_named}
     assert pipeline.status(renamed, StageId.FTP) is StageStatus.DONE
     assert pipeline.snapshot().stages[0].count == 0
+
+
+def test_already_stamped_arrivals_get_a_single_fresh_prefix(tmp_path: Path) -> None:
+    """A file that already has capture-time prefixes is renamed with just the new one."""
+    from datetime import datetime  # noqa: PLC0415
+
+    from photo_workflow.live.ingest import rename_arrival  # noqa: PLC0415
+
+    layout = LiveLayout(tmp_path)
+    arrived = tmp_path / "20240101_080000_05_20240101_080000_05_IMG_0001.CR3"
+    arrived.write_bytes(b"raw")
+
+    target = rename_arrival(layout, arrived, captured_at=datetime(2025, 10, 31, 10, 15, 0))
+
+    assert target.name == "20251031_101500_00_IMG_0001.CR3"
+    assert target.parent == tmp_path / "2025" / "10" / "20251031" / "input"

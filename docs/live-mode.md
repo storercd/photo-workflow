@@ -31,8 +31,10 @@ overwritten. Clean wipes the whole Live folder, input included.
 A stage starts on an image as soon as the image is eligible. Its input is the most
 advanced earlier output that exists (disabled/missing/skipped stages are passed over, down
 to the original), so later stages and the viewer always have something to use.
-Export and CloudSync are *blocking*: while they are off, images wait there and their
-count blinks in the status panel. Other stages pass images through when off.
+Export and CloudSync are *blocking*: while they are off, images wait there. Other stages
+pass images through when off, but every image that has reached an off feature still counts
+in that feature's queue as well as the one it is really at. The counts of off features blink
+in the status panel, showing the work that turning them on would add.
 
 Regenerating a stage's output (`pipeline.invalidate`) resets every downstream stage for
 that image and re-runs them immediately; stale in-flight results are discarded.

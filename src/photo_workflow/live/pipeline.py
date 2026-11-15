@@ -549,9 +549,12 @@ class LivePipeline:
         """
         Count images per stage for the status panel.
 
-        An image counts at the first stage it has not passed. A stage that is off and
-        passed through never holds images; a blocking stage that is off (Export, Cloud
-        Sync) holds them and is flagged `waiting_disabled` so the panel can blink.
+        An image counts at the first stage it has not passed; a blocking stage that is
+        off (Export, Cloud Sync) holds images there. A feature that is off but passes
+        images through (Denoise, Mask, Lighting/Color) also counts every image that has
+        reached it, in addition to the stage it is really at, so the user can see the work
+        waiting for that feature. Off features are flagged `waiting_disabled` so the
+        panel can blink their counts.
 
         Returns:
             Per-stage counts plus the number of images that finished every stage.
@@ -569,11 +572,24 @@ class LivePipeline:
                     continue
                 counts[position] += 1
                 failed[position] += stages[position].status is StageStatus.FAILED
+                for stage in STAGE_ORDER:
+                    if self._is_waiting_on_disabled(photo, stage):
+                        counts[stage] += 1
             counts[StageId.FTP] += len(self._state.ingesting) + len(self._state.incoming_seen)
             summaries = tuple(
                 self._summarize(stage, counts[stage], failed[stage]) for stage in STAGE_ORDER
             )
         return PipelineSnapshot(summaries, completed)
+
+    def _is_waiting_on_disabled(self, photo: Path, stage: StageId) -> bool:
+        spec = SPECS[stage]
+        return (
+            spec.toggleable
+            and not spec.blocks_when_disabled
+            and stage is not StageId.FTP
+            and not self.settings.is_enabled(stage)
+            and self._eligible(photo, stage)
+        )
 
     def _summarize(self, stage: StageId, total: int, failed: int) -> StageSummary:
         enabled = self.settings.is_enabled(stage)
@@ -583,7 +599,7 @@ class LivePipeline:
             running=self._state.running[stage],
             failed=failed,
             enabled=enabled,
-            waiting_disabled=bool(total) and not enabled and SPECS[stage].blocks_when_disabled,
+            waiting_disabled=bool(total) and not enabled and stage is not StageId.FTP,
             halted=self._state.halted.get(stage, ""),
         )
 

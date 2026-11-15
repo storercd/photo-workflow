@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -16,10 +17,18 @@ from photo_workflow.memory_card_copy import (
 
 LOGGER = logging.getLogger(__name__)
 
+STAMP_PREFIX = re.compile(r"^(?:\d{8}_\d{6}_\d{2}_)+")
+
 
 def read_arrival_timestamp(path: Path) -> datetime:
     """Return the capture time of an arrived file, falling back to its modified time."""
     return read_capture_timestamps([path])[path]
+
+
+def strip_stamp_prefix(name: str) -> str:
+    """Return a file name without any capture-time prefixes added by an earlier rename."""
+    stripped = STAMP_PREFIX.sub("", name)
+    return stripped or name
 
 
 def rename_arrival(
@@ -32,15 +41,17 @@ def rename_arrival(
     Move a newly arrived file to its date folder under its date-stamped name.
 
     This is the first step for any new file. The date folder and file name come from
-    the same functions the memory card import uses. An existing target is overwritten
-    as a failsafe, and a sidecar next to the arrived file moves with it.
+    the same functions the memory card import uses; a file that already carries a
+    capture-time prefix gets the new one instead of a second. An existing target is
+    overwritten as a failsafe, and a sidecar next to the arrived file moves with it.
 
     Returns:
         The renamed file inside the date folder's `input` subfolder.
     """
     timestamp = captured_at or read_arrival_timestamp(arrived)
     target_dir = build_capture_dir(layout.root, timestamp.date()) / INPUT_SUBFOLDER
-    target = target_dir / build_target_filename(timestamp, arrived)
+    original = arrived.with_name(strip_stamp_prefix(arrived.name))
+    target = target_dir / build_target_filename(timestamp, original)
     target_dir.mkdir(parents=True, exist_ok=True)
     if target.exists():
         LOGGER.warning("overwriting existing live file %s", target)
