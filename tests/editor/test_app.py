@@ -403,7 +403,7 @@ def test_compact_navigation_and_filename_reveal_controls(
     assert window.next_button.text() == ""
     assert not window.previous_button.icon().isNull()
     assert not window.next_button.icon().isNull()
-    toolbar = window.rating_filter_panel.parentWidget().layout().itemAt(0).layout()
+    toolbar = window.toolbar_widget.layout()
     assert (
         toolbar.indexOf(window.previous_button.parentWidget())
         < toolbar.indexOf(window.rating_filter_panel)
