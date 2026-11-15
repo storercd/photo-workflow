@@ -1418,3 +1418,63 @@ def test_ball_button_stays_visible_in_review_mode() -> None:
 
     assert not window.angle_group.isVisible()
     assert window.ball_button.isVisible()
+
+
+def test_fixing_white_balance_turns_auto_light_back_on(monkeypatch) -> None:
+    """Pinning a color temperature must not leave the original showing."""
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+    path = Path("a.cr3")
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda *_: None)
+    window._photos = [path]
+    window._current_path = path
+    window._preview_cache[path] = QImage(40, 30, QImage.Format.Format_RGB888)
+    window._preview_cache[path].fill(0x808080)
+    window.auto_light_button.setChecked(False)
+
+    window.wb_fixed_button.click()
+
+    assert window.auto_light_button.isChecked()
+    assert window._wb_override == crop_app.REFERENCE_KELVIN
+
+
+def test_metadata_load_shows_auto_lit_image(monkeypatch) -> None:
+    """Applying metadata after a photo switch must keep showing the auto-lit preview."""
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+    path = Path("a.cr3")
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda *_: None)
+    window._photos = [path]
+    window._current_path = path
+    original = QImage(40, 30, QImage.Format.Format_RGB888)
+    original.fill(0x303030)
+    window._preview_cache[path] = original
+    shown = []
+    monkeypatch.setattr(window, "_set_preview_image", lambda image, *_: shown.append(image))
+
+    window._set_preview_image(window._display_image(original), 40, 30)
+
+    assert window.auto_light_button.isChecked()
+    assert shown[-1] is window._adjusted_cache[path]
+
+
+def test_typed_kelvin_value_fixes_white_balance(monkeypatch) -> None:
+    """Typing a Kelvin value and pressing Enter clamps it and pins it for all photos."""
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda *_: None)
+
+    window._begin_wb_edit()
+    window.wb_edit.setText("4200K")
+    window._finish_wb_edit()
+
+    assert window._wb_override == 4200.0
+    assert window.wb_slider.value() == 4200
+    assert window.wb_fixed_button.isChecked()
+    assert window.wb_edit.isHidden()
+
+    window._begin_wb_edit()
+    window.wb_edit.setText("99999")
+    window._finish_wb_edit()
+
+    assert window._wb_override == crop_app.MAX_KELVIN
