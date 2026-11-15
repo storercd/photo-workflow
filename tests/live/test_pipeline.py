@@ -378,3 +378,31 @@ def test_arrival_is_renamed_before_entering_pipeline(
     assert not arrived.exists()
     assert existing.read_bytes() == b"new"
     assert pipeline.photos() == [existing]
+
+
+def test_files_copied_into_the_live_folder_are_ingested_and_ready_for_denoise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RAW files dropped in the Live root (or a date folder) are picked up without a restart."""
+    from datetime import datetime  # noqa: PLC0415
+
+    from photo_workflow.live import ingest  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        ingest, "read_arrival_timestamp", lambda path: datetime(2025, 10, 31, 10, 15, 0, 0)
+    )
+    pipeline, executor, _ = make_pipeline(tmp_path)
+    pipeline.scan()
+    dropped = tmp_path / "IMG_0001.CR3"
+    dropped.write_bytes(b"raw")
+    already_named = make_photo(tmp_path, "20251101_090000_00_IMG_0002.CR3")
+
+    pipeline.poll_incoming()
+    pipeline.poll_incoming()
+    executor.run_all()
+
+    renamed = tmp_path / "2025" / "10" / "20251031" / "input" / "20251031_101500_00_IMG_0001.CR3"
+    assert not dropped.exists()
+    assert set(pipeline.photos()) == {renamed, already_named}
+    assert pipeline.status(renamed, StageId.FTP) is StageStatus.DONE
+    assert pipeline.snapshot().stages[0].count == 0

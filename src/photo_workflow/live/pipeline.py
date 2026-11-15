@@ -190,7 +190,11 @@ class LivePipeline:
         self._emit()
 
     def poll_incoming(self) -> None:
-        """Ingest landing-folder files whose size and time stopped changing since last poll."""
+        """
+        Ingest landing files whose size and time stopped changing since last poll.
+
+        Also registers renamed photos copied straight into a date folder.
+        """
         files = self.layout.list_incoming()
         ready: list[Path] = []
         with self._lock:
@@ -205,6 +209,8 @@ class LivePipeline:
             }
         for path in ready:
             self.ingest(path)
+        if not self._paused:
+            self.scan()
         self._emit()
 
     def _ingest_one(self, path: Path) -> None:
@@ -217,7 +223,10 @@ class LivePipeline:
         with self._lock:
             self._state.ingesting.discard(path)
             if target is not None and not self._paused:
-                self._register(target)
+                if target in self._state.images:
+                    self._invalidate(target, StageId.FTP, include_self=False)
+                else:
+                    self._register(target)
         self.pump()
 
     # ----- settings and toggles -----------------------------------------------------

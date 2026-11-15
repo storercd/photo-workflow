@@ -33,10 +33,11 @@ class LiveLayout:
     Paths inside a Live folder.
 
     The folder holds an `incoming` landing folder for newly arrived (not yet renamed)
-    files and the usual `YYYY/MM/YYYYMMDD` date folders. Each date folder has an
-    `input` subfolder with the renamed originals, plus one subfolder per stage output
-    (`denoise`, `mask`, `lighting`, `output`, `export`, ...). A photo is identified by
-    the path of its renamed original in `input`; its XMP sidecar sits beside it.
+    files (RAW files dropped directly in the folder are treated the same) and the usual
+    `YYYY/MM/YYYYMMDD` date folders. Each date folder has an `input` subfolder with the
+    renamed originals, plus one subfolder per stage output (`denoise`, `mask`, `lighting`,
+    `output`, `export`, ...). A photo is identified by the path of its renamed original in
+    `input`; its XMP sidecar sits beside it.
     """
 
     root: Path
@@ -81,12 +82,20 @@ class LiveLayout:
         return sorted(photos, key=lambda path: (path.name, str(path)))
 
     def list_incoming(self) -> list[Path]:
-        """Return completed-looking files waiting in the landing folder."""
-        if not self.incoming.is_dir():
-            return []
+        """
+        Return completed-looking RAW files waiting to be renamed.
+
+        Files land either in the `incoming` folder (FTP uploads) or directly in the Live
+        folder root (copied in by hand).
+
+        Returns:
+            The waiting files, sorted by path.
+        """
         return sorted(
             path
-            for path in self.incoming.iterdir()
+            for folder in (self.incoming, self.root)
+            if folder.is_dir()
+            for path in folder.iterdir()
             if path.is_file()
             and path.suffix.lower() in RAW_SUFFIXES
             and not path.name.startswith(".")

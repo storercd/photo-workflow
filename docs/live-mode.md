@@ -14,6 +14,7 @@ Preferences → Live.
 ```text
 live/
   incoming/                 landing folder for new uploads (not yet renamed)
+  *.CR3 / *.CR2            RAW files copied straight into live/ are ingested like uploads
   2026/10/20261031/         date folder (same naming as memory-card import)
     input/                  renamed originals (+ .xmp sidecars)
     denoise/  mask/  lighting/  output/  export/    per-stage outputs
