@@ -37,7 +37,7 @@ from PySide6.QtGui import (
     QImage,
     QImageIOHandler,
     QImageReader,
-    QKeySequence,
+    QKeyEvent,    QKeySequence,
     QLinearGradient,
     QPainter,
     QPixmap,
@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QPlainTextEdit,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -96,8 +97,11 @@ from photo_workflow.editor.metadata import (
     read_as_shot_kelvin,
     read_photo_metadata,
     read_photo_ratings,
+    read_photos_with_notes,
     write_photo_crop,
+    read_photo_notes,
     write_photo_label,
+    write_photo_notes,
     write_photo_rating,
 )
 from photo_workflow.editor.model import (
@@ -148,6 +152,7 @@ FLAG_COLOR_KEY = Qt.Key.Key_G
 FULL_SCREEN_KEY = Qt.Key.Key_F
 TOGGLE_TOOLBARS_KEY = Qt.Key.Key_Tab
 COPY_PREVIOUS_CROP_KEY = Qt.Key.Key_C
+NOTES_KEY = Qt.Key.Key_N
 COLOR_LABELS = ("Red", "Yellow", "Green", "Blue", "Purple")
 COLOR_LABEL_HEX = {
     "Red": "#e45858",
@@ -188,6 +193,7 @@ class WorkerSignals(QObject):
     ratings = Signal(int, object, str)
     rating_progress = Signal(int, int, int)
     label_saved = Signal(str, object, str)
+    notes_scanned = Signal(int, object)
     rating_saved = Signal(str, int, str)
 
 
@@ -614,6 +620,60 @@ class PhotoLabelSaveTask(QRunnable):
         self.signals.label_saved.emit(str(self.raw_path), self.label, error)
 
 
+class NotesDialog(QDialog):
+    """Roughly square, word-wrapped note editor where Enter accepts."""
+
+    def __init__(self, parent: QWidget, text: str) -> None:
+        """Create the dialog with `text` preselected."""
+        super().__init__(parent)
+        self.setWindowTitle("Notes")
+        self.resize(420, 320)
+        self.editor = QPlainTextEdit(text)
+        self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.editor.installEventFilter(self)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Notes (Enter to save):"))
+        layout.addWidget(self.editor)
+        self.editor.selectAll()
+
+    def eventFilter(self, watched: object, event: object) -> bool:
+        """Accept on Enter; Shift+Enter is ignored so notes stay one paragraph."""
+        if (
+            watched is self.editor
+            and isinstance(event, QKeyEvent)
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+        ):
+            if not event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                self.accept()
+            return True
+        return super().eventFilter(watched, event)
+
+    def text(self) -> str:
+        """Return the entered note."""
+        return self.editor.toPlainText()
+
+
+class PhotoNotesSaveTask(QRunnable):
+    """Write one notes keyword update to a sidecar."""
+
+    def __init__(self, raw_path: Path, notes: str) -> None:
+        """Initialize a notes write for one RAW photo's XMP sidecar."""
+        super().__init__()
+        self.raw_path = raw_path
+        self.notes = notes
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        """Write the notes keyword and report success or failure."""
+        try:
+            write_photo_notes(self.raw_path.with_suffix(".xmp"), self.notes)
+            error = ""
+        except Exception as exception:
+            error = str(exception)
+        self.signals.label_saved.emit(str(self.raw_path), self.notes, error)
+
+
 class PhotoRatingSaveTask(QRunnable):
     """Write one star-rating update to a sidecar without touching crop fields."""
 
@@ -652,18 +712,21 @@ class RatingScanTask(QRunnable):
         """Read ratings and emit them without blocking the UI thread."""
         try:
             ratings = {}
+            noted: set[Path] = set()
             total = len(self.raw_paths)
             for start in range(0, total, RATING_SCAN_BATCH_SIZE):
-                ratings.update(
-                    read_photo_ratings(self.raw_paths[start : start + RATING_SCAN_BATCH_SIZE])
-                )
+                batch = self.raw_paths[start : start + RATING_SCAN_BATCH_SIZE]
+                ratings.update(read_photo_ratings(batch))
+                noted |= read_photos_with_notes(batch)
                 self.signals.rating_progress.emit(
                     self.generation, min(start + RATING_SCAN_BATCH_SIZE, total), total
                 )
             error = ""
         except Exception as exception:
             ratings = {}
+            noted = set()
             error = str(exception)
+        self.signals.notes_scanned.emit(self.generation, noted)
         self.signals.ratings.emit(self.generation, ratings, error)
 
 
@@ -732,6 +795,7 @@ class CropWindow(QMainWindow):
         self._label_pool = QThreadPool(self)
         self._label_pool.setMaxThreadCount(1)
         self._active_label_tasks: dict[Path, PhotoLabelSaveTask] = {}
+        self._notes_tasks: set[PhotoNotesSaveTask] = set()
         self._active_rating_write_tasks: dict[Path, PhotoRatingSaveTask] = {}
         self._review_mode = (
             settings is not None and settings.value("review_mode", False, type=bool)
@@ -843,6 +907,14 @@ class CropWindow(QMainWindow):
         self.label_indicator = QLabel()
         self.label_indicator.setFixedSize(10, 10)
         self.label_indicator.setVisible(False)
+        self.notes_indicator = ClickableLabel()
+        self.notes_indicator.setPixmap(qta.icon("fa5s.sticky-note", color="#4a4f55").pixmap(14, 14))
+        self.notes_indicator.setFixedSize(16, 16)
+        self.notes_indicator.setToolTip(f"Add notes ({key_hint(NOTES_KEY)})")
+        self.notes_indicator.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.notes_indicator.setVisible(False)
+        self.notes_indicator.clicked.connect(self._edit_notes)
+        self._noted_paths: set[Path] = set()
         self.position_count_label = QLabel("No folder open")
         self.position_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         navigation_panel = QWidget()
@@ -1131,6 +1203,7 @@ class CropWindow(QMainWindow):
         toolbar.addWidget(navigation_panel)
         toolbar.addWidget(self.rating_filter_panel)
         toolbar.addWidget(self.label_indicator)
+        toolbar.addWidget(self.notes_indicator)
         toolbar.addWidget(self.position_label, 1)
         toolbar.addWidget(self.review_group)
         toolbar.addWidget(self.angle_group)
@@ -1247,6 +1320,34 @@ class CropWindow(QMainWindow):
         self._active_label_tasks[self._current_path] = task
         self._label_pool.start(task)
 
+    def _edit_notes(self) -> None:
+        """Prompt for a note and save it as a "Notes: ..." keyword."""
+        if self._current_path is None:
+            return
+        raw_path = self._current_path
+        try:
+            existing = read_photo_notes(raw_path.with_suffix(".xmp"))
+        except Exception as exception:
+            self.save_label.setText(f"Notes failed: {exception}")
+            return
+        dialog = NotesDialog(self, existing)
+        if not dialog.exec():
+            return
+        task = PhotoNotesSaveTask(raw_path, dialog.text())
+        task.signals.label_saved.connect(self._notes_save_finished)
+        self._notes_tasks.add(task)
+        self._label_pool.start(task)
+
+    def _notes_save_finished(self, path_text: str, notes: str, error: str) -> None:
+        self._notes_tasks = {t for t in self._notes_tasks if t.raw_path != Path(path_text)}
+        if not error:
+            if notes.strip():
+                self._noted_paths.add(Path(path_text))
+            else:
+                self._noted_paths.discard(Path(path_text))
+            self._update_label_indicator()
+        self.save_label.setText(f"Notes failed: {error}" if error else "Notes saved")
+
     def _label_save_finished(self, path_text: str, label: str | None, error: str) -> None:
         """Update cached ratings and filters once a color-label write completes."""
         raw_path = Path(path_text)
@@ -1312,9 +1413,15 @@ class CropWindow(QMainWindow):
         self._update_status_bar()
         task = RatingScanTask(self._rating_scan_generation, raw_paths)
         task.signals.ratings.connect(self._rating_scan_finished)
+        task.signals.notes_scanned.connect(self._notes_scan_finished)
         task.signals.rating_progress.connect(self._rating_scan_progress)
         self._active_rating_tasks[self._rating_scan_generation] = task
         self._rating_pool.start(task)
+
+    def _notes_scan_finished(self, generation: int, noted: set[Path]) -> None:
+        if generation == self._rating_scan_generation:
+            self._noted_paths = set(noted)
+            self._update_label_indicator()
 
     def _rating_scan_progress(self, generation: int, done: int, total: int) -> None:
         if generation == self._rating_scan_generation:
@@ -1412,10 +1519,12 @@ class CropWindow(QMainWindow):
         self.position_count_label.setText("0 / 0 [Filtered]")
         self.position_label.setText("No photos match filters")
         self.label_indicator.setVisible(False)
+        self.notes_indicator.setVisible(False)
 
     def _update_position_label(self) -> None:
         if self._current_path is None or self._current_index < 0:
             self.label_indicator.setVisible(False)
+            self.notes_indicator.setVisible(False)
             return
         filtered_note = (
             " [Filtered]"
@@ -1434,7 +1543,15 @@ class CropWindow(QMainWindow):
         self._update_review_buttons()
 
     def _update_label_indicator(self) -> None:
-        """Show a small color swatch when the current photo has a color label."""
+        """Show small indicators for the current photo's color label and notes."""
+        has_notes = self._current_path in self._noted_paths
+        self.notes_indicator.setPixmap(
+            qta.icon("fa5s.sticky-note", color="#e5bd48" if has_notes else "#4a4f55").pixmap(14, 14)
+        )
+        self.notes_indicator.setToolTip(
+            f"{'Edit' if has_notes else 'Add'} notes ({key_hint(NOTES_KEY)})"
+        )
+        self.notes_indicator.setVisible(True)
         _, label = self._photo_ratings.get(self._current_path, (0, None))
         if not label:
             self.label_indicator.setVisible(False)
@@ -1597,6 +1714,7 @@ class CropWindow(QMainWindow):
         self._add_shortcut(AUTO_LIGHT_KEY, self.auto_light_button.click)
         self._add_shortcut(FLAG_COLOR_KEY, self._apply_flag_color)
         self._add_shortcut(COPY_PREVIOUS_CROP_KEY, self._copy_previous_crop)
+        self._add_shortcut(NOTES_KEY, self._edit_notes)
         self._add_shortcut(FULL_SCREEN_KEY, self._toggle_full_screen)
         self._add_shortcut(Qt.Key.Key_Escape, self._exit_full_screen)
         self._add_shortcut(TOGGLE_TOOLBARS_KEY, self._toggle_toolbars)
