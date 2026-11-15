@@ -89,3 +89,15 @@ never used for viewing. AutoCrop writes the crop into the photo's XMP sidecar.
 
 Pipeline state is held in memory only; after a restart it is re-derived from the folder and
 work re-runs.
+
+## FTP feature
+
+`live/features/ftp.py` runs a `pyftpdlib` server while the FTP feature is on (off by
+default; set the username, password and port in Preferences → Live). Point the camera at
+the machine's LAN address and the configured port, passive mode, with the same login.
+Uploads are staged in `incoming/.ftp-uploading` and moved to `incoming` only when the
+transfer completes, then passed to `host.ingest`. Only loopback, private and link-local
+peers may connect; the account can upload but not delete or create folders. A dropped
+connection mid-upload is discarded and shown as a warning. Passive data ports are
+60000–60099. The address/port are logged when the server starts (`FtpServer.status_text`);
+changing credentials or the port takes effect after toggling FTP off and on.
