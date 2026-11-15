@@ -153,3 +153,19 @@ def test_color_temperature_must_be_in_the_supported_range() -> None:
     validate_live_settings(LiveSettings(color_temperature=5200.0))
     with pytest.raises(ValueError, match="Color temperature"):
         validate_live_settings(LiveSettings(color_temperature=1500.0))
+
+
+def test_idle_processing_is_off_by_default_round_trips_and_is_validated(tmp_path: Path) -> None:
+    """The option and its delay persist; a delay outside the supported range is rejected."""
+    store = make_settings(tmp_path)
+    assert not load_live_settings(store, MemorySecrets()).idle_processing
+
+    save_live_settings(
+        store, LiveSettings(idle_processing=True, idle_delay_seconds=5.5), MemorySecrets()
+    )
+    loaded = load_live_settings(store, MemorySecrets())
+
+    assert loaded.idle_processing
+    assert loaded.idle_delay_seconds == 5.5
+    with pytest.raises(ValueError, match="delay"):
+        validate_live_settings(LiveSettings(idle_delay_seconds=0.0))

@@ -32,7 +32,12 @@ from photo_workflow.editor.model import (
     AspectRatio,
     parse_aspect_ratios,
 )
-from photo_workflow.live.settings import LiveSettings, validate_live_settings
+from photo_workflow.live.settings import (
+    IDLE_PROCESSING_LABEL,
+    MAX_IDLE_DELAY_SECONDS,
+    LiveSettings,
+    validate_live_settings,
+)
 
 DEFAULT_SNAP_TOLERANCE = 0.05
 LEGACY_IMPORTED_KEY = "preferences/legacy_toml_imported"
@@ -423,6 +428,17 @@ class PreferencesDialog(QDialog):
             "Applies the automatic crop to every file in the Live folder, replacing crops "
             "drawn by hand"
         )
+        self.idle_check = QCheckBox(f"{IDLE_PROCESSING_LABEL}: only process while I am idle")
+        self.idle_check.setChecked(live.idle_processing)
+        self.idle_check.setToolTip(
+            "Holds new Live processing while the mouse or keyboard is in use, and resumes "
+            "after the idle delay"
+        )
+        self.idle_delay_spin = QDoubleSpinBox()
+        self.idle_delay_spin.setRange(0.5, MAX_IDLE_DELAY_SECONDS)
+        self.idle_delay_spin.setSingleStep(0.5)
+        self.idle_delay_spin.setSuffix(" s")
+        self.idle_delay_spin.setValue(live.idle_delay_seconds)
         self.auto_lighting_check = QCheckBox("Automatic lighting")
         self.auto_lighting_check.setChecked(live.auto_lighting)
         self.color_temperature_spin = QSpinBox()
@@ -450,6 +466,8 @@ class PreferencesDialog(QDialog):
         form.addRow("Auto-crop aspect ratios", self.autocrop_ratios_edit)
         form.addRow("", self.autocrop_ball_check)
         form.addRow("", self.autocrop_force_check)
+        form.addRow("", self.idle_check)
+        form.addRow(f"{IDLE_PROCESSING_LABEL} delay", self.idle_delay_spin)
         box = QGroupBox("Live (credentials are stored in the system keychain)")
         box.setLayout(form)
         return box
@@ -486,6 +504,8 @@ class PreferencesDialog(QDialog):
             autocrop_ratios=tuple(split_ratio_text(self.autocrop_ratios_edit.text())),
             autocrop_ball=self.autocrop_ball_check.isChecked(),
             autocrop_force=self.autocrop_force_check.isChecked(),
+            idle_processing=self.idle_check.isChecked(),
+            idle_delay_seconds=self.idle_delay_spin.value(),
         )
 
     def _browse_live_folder(self) -> None:

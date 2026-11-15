@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QEvent, QPoint, QSettings, Qt
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from photo_workflow.editor.app import CropWindow
+from photo_workflow.editor.live_ui import IdleMonitor
 from photo_workflow.editor.metadata import PhotoMetadata
 from photo_workflow.editor.model import CropRect
 from photo_workflow.live import settings as live_settings
@@ -247,4 +250,44 @@ def test_clicking_the_stage_error_flag_shows_the_error(
 
     assert shown
     assert "FTP username is not configured" in shown[0]
+    window.close()
+
+
+def test_idle_monitor_holds_while_active_and_releases_after_a_quiet_spell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Moving the mouse or pressing a key holds the pipeline; stillness releases it."""
+    make_live_photo(tmp_path / "live")
+    window = make_window(tmp_path, monkeypatch)
+    window._toggle_live_mode()
+    pipeline = window._live.pipeline
+    now = [100.0]
+    cursor = [QPoint(0, 0)]
+    monitor = IdleMonitor(pipeline, clock=lambda: now[0], cursor=lambda: cursor[0])
+
+    monitor.configure(replace(pipeline.settings, idle_processing=True, idle_delay_seconds=3.0))
+    assert pipeline.held
+
+    now[0] += 3.5
+    monitor.check()
+    assert not pipeline.held
+
+    cursor[0] = QPoint(5, 5)
+    monitor.check()
+    assert pipeline.held
+
+    now[0] += 3.5
+    monitor.check()
+    assert not pipeline.held
+    monitor.eventFilter(
+        window, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier)
+    )
+    assert pipeline.held
+
+    panel = window.live_dock.panel
+    panel.update_status(pipeline.snapshot(), [], blink_on=False)
+    assert not panel.held_label.isHidden()
+
+    monitor.configure(replace(pipeline.settings, idle_processing=False))
+    assert not pipeline.held
     window.close()

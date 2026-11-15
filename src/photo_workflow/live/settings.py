@@ -22,6 +22,10 @@ SECRET_FTP_PASSWORD = "ftp_password"  # noqa: S105
 SECRET_R2_SECRET_KEY = "r2_secret_access_key"  # noqa: S105
 DEFAULT_FTP_PORT = 2121
 DEFAULT_AUTOCROP_RATIOS = ("1:1", "4:5", "1.91:1")
+# Working name of the option that holds processing back while the user is active.
+IDLE_PROCESSING_LABEL = "Idle processing"
+DEFAULT_IDLE_DELAY_SECONDS = 3.0
+MAX_IDLE_DELAY_SECONDS = 120.0
 
 
 class SecretStore(Protocol):
@@ -80,6 +84,8 @@ class LiveSettings:
     color_temperature: float | None = None
     autocrop_force: bool = False
     autocrop_ball: bool = False
+    idle_processing: bool = False
+    idle_delay_seconds: float = DEFAULT_IDLE_DELAY_SECONDS
 
     def folder_path(self, camera_root: Path) -> Path:
         """Return the configured Live folder, defaulting to the one next to the camera folder."""
@@ -108,8 +114,8 @@ def validate_live_settings(settings: LiveSettings) -> None:
     Check Live settings are usable.
 
     Raises:
-        ValueError: If the port, minimum rating, color temperature or acceptable aspect
-            ratios are invalid.
+        ValueError: If the port, minimum rating, color temperature, idle delay or acceptable
+            aspect ratios are invalid.
     """
     kelvin = settings.color_temperature
     if kelvin is not None and not MIN_KELVIN <= kelvin <= MAX_KELVIN:
@@ -120,6 +126,11 @@ def validate_live_settings(settings: LiveSettings) -> None:
         raise ValueError("Cloud Sync minimum rating must be between 0 and 5 stars")
     if not 1 <= settings.ftp_port <= 65535:
         raise ValueError("FTP port must be between 1 and 65535")
+    if not 0.5 <= settings.idle_delay_seconds <= MAX_IDLE_DELAY_SECONDS:
+        raise ValueError(
+            f"{IDLE_PROCESSING_LABEL} delay must be between 0.5 and "
+            f"{MAX_IDLE_DELAY_SECONDS:.0f} seconds"
+        )
     if not settings.autocrop_ratios:
         raise ValueError("Add at least one acceptable aspect ratio for automatic crop")
     parse_aspect_ratios(list(settings.autocrop_ratios))
@@ -163,6 +174,10 @@ def load_live_settings(
         color_temperature=settings.value("live/color_temperature", 0.0, type=float) or None,
         autocrop_force=settings.value("live/autocrop_force", False, type=bool),
         autocrop_ball=settings.value("live/autocrop_ball", False, type=bool),
+        idle_processing=settings.value("live/idle_processing", False, type=bool),
+        idle_delay_seconds=settings.value(
+            "live/idle_delay_seconds", defaults.idle_delay_seconds, type=float
+        ),
     )
     try:
         validate_live_settings(loaded)
@@ -172,6 +187,7 @@ def load_live_settings(
             ftp_port=defaults.ftp_port,
             r2_min_rating=defaults.r2_min_rating,
             autocrop_ratios=defaults.autocrop_ratios,
+            idle_delay_seconds=defaults.idle_delay_seconds,
         )
     return loaded
 
@@ -198,6 +214,8 @@ def save_live_settings(
     settings.setValue("live/color_temperature", live.color_temperature or 0.0)
     settings.setValue("live/autocrop_force", live.autocrop_force)
     settings.setValue("live/autocrop_ball", live.autocrop_ball)
+    settings.setValue("live/idle_processing", live.idle_processing)
+    settings.setValue("live/idle_delay_seconds", live.idle_delay_seconds)
     store.set(SECRET_FTP_PASSWORD, live.ftp_password)
     store.set(SECRET_R2_SECRET_KEY, live.r2_secret_access_key)
     settings.sync()

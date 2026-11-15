@@ -200,6 +200,8 @@ def test_live_preferences_show_and_return_every_setting() -> None:
         autocrop_force=True,
         auto_lighting=False,
         color_temperature=5200.0,
+        idle_processing=True,
+        idle_delay_seconds=4.5,
     )
     dialog = PreferencesDialog(CropPreferences(), live=live)
 

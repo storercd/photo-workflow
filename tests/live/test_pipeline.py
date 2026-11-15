@@ -473,3 +473,29 @@ def test_restart_keeps_finished_work_and_redoes_what_changed(tmp_path: Path) -> 
     third.scan()
     executor.run_all()
     assert len(redo.calls) == 1
+
+
+def test_holding_blocks_new_work_but_not_ingest_and_release_resumes(tmp_path: Path) -> None:
+    """While held, images are still found and queued, but nothing starts until release."""
+    denoise = Recorder(".tif")
+    registry = StageRegistry()
+    registry.register(StageId.DENOISE, denoise)
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, {StageId.DENOISE})
+    pipeline.set_held(True)
+
+    make_photo(tmp_path)
+    pipeline.scan()
+    executor.run_all()
+
+    snapshot = pipeline.snapshot()
+    assert snapshot.held
+    assert not denoise.calls
+    denoise_row = next(row for row in snapshot.stages if row.stage is StageId.DENOISE)
+    assert denoise_row.count == 1
+    assert not denoise_row.waiting_disabled
+
+    pipeline.set_held(False)
+    executor.run_all()
+
+    assert len(denoise.calls) == 1
+    assert not pipeline.snapshot().held

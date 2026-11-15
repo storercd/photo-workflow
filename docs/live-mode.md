@@ -48,6 +48,18 @@ feature off clears the error; toggling it on again retries the failed images. Ev
 is logged to `~/Library/Logs/photo-workflow/live.log`. Non-fatal problems use
 `job.warn(...)` / `host.warn(...)` and appear in the warning list (⚠ button).
 
+## Idle processing
+
+Working name for an option (Preferences → Live, **off by default**) that only processes
+while you are idle. The label is the single constant `IDLE_PROCESSING_LABEL` in
+`live/settings.py`; rename it there. While the option is on, `IdleMonitor`
+(`editor/live_ui.py`) holds the pipeline (`LivePipeline.set_held`) whenever the mouse
+moved, or a click, key press or scroll happened, within the idle delay (default 3 s,
+`idle_delay_seconds`). Once everything has been still for that long the hold is released
+and waiting work starts at once. A hold only stops *new* jobs from starting, so running
+jobs finish; arriving files are still ingested and queued. The status panel shows an italic
+"Waiting for idle" line while held (counts do not blink for this).
+
 ## Writing a feature
 
 Add one file, `src/photo_workflow/live/features/<name>.py`. Every non-underscore module in

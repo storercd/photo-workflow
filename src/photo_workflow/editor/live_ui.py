@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRunnable, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QFrame,
     QGridLayout,
@@ -26,7 +30,7 @@ from photo_workflow.live.api import StageRegistry
 from photo_workflow.live.features import load_features
 from photo_workflow.live.layout import LiveLayout
 from photo_workflow.live.pipeline import LivePipeline, PipelineSnapshot
-from photo_workflow.live.settings import LiveSettings
+from photo_workflow.live.settings import IDLE_PROCESSING_LABEL, LiveSettings
 from photo_workflow.live.stages import SPECS, STAGE_ORDER, StageId
 
 LOGGER = logging.getLogger(__name__)
@@ -36,6 +40,16 @@ MAX_WARNING_MENU_TEXT = 90
 ERROR_FLAG_STYLE = "color: #ff3b30; font-weight: bold;"
 BLINK_STYLE = "background: #e5bd48; color: #111; font-weight: bold; padding: 0 6px;"
 COUNT_STYLE = "font-weight: bold; padding: 0 6px;"
+HELD_STYLE = "color: #8c9299; font-style: italic;"
+IDLE_POLL_MS = 250
+ACTIVITY_EVENTS = frozenset({
+    QEvent.Type.MouseButtonPress,
+    QEvent.Type.MouseButtonDblClick,
+    QEvent.Type.KeyPress,
+    QEvent.Type.Wheel,
+    QEvent.Type.TabletPress,
+    QEvent.Type.TouchBegin,
+})
 
 
 class _CleanTask(QRunnable):
@@ -55,6 +69,85 @@ class _CleanTask(QRunnable):
             LOGGER.exception("Live clean failed")
             error = str(exception)
         self._controller.cleaned.emit(error)
+
+
+class IdleMonitor(QObject):
+    """
+    Holds the pipeline while the user is active and releases it after a quiet spell.
+
+    Mouse movement is found by polling the cursor position (so it is seen anywhere on
+    screen); clicks, key presses and scrolling are seen by an application-wide event filter.
+    """
+
+    def __init__(
+        self,
+        pipeline: LivePipeline,
+        parent: QObject | None = None,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        cursor: Callable[[], QPoint] = QCursor.pos,
+    ) -> None:
+        """Watch for activity on behalf of a pipeline; call `configure` to switch it on."""
+        super().__init__(parent)
+        self._pipeline = pipeline
+        self._clock = clock
+        self._cursor = cursor
+        self._delay = 0.0
+        self._enabled = False
+        self._last_position = cursor()
+        self._last_activity = clock()
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self.check)
+
+    @property
+    def enabled(self) -> bool:
+        """Whether idle processing is switched on."""
+        return self._enabled
+
+    def configure(self, settings: LiveSettings) -> None:
+        """Apply the idle option; switching it on starts held, switching it off releases."""
+        self._delay = settings.idle_delay_seconds
+        if settings.idle_processing == self._enabled:
+            return
+        self._enabled = settings.idle_processing
+        app = QApplication.instance()
+        if self._enabled:
+            self.note_activity()
+            self._pipeline.set_held(True)
+            self._timer.start(IDLE_POLL_MS)
+            if app is not None:
+                app.installEventFilter(self)
+        else:
+            self._timer.stop()
+            if app is not None:
+                app.removeEventFilter(self)
+            self._pipeline.set_held(False)
+
+    def note_activity(self) -> None:
+        """Record that the user just did something."""
+        self._last_activity = self._clock()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        """
+        Treat clicks, key presses and scrolling as activity.
+
+        Returns:
+            `False`, so the event is never consumed.
+        """
+        if event.type() in ACTIVITY_EVENTS:
+            self.note_activity()
+            if not self._pipeline.held:
+                self._pipeline.set_held(True)
+        return False
+
+    def check(self) -> None:
+        """Compare the cursor and the clock with the last activity and hold or release."""
+        position = self._cursor()
+        if position != self._last_position:
+            self._last_position = position
+            self.note_activity()
+        idle = self._clock() - self._last_activity >= self._delay
+        self._pipeline.set_held(not idle)
 
 
 class LiveController(QObject):
@@ -77,6 +170,7 @@ class LiveController(QObject):
         load_features(self.registry)
         self.pipeline = LivePipeline(layout, settings, self.registry)
         self.pipeline.add_listener(self.changed.emit)
+        self.idle = IdleMonitor(self.pipeline, self)
         self.blink_on = False
         self._pool = QThreadPool(self)
         self._pool.setMaxThreadCount(1)
@@ -87,13 +181,20 @@ class LiveController(QObject):
 
     def start(self) -> None:
         """Scan existing photos, start enabled features, and begin polling."""
+        self.idle.configure(self.pipeline.settings)
         self.pipeline.scan()
         self.pipeline.start_enabled_features()
         self._poll_timer.start(POLL_INTERVAL_MS)
         self._blink_timer.start(BLINK_INTERVAL_MS)
 
+    def set_settings(self, settings: LiveSettings) -> None:
+        """Apply new settings to the pipeline and the idle option."""
+        self.pipeline.set_settings(settings)
+        self.idle.configure(settings)
+
     def stop(self) -> None:
         """Stop polling and shut the pipeline down."""
+        self.idle.configure(replace(self.pipeline.settings, idle_processing=False))
         self._poll_timer.stop()
         self._blink_timer.stop()
         self._pool.waitForDone()
@@ -185,11 +286,17 @@ class LiveStatusPanel(QFrame):
             self.error_labels[stage] = error
             self.count_labels[stage] = count
         self.completed_label = QLabel("Completed: 0")
+        self.held_label = QLabel(f"Waiting for idle ({IDLE_PROCESSING_LABEL})")
+        self.held_label.setStyleSheet(HELD_STYLE)
+        self.held_label.setWordWrap(True)
+        self.held_label.setToolTip("Processing resumes when the mouse and keyboard are still")
+        self.held_label.setVisible(False)
 
         layout = QVBoxLayout(self)
         layout.addLayout(header)
         layout.addLayout(grid)
         layout.addWidget(self.completed_label)
+        layout.addWidget(self.held_label)
         layout.addStretch(1)
 
     def set_enabled_stages(self, settings: LiveSettings) -> None:
@@ -223,6 +330,7 @@ class LiveStatusPanel(QFrame):
             label.setText(text)
             label.setVisible(bool(text))
         self.completed_label.setText(f"Completed: {snapshot.completed}")
+        self.held_label.setVisible(snapshot.held)
         self._set_warnings(warnings)
 
     def _set_warnings(self, warnings: list[tuple[int, str, str]]) -> None:

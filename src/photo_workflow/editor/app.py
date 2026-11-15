@@ -2015,7 +2015,7 @@ class CropWindow(QMainWindow):
             if self._live_mode:
                 self._open_live()
             return
-        self._live.pipeline.set_settings(live)
+        self._live.set_settings(live)
 
     def _live_stage_toggled(self, stage: StageId, enabled: bool) -> None:
         """Turn one Live feature on or off and remember the choice."""

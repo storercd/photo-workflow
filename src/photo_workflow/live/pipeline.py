@@ -75,6 +75,7 @@ class PipelineSnapshot:
 
     stages: tuple[StageSummary, ...]
     completed: int = 0
+    held: bool = False
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,7 @@ class LivePipeline:
         self._listeners: list[Callable[[], None]] = []
         self._warning_ids = count(1)
         self._paused = False
+        self._held = False
         self._closed = False
         self._saved_state: dict | None = None
         self._written_state = ""
@@ -374,6 +376,20 @@ class LivePipeline:
 
     # ----- scheduling ---------------------------------------------------------------
 
+    @property
+    def held(self) -> bool:
+        """Whether starting new stage work is on hold (running jobs may still finish)."""
+        return self._held
+
+    def set_held(self, held: bool) -> None:
+        """Hold back new stage work, or release it and start whatever became waiting."""
+        with self._lock:
+            if self._held == held:
+                return
+            self._held = held
+        LOGGER.info("live processing %s", "held" if held else "released")
+        self.pump()
+
     def pump(self) -> None:
         """Start every stage that has eligible images and a free worker slot."""
         jobs: list[tuple[StageJob, int]] = []
@@ -381,6 +397,8 @@ class LivePipeline:
             if self._paused or self._closed:
                 return
             for stage in STAGE_ORDER:
+                if self._held:
+                    break
                 jobs.extend(self._claim(stage))
         for job, generation in jobs:
             self._executor.submit(self._run_job, job, generation)
@@ -630,7 +648,7 @@ class LivePipeline:
             summaries = tuple(
                 self._summarize(stage, counts[stage], failed[stage]) for stage in STAGE_ORDER
             )
-        return PipelineSnapshot(summaries, completed)
+        return PipelineSnapshot(summaries, completed, self._held)
 
     def _is_waiting_on_disabled(self, photo: Path, stage: StageId) -> bool:
         spec = SPECS[stage]
