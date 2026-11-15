@@ -406,6 +406,12 @@ class PreferencesDialog(QDialog):
         self.r2_key_edit = QLineEdit(live.r2_access_key_id)
         self.r2_secret_edit = self._secret_edit(live.r2_secret_access_key)
         self.r2_bucket_edit = QLineEdit(live.r2_bucket)
+        self.r2_min_rating_spin = QSpinBox()
+        self.r2_min_rating_spin.setRange(0, 5)
+        self.r2_min_rating_spin.setValue(live.r2_min_rating)
+        self.r2_min_rating_spin.setToolTip(
+            "Cloud Sync uploads images rated at least this many stars and removes the rest"
+        )
         self.autocrop_ratios_edit = QLineEdit(", ".join(live.autocrop_ratios))
         self.autocrop_ratios_edit.setToolTip("Aspect ratios automatic crop may choose from")
         self.autocrop_ball_check = QCheckBox("Let the ball influence automatic crop")
@@ -425,6 +431,7 @@ class PreferencesDialog(QDialog):
         form.addRow("R2 access key ID", self.r2_key_edit)
         form.addRow("R2 secret access key", self.r2_secret_edit)
         form.addRow("R2 bucket", self.r2_bucket_edit)
+        form.addRow("Cloud Sync minimum stars", self.r2_min_rating_spin)
         form.addRow("Auto-crop aspect ratios", self.autocrop_ratios_edit)
         form.addRow("", self.autocrop_ball_check)
         form.addRow("", self.autocrop_force_check)
@@ -458,6 +465,7 @@ class PreferencesDialog(QDialog):
             r2_access_key_id=self.r2_key_edit.text().strip(),
             r2_secret_access_key=self.r2_secret_edit.text(),
             r2_bucket=self.r2_bucket_edit.text().strip(),
+            r2_min_rating=self.r2_min_rating_spin.value(),
             autocrop_ratios=tuple(split_ratio_text(self.autocrop_ratios_edit.text())),
             autocrop_ball=self.autocrop_ball_check.isChecked(),
             autocrop_force=self.autocrop_force_check.isChecked(),

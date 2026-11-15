@@ -140,3 +140,16 @@ peers may connect; the account can upload but not delete or create folders. A dr
 connection mid-upload is discarded and shown as a warning. Passive data ports are
 60000–60099. The address/port are logged when the server starts (`FtpServer.status_text`);
 changing credentials or the port takes effect after toggling FTP off and on.
+## Export and Cloud Sync
+
+**Export** (`features/export.py`) renders each photo's best source (a finished image, else
+the RAW's largest embedded JPEG; no RAW developer is bundled) with the crop and straighten
+angle from its XMP sidecar into a q95 JPEG in `export/`.
+
+**Cloud Sync** (`features/cloud_sync.py`) follows `storercd/photo-portal`'s `sync/sync.py`:
+for each exported image it uploads `photos/{thumb,med,web,full}/<stem>-<hash>.jpg` (long
+edges 600/1200/2000 px plus the untouched export) to the private R2 bucket from Live
+settings, skipping keys that already exist and deleting keys of older exports. The only
+filter is *Cloud Sync minimum stars* (`r2_min_rating`, read from the sidecar's
+`xmp:Rating`): photos below it are deleted from the bucket. Saving a rating in the editor
+re-runs Cloud Sync for that photo. Incomplete R2 settings halt the feature immediately.

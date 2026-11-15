@@ -73,6 +73,7 @@ class LiveSettings:
     r2_access_key_id: str = ""
     r2_secret_access_key: str = ""
     r2_bucket: str = ""
+    r2_min_rating: int = 0
     autocrop_ratios: tuple[str, ...] = DEFAULT_AUTOCROP_RATIOS
     auto_lighting: bool = True
     color_temperature: float | None = None
@@ -106,8 +107,10 @@ def validate_live_settings(settings: LiveSettings) -> None:
     Check Live settings are usable.
 
     Raises:
-        ValueError: If the port or the acceptable aspect ratios are invalid.
+        ValueError: If the port, minimum rating or acceptable aspect ratios are invalid.
     """
+    if not 0 <= settings.r2_min_rating <= 5:
+        raise ValueError("Cloud Sync minimum rating must be between 0 and 5 stars")
     if not 1 <= settings.ftp_port <= 65535:
         raise ValueError("FTP port must be between 1 and 65535")
     if not settings.autocrop_ratios:
@@ -147,6 +150,7 @@ def load_live_settings(
         r2_access_key_id=settings.value("live/r2_access_key_id", "", type=str),
         r2_secret_access_key=store.get(SECRET_R2_SECRET_KEY),
         r2_bucket=settings.value("live/r2_bucket", "", type=str),
+        r2_min_rating=settings.value("live/r2_min_rating", defaults.r2_min_rating, type=int),
         autocrop_ratios=ratios or defaults.autocrop_ratios,
         auto_lighting=settings.value("live/auto_lighting", True, type=bool),
         color_temperature=settings.value("live/color_temperature", 0.0, type=float) or None,
@@ -156,7 +160,12 @@ def load_live_settings(
     try:
         validate_live_settings(loaded)
     except ValueError:
-        return replace(loaded, ftp_port=defaults.ftp_port, autocrop_ratios=defaults.autocrop_ratios)
+        return replace(
+            loaded,
+            ftp_port=defaults.ftp_port,
+            r2_min_rating=defaults.r2_min_rating,
+            autocrop_ratios=defaults.autocrop_ratios,
+        )
     return loaded
 
 
@@ -176,6 +185,7 @@ def save_live_settings(
     settings.setValue("live/r2_account_id", live.r2_account_id)
     settings.setValue("live/r2_access_key_id", live.r2_access_key_id)
     settings.setValue("live/r2_bucket", live.r2_bucket)
+    settings.setValue("live/r2_min_rating", live.r2_min_rating)
     settings.setValue("live/autocrop_ratios", ", ".join(live.autocrop_ratios))
     settings.setValue("live/auto_lighting", live.auto_lighting)
     settings.setValue("live/color_temperature", live.color_temperature or 0.0)
