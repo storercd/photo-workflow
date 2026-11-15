@@ -423,3 +423,22 @@ def test_already_stamped_arrivals_get_a_single_fresh_prefix(tmp_path: Path) -> N
 
     assert target.name == "20251031_101500_00_IMG_0001.CR3"
     assert target.parent == tmp_path / "2025" / "10" / "20251031" / "input"
+
+
+def test_toggling_ftp_does_not_redo_existing_images(tmp_path: Path) -> None:
+    """FTP only brings in new files, so switching it on or off leaves processed images alone."""
+    make_photo(tmp_path)
+    denoise = Recorder(".tif")
+    registry = StageRegistry()
+    registry.register(StageId.DENOISE, denoise)
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, {StageId.DENOISE})
+    pipeline.scan()
+    executor.run_all()
+    assert len(denoise.calls) == 1
+
+    pipeline.toggle(StageId.FTP, True)
+    executor.run_all()
+    pipeline.toggle(StageId.FTP, False)
+    executor.run_all()
+
+    assert len(denoise.calls) == 1

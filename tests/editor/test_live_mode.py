@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from photo_workflow.editor.app import CropWindow
 from photo_workflow.editor.metadata import PhotoMetadata
@@ -228,4 +228,23 @@ def test_crop_source_indicator_follows_auto_crop_until_edited(
     window._live_mode = False
     window._refresh_crop_source()
     assert window.view.crop_source is None
+    window.close()
+
+
+def test_clicking_the_stage_error_flag_shows_the_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The red ! beside a halted feature opens a window with the full error text."""
+    window = make_window(tmp_path, monkeypatch)
+    window._toggle_live_mode()
+    panel = window.live_dock.panel
+    shown: list[str] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: shown.append(text))
+    window._live.pipeline.halt(StageId.FTP, "FTP username is not configured")
+    window._update_live_panel()
+
+    panel.error_labels[StageId.FTP].click()
+
+    assert shown
+    assert "FTP username is not configured" in shown[0]
     window.close()

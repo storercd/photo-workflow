@@ -147,7 +147,8 @@ class LiveStatusPanel(QFrame):
         grid = QGridLayout()
         self.toggles: dict[StageId, QCheckBox] = {}
         self.count_labels: dict[StageId, QLabel] = {}
-        self.error_labels: dict[StageId, QLabel] = {}
+        self.error_labels: dict[StageId, QToolButton] = {}
+        self._halted: dict[StageId, str] = {}
         self.info_labels: dict[StageId, QLabel] = {}
         for row, stage in enumerate(STAGE_ORDER):
             spec = SPECS[stage]
@@ -160,9 +161,13 @@ class LiveStatusPanel(QFrame):
                 toggle.setEnabled(False)
             else:
                 toggle.toggled.connect(lambda checked, s=stage: self.stage_toggled.emit(s, checked))
-            error = QLabel("!")
+            error = QToolButton()
+            error.setText("!")
+            error.setAutoRaise(True)
+            error.setCursor(Qt.CursorShape.PointingHandCursor)
             error.setStyleSheet(ERROR_FLAG_STYLE)
             error.setVisible(False)
+            error.clicked.connect(lambda _=False, s=stage: self._show_error(s))
             count = QLabel("0")
             count.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             count.setStyleSheet(COUNT_STYLE)
@@ -211,7 +216,8 @@ class LiveStatusPanel(QFrame):
             label.setStyleSheet(BLINK_STYLE if blinking else COUNT_STYLE)
             flag = self.error_labels[summary.stage]
             flag.setVisible(bool(summary.halted))
-            flag.setToolTip(summary.halted)
+            flag.setToolTip(f"{summary.halted}\n(click for details)" if summary.halted else "")
+            self._halted[summary.stage] = summary.halted
         for stage, label in self.info_labels.items():
             text = (info or {}).get(stage, "")
             label.setText(text)
@@ -234,8 +240,26 @@ class LiveStatusPanel(QFrame):
             )
         if warnings:
             self.warnings_menu.addSeparator()
+            details = self.warnings_menu.addAction("Show details…")
+            details.triggered.connect(self._show_warnings)
             clear = self.warnings_menu.addAction("Clear all")
             clear.triggered.connect(self.warnings_cleared)
+
+    def _show_warnings(self) -> None:
+        """Open a window with the full text of every warning."""
+        text = "\n\n".join(row[1] for row in self._warnings)
+        QMessageBox.information(self, "Live warnings", text or "No warnings.")
+
+    def _show_error(self, stage: StageId) -> None:
+        """Open a window with why this feature halted, plus its related warnings."""
+        label = SPECS[stage].label
+        message = self._halted.get(stage) or "No error."
+        related = [row[1] for row in self._warnings if row[1].startswith(f"{label}:")]
+        text = f"{label} stopped:\n{message}"
+        if related:
+            text += "\n\nWarnings:\n" + "\n".join(related)
+        text += "\n\nToggle the feature off and on to clear the error and retry."
+        QMessageBox.warning(self, f"{label} error", text)
 
     def _confirm_clean(self) -> None:
         answer = QMessageBox.warning(

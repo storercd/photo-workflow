@@ -267,7 +267,8 @@ class LivePipeline:
             record = stages[stage]
             if not enabled and record.status in {StageStatus.FAILED, StageStatus.RUNNING}:
                 self._reset(record)
-            if not SPECS[stage].blocks_when_disabled:
+            # FTP only brings in new files; toggling it changes no existing image's source.
+            if stage is not StageId.FTP and not SPECS[stage].blocks_when_disabled:
                 self._invalidate(photo, stage, include_self=False)
 
     def _call_hooks(self, changed: list[StageId]) -> None:
