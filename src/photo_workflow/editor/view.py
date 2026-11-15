@@ -57,6 +57,7 @@ class CropView(QWidget):
         self._ball_candidates: tuple[BallCandidate, ...] = ()
         self._ball_ring_color = QColor("#ff6b9d")
         self._passive_crop = False
+        self._show_grid = True
         self._warning: str | None = None
 
     def set_image(self, image: QImage, image_width: int, image_height: int) -> None:
@@ -94,6 +95,11 @@ class CropView(QWidget):
         )
         self.update()
         return self._crop
+
+    def set_grid_visible(self, visible: bool) -> None:
+        """Show or hide the 3x3 divider lines inside the crop rectangle."""
+        self._show_grid = visible
+        self.update()
 
     def set_crop_passive(self, passive: bool) -> None:
         """Mark the crop as an untouched suggestion that new drags replace."""
@@ -251,6 +257,8 @@ class CropView(QWidget):
         painter.drawRect(crop_rect)
         if self._snap_ratio is not None:
             self._draw_snap_label(painter, crop_rect, self._snap_ratio)
+        if not self._show_grid:
+            return
         painter.setPen(QPen(QColor(244, 242, 236, 110), 1))
         painter.drawLine(
             crop_rect.left() + crop_rect.width() / 3,
