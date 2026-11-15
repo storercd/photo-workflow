@@ -76,6 +76,8 @@ def test_settings_round_trip_keeps_secrets_out_of_plain_settings(tmp_path: Path)
         r2_secret_access_key="r2-secret",
         r2_bucket="bucket",
         autocrop_ratios=("1:1", "3:2"),
+        auto_lighting=False,
+        color_temperature=4200.0,
     ).with_enabled(StageId.DENOISE, True)
 
     save_live_settings(store, live, secrets)
@@ -124,10 +126,10 @@ def test_rename_arrival_uses_card_naming_and_overwrites(tmp_path: Path) -> None:
     assert not arrived.exists()
 
 
-def test_feature_discovery_runs_without_features_and_keeps_stubs() -> None:
-    """With no feature modules every stage stays an unregistered no-op."""
+def test_feature_discovery_registers_only_implemented_stages() -> None:
+    """Discovery loads every feature module; the framework stages stay no-ops."""
     registry = StageRegistry()
 
     load_features(registry)
 
-    assert not registry.is_registered(StageId.DENOISE)
+    assert all(registry.get(stage) is not None for stage in StageId)

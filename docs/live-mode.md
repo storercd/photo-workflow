@@ -76,6 +76,27 @@ Rules: `process` runs on a worker thread (never touch Qt); read settings from
 display-oriented JPEG to `output/` (`job.output_path("output", ".jpg")`); Export output is
 never used for viewing. AutoCrop writes the crop into the photo's XMP sidecar.
 
+## Preprocessing features
+
+Three stage modules live in `live/features/`: `denoise.py`, `mask.py`, `lighting.py`.
+Intermediates are 16-bit scene-linear sRGB TIFFs (`live/imaging.py`; RAW is developed with
+LibRaw via `rawpy`: camera white balance, no tone curve, cropped to the active area).
+
+- **Denoise** → `denoise/<name>.tif`: non-local-means on a luma/chroma split in a
+  square-root domain. There is no library that re-encodes a mosaiced CR2/CR3, so the
+  "raw-format" intermediate is the linear developed image.
+- **Mask** → `mask/<name>.tif`: Apple Vision (`VNGenerateForegroundInstanceMaskRequest`,
+  macOS only, `pyobjc-framework-Vision`) finds the main subject; everything outside it is
+  scaled by -0.25 stop in linear light. No subject → `StageResult.skipped` plus a warning
+  ("Mask could not be applied") in the ⚠ list.
+- **Lighting/Color** → `output/<name>.jpg` (quality 95, 4:4:4, sRGB profile): reuses
+  `editor/lighting.py` (`estimate_adjustment`/`apply_adjustment`/`gains_from_kelvin`). Settings:
+  `auto_lighting` (default on) and `color_temperature` (Kelvin override, default none).
+
+`live/detection.py` is the shared detection API: Mask publishes normalized subject (and ball)
+boxes per photo; Automatic Cropping calls `get_detection(photo)` or
+`detect_photo(photo, source)` (detects and caches when missing).
+
 ## Code map
 
 | Module | Role |

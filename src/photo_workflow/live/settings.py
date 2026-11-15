@@ -74,6 +74,8 @@ class LiveSettings:
     r2_secret_access_key: str = ""
     r2_bucket: str = ""
     autocrop_ratios: tuple[str, ...] = DEFAULT_AUTOCROP_RATIOS
+    auto_lighting: bool = True
+    color_temperature: float | None = None
 
     def folder_path(self, camera_root: Path) -> Path:
         """Return the configured Live folder, defaulting to the one next to the camera folder."""
@@ -144,6 +146,8 @@ def load_live_settings(
         r2_secret_access_key=store.get(SECRET_R2_SECRET_KEY),
         r2_bucket=settings.value("live/r2_bucket", "", type=str),
         autocrop_ratios=ratios or defaults.autocrop_ratios,
+        auto_lighting=settings.value("live/auto_lighting", True, type=bool),
+        color_temperature=settings.value("live/color_temperature", 0.0, type=float) or None,
     )
     try:
         validate_live_settings(loaded)
@@ -169,6 +173,8 @@ def save_live_settings(
     settings.setValue("live/r2_access_key_id", live.r2_access_key_id)
     settings.setValue("live/r2_bucket", live.r2_bucket)
     settings.setValue("live/autocrop_ratios", ", ".join(live.autocrop_ratios))
+    settings.setValue("live/auto_lighting", live.auto_lighting)
+    settings.setValue("live/color_temperature", live.color_temperature or 0.0)
     store.set(SECRET_FTP_PASSWORD, live.ftp_password)
     store.set(SECRET_R2_SECRET_KEY, live.r2_secret_access_key)
     settings.sync()
