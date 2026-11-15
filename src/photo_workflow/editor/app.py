@@ -2011,7 +2011,7 @@ class CropWindow(QMainWindow):
         display_width, display_height = displayed_image_size(metadata, self._current_rotation)
         image = self._preview_cache.get(path)
         if image is not None:
-            self._set_preview_image(image, display_width, display_height)
+            self._set_preview_image(self._display_image(image), display_width, display_height)
             metadata = self._set_loaded_crop(path, metadata)
             self._set_preview_loading(False)
             self.auto_level_button.setEnabled(True)
@@ -2166,17 +2166,20 @@ class CropWindow(QMainWindow):
             self._adjusted_cache.pop(oldest_key, None)
             self._lighting_adjustments.pop(oldest_key, None)
 
+    def _display_image(self, image: QImage) -> QImage:
+        """Return the auto-lit copy of the current photo when enabled, else the original."""
+        self._ensure_adjusted(self._current_path, image)
+        if self.auto_light_button.isChecked():
+            return self._adjusted_cache.get(self._current_path, image)
+        return image
+
     def _show_image(self, image: QImage) -> None:
         """Set the visible preview using current source dimensions when known."""
         if self._current_metadata:
             width, height = displayed_image_size(self._current_metadata, self._current_rotation)
         else:
             width, height = image.width(), image.height()
-        display = image
-        self._ensure_adjusted(self._current_path, image)
-        if self.auto_light_button.isChecked():
-            display = self._adjusted_cache.get(self._current_path, image)
-        self._set_preview_image(display, width, height)
+        self._set_preview_image(self._display_image(image), width, height)
         self._sync_wb_controls()
         self._refresh_ball_detection(image)
 
@@ -2478,7 +2481,7 @@ class CropWindow(QMainWindow):
             image = self._preview_cache.get(self._current_path)
             if image is not None:
                 width, height = displayed_image_size(self._current_metadata, angle)
-                self._set_preview_image(image, width, height)
+                self._set_preview_image(self._display_image(image), width, height)
         if self._current_crop is not None:
             self._set_preview_crop(self._current_crop)
             self.view.set_crop_passive(not self._crop_touched)

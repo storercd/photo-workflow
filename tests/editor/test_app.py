@@ -1436,3 +1436,23 @@ def test_fixing_white_balance_turns_auto_light_back_on(monkeypatch) -> None:
 
     assert window.auto_light_button.isChecked()
     assert window._wb_override == float(window.wb_slider.value())
+
+
+def test_metadata_load_shows_auto_lit_image(monkeypatch) -> None:
+    """Applying metadata after a photo switch must keep showing the auto-lit preview."""
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+    path = Path("a.cr3")
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda *_: None)
+    window._photos = [path]
+    window._current_path = path
+    original = QImage(40, 30, QImage.Format.Format_RGB888)
+    original.fill(0x303030)
+    window._preview_cache[path] = original
+    shown = []
+    monkeypatch.setattr(window, "_set_preview_image", lambda image, *_: shown.append(image))
+
+    window._set_preview_image(window._display_image(original), 40, 30)
+
+    assert window.auto_light_button.isChecked()
+    assert shown[-1] is window._adjusted_cache[path]
