@@ -121,6 +121,7 @@ from photo_workflow.editor.preferences import (
     save_preferences,
 )
 from photo_workflow.editor.view import CroppedPreview, CropView
+from photo_workflow.live.features.mask import NO_SUBJECT_MESSAGE
 from photo_workflow.live.layout import IMAGE_SUFFIXES
 from photo_workflow.live.logs import configure_live_logging
 from photo_workflow.live.settings import LiveSettings, load_live_settings, save_live_settings
@@ -1970,6 +1971,7 @@ class CropWindow(QMainWindow):
         """Return to the last normal folder; the pipeline keeps running in the background."""
         self.live_dock.setVisible(False)
         self.view.set_failed(None)
+        self.view.set_badge(None)
         self._apply_review_mode()
         self._metadata_cache.clear()
         self._preview_cache.clear()
@@ -2128,9 +2130,20 @@ class CropWindow(QMainWindow):
         """Gray out the current image with a large warning when a stage failed on it."""
         if self._current_path is None or self._live is None:
             self.view.set_failed(None)
+            self.view.set_badge(None)
             return
         message = self._live.pipeline.failure(self._current_path)
         self.view.set_failed(f"⚠ PROCESSING FAILED\n{message}" if message else None)
+        self.view.set_badge(self._live_mask_badge(self._current_path))
+
+    def _live_mask_badge(self, photo: Path) -> str | None:
+        """Return a small note when Mask is on but found no subject in this photo."""
+        pipeline = self._live.pipeline if self._live is not None else None
+        if pipeline is None or not pipeline.settings.is_enabled(StageId.MASK):
+            return None
+        if pipeline.skip_message(photo, StageId.MASK) != NO_SUBJECT_MESSAGE:
+            return None
+        return "Mask not applied: no subject detected"
 
     def open_folder(self, folder: Path, selected_photo: Path | None = None) -> None:
         """Load supported RAW files and optionally start on one selected photo."""

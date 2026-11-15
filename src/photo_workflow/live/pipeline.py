@@ -500,6 +500,14 @@ class LivePipeline:
                     return record.error
         return ""
 
+    def skip_message(self, photo: Path, stage: StageId) -> str:
+        """Return why a photo's stage was skipped, or an empty string when it was not."""
+        with self._lock:
+            record = self._state.images.get(photo, {}).get(stage)
+            if record is None or record.status is not StageStatus.SKIPPED:
+                return ""
+            return record.message
+
     def status(self, photo: Path, stage: StageId) -> StageStatus:
         """Return one image's status in one stage."""
         with self._lock:

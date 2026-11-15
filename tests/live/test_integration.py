@@ -228,3 +228,29 @@ def test_running_service_status_is_listed_only_while_its_feature_is_on(rig: Rig)
     assert pipeline.stage_info() == {StageId.FTP: "listening"}
     pipeline.set_settings(settings.with_enabled(StageId.FTP, False))
     assert pipeline.stage_info() == {}
+
+
+def test_skip_message_reports_why_a_stage_was_skipped(rig: Rig) -> None:
+    """`skip_message` is the skip reason for skipped stages and empty otherwise."""
+    rig.run()
+    assert rig.pipeline.skip_message(rig.photo, StageId.MASK) == ""
+
+    class Skipper(StageImplementation):
+        def process(self, job: StageJob) -> StageResult:
+            """
+            Skip with a reason.
+
+            Returns:
+                A skipped result.
+            """
+            return StageResult.skipped("no subject")
+
+    registry = StageRegistry()
+    registry.register(StageId.MASK, Skipper())
+    settings = LiveSettings().with_enabled(StageId.MASK, True)
+    executor = ManualExecutor()
+    pipeline = LivePipeline(rig.pipeline.layout, settings, registry, executor=executor)
+    pipeline.scan()
+    executor.run_all()
+
+    assert pipeline.skip_message(rig.photo, StageId.MASK) == "no subject"

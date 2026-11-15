@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 
 from photo_workflow.editor.app import CropWindow
 from photo_workflow.live import settings as live_settings
+from photo_workflow.live.features.mask import NO_SUBJECT_MESSAGE
 from photo_workflow.live.stages import StageId, StageStatus
 
 
@@ -136,4 +137,30 @@ def test_status_panel_shows_stage_info_only_when_given(
 
     panel.update_status(snapshot, [], blink_on=False)
     assert panel.info_labels[StageId.FTP].isHidden()
+    window.close()
+
+
+def test_no_subject_badge_shows_only_for_a_mask_skipped_photo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The badge needs Mask on and Mask skipped for 'no subject' on the current photo."""
+    photo = make_live_photo(tmp_path / "live")
+    window = make_window(tmp_path, monkeypatch)
+    window._toggle_live_mode()
+    pipeline = window._live.pipeline
+    window._current_path = photo
+    skipped = {"message": NO_SUBJECT_MESSAGE}
+    monkeypatch.setattr(pipeline, "skip_message", lambda *_: skipped["message"])
+
+    window._refresh_live_failure()
+    assert window.view._badge is None  # Mask is off
+
+    pipeline.set_settings(pipeline.settings.with_enabled(StageId.MASK, True))
+    window._refresh_live_failure()
+    assert window.view._badge is not None
+    assert "no subject" in window.view._badge
+
+    skipped["message"] = ""
+    window._refresh_live_failure()
+    assert window.view._badge is None
     window.close()

@@ -88,7 +88,8 @@ LibRaw via `rawpy`: camera white balance, no tone curve, cropped to the active a
 - **Mask** → `mask/<name>.tif`: Apple Vision (`VNGenerateForegroundInstanceMaskRequest`,
   macOS only, `pyobjc-framework-Vision`) finds the main subject; everything outside it is
   scaled by -0.25 stop in linear light. No subject → `StageResult.skipped` plus a warning
-  ("Mask could not be applied") in the ⚠ list.
+  ("Mask could not be applied") in the ⚠ list, and the viewer shows a small amber "Mask not
+  applied: no subject detected" badge (top right) for that photo while Mask is enabled.
 - **Lighting/Color** → `output/<name>.jpg` (quality 95, 4:4:4, sRGB profile): reuses
   `editor/lighting.py` (`estimate_adjustment`/`apply_adjustment`/`gains_from_kelvin`). Settings:
   `auto_lighting` (default on) and `color_temperature` (Kelvin override, default none).

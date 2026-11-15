@@ -60,6 +60,7 @@ class CropView(QWidget):
         self._show_grid = True
         self._warning: str | None = None
         self._failed: str | None = None
+        self._badge: str | None = None
 
     def set_image(self, image: QImage, image_width: int, image_height: int) -> None:
         """Set the displayed preview and source dimensions."""
@@ -162,6 +163,11 @@ class CropView(QWidget):
         self._failed = text
         self.update()
 
+    def set_badge(self, text: str | None) -> None:
+        """Show a small, unobtrusive note in the top-right corner, or clear it with `None`."""
+        self._badge = text
+        self.update()
+
     def paintEvent(self, event: object) -> None:
         """Paint the image surface, then the warning watermark on top."""
         painter = QPainter(self)
@@ -170,6 +176,25 @@ class CropView(QWidget):
             self._draw_failed(painter, self._failed)
         if self._warning:
             self._draw_warning(painter, self._warning)
+        if self._badge:
+            self._draw_badge(painter, self._badge)
+
+    def _draw_badge(self, painter: QPainter, text: str) -> None:
+        """Draw a small translucent label in the top-right corner."""
+        painter.save()
+        font = painter.font()
+        font.setPixelSize(12)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        pad = 6
+        width = metrics.horizontalAdvance(text) + pad * 2
+        box = QRectF(self.width() - width - 12, 12, width, metrics.height() + pad)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(60, 60, 60, 170))
+        painter.drawRoundedRect(box, 4, 4)
+        painter.setPen(QColor("#ffcc66"))
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
 
     def _draw_failed(self, painter: QPainter, text: str) -> None:
         """Gray out the whole canvas and draw a large red warning in its center."""
