@@ -37,7 +37,8 @@ from PySide6.QtGui import (
     QImage,
     QImageIOHandler,
     QImageReader,
-    QKeyEvent,    QKeySequence,
+    QKeyEvent,
+    QKeySequence,
     QLinearGradient,
     QPainter,
     QPixmap,
@@ -52,11 +53,11 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
-    QPlainTextEdit,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMenu,
+    QPlainTextEdit,
     QProgressBar,
     QSizePolicy,
     QSlider,
@@ -96,10 +97,10 @@ from photo_workflow.editor.metadata import (
     extract_preview,
     read_as_shot_kelvin,
     read_photo_metadata,
+    read_photo_notes,
     read_photo_ratings,
     read_photos_with_notes,
     write_photo_crop,
-    read_photo_notes,
     write_photo_label,
     write_photo_notes,
     write_photo_rating,
@@ -637,7 +638,12 @@ class NotesDialog(QDialog):
         self.editor.selectAll()
 
     def eventFilter(self, watched: object, event: object) -> bool:
-        """Accept on Enter; Shift+Enter is ignored so notes stay one paragraph."""
+        """
+        Accept on Enter; Shift+Enter is ignored so notes stay one paragraph.
+
+        Returns:
+            Whether the event was consumed.
+        """
         if (
             watched is self.editor
             and isinstance(event, QKeyEvent)
