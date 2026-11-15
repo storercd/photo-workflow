@@ -42,3 +42,9 @@ Things deliberately deferred during the Live mode proof of concept. All Live fea
 - [ ] Test against real R2 credentials and bucket.
 - [ ] Write a manifest (`collection.json`) to the bucket.
 - [ ] Possibly build a viewing website for the synced collection.
+
+## UI
+
+- [ ] Optimize the editor toolbar. It has so many controls (Live mode added several) that the
+      window cannot be shrunk much. Options: an overflow/extension menu, grouping, icon-only
+      buttons, moving Live controls into the status panel, or a responsive/collapsing layout.
