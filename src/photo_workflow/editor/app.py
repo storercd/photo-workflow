@@ -2124,7 +2124,7 @@ class CropWindow(QMainWindow):
 
     def _finish_wb_edit(self) -> None:
         """Apply a typed Kelvin value to all photos, then restore the label."""
-        if not self.wb_edit.isVisible():
+        if self.wb_edit.isHidden():
             return
         text = self.wb_edit.text().strip().lower().removesuffix("k").strip()
         self.wb_edit.hide()

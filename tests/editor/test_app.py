@@ -1471,7 +1471,7 @@ def test_typed_kelvin_value_fixes_white_balance(monkeypatch) -> None:
     assert window._wb_override == 4200.0
     assert window.wb_slider.value() == 4200
     assert window.wb_fixed_button.isChecked()
-    assert not window.wb_edit.isVisible()
+    assert window.wb_edit.isHidden()
 
     window._begin_wb_edit()
     window.wb_edit.setText("99999")
