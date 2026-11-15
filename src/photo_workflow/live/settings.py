@@ -11,6 +11,7 @@ import keyring
 from keyring.errors import KeyringError
 from PySide6.QtCore import QSettings
 
+from photo_workflow.editor.lighting import MAX_KELVIN, MIN_KELVIN
 from photo_workflow.editor.model import parse_aspect_ratios
 from photo_workflow.live.layout import LiveLayout, default_live_folder
 from photo_workflow.live.stages import SPECS, STAGE_ORDER, StageId
@@ -107,8 +108,14 @@ def validate_live_settings(settings: LiveSettings) -> None:
     Check Live settings are usable.
 
     Raises:
-        ValueError: If the port, minimum rating or acceptable aspect ratios are invalid.
+        ValueError: If the port, minimum rating, color temperature or acceptable aspect
+            ratios are invalid.
     """
+    kelvin = settings.color_temperature
+    if kelvin is not None and not MIN_KELVIN <= kelvin <= MAX_KELVIN:
+        raise ValueError(
+            f"Color temperature must be between {MIN_KELVIN:.0f} and {MAX_KELVIN:.0f} K"
+        )
     if not 0 <= settings.r2_min_rating <= 5:
         raise ValueError("Cloud Sync minimum rating must be between 0 and 5 stars")
     if not 1 <= settings.ftp_port <= 65535:

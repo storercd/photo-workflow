@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
@@ -147,6 +148,7 @@ class LiveStatusPanel(QFrame):
         self.toggles: dict[StageId, QCheckBox] = {}
         self.count_labels: dict[StageId, QLabel] = {}
         self.error_labels: dict[StageId, QLabel] = {}
+        self.info_labels: dict[StageId, QLabel] = {}
         for row, stage in enumerate(STAGE_ORDER):
             spec = SPECS[stage]
             toggle = QCheckBox(spec.label)
@@ -164,9 +166,16 @@ class LiveStatusPanel(QFrame):
             count = QLabel("0")
             count.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             count.setStyleSheet(COUNT_STYLE)
-            grid.addWidget(toggle, row, 0)
-            grid.addWidget(error, row, 1)
-            grid.addWidget(count, row, 2)
+            info = QLabel()
+            info.setWordWrap(True)
+            info.setStyleSheet("color: #8c9299; font-size: 11px; padding-left: 20px;")
+            info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            info.setVisible(False)
+            grid.addWidget(toggle, row * 2, 0)
+            grid.addWidget(error, row * 2, 1)
+            grid.addWidget(count, row * 2, 2)
+            grid.addWidget(info, row * 2 + 1, 0, 1, 3)
+            self.info_labels[stage] = info
             self.toggles[stage] = toggle
             self.error_labels[stage] = error
             self.count_labels[stage] = count
@@ -192,8 +201,9 @@ class LiveStatusPanel(QFrame):
         warnings: list[tuple[int, str, str]],
         *,
         blink_on: bool,
+        info: Mapping[StageId, str] | None = None,
     ) -> None:
-        """Show counts, error flags, blinking waiting counts, and the warning list."""
+        """Show counts, error flags, blinking waiting counts, stage info, and the warning list."""
         for summary in snapshot.stages:
             label = self.count_labels[summary.stage]
             label.setText(str(summary.count))
@@ -202,6 +212,10 @@ class LiveStatusPanel(QFrame):
             flag = self.error_labels[summary.stage]
             flag.setVisible(bool(summary.halted))
             flag.setToolTip(summary.halted)
+        for stage, label in self.info_labels.items():
+            text = (info or {}).get(stage, "")
+            label.setText(text)
+            label.setVisible(bool(text))
         self.completed_label.setText(f"Completed: {snapshot.completed}")
         self._set_warnings(warnings)
 

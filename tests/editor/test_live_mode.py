@@ -118,3 +118,22 @@ def test_clean_wipes_live_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert not photo.exists()
     assert window._photos == []
     window.close()
+
+
+def test_status_panel_shows_stage_info_only_when_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A running service's status line (the FTP address) shows under its stage row."""
+    make_live_photo(tmp_path / "live")
+    window = make_window(tmp_path, monkeypatch)
+    window._toggle_live_mode()
+    panel = window.live_dock.panel
+    snapshot = window._live.pipeline.snapshot()
+
+    panel.update_status(snapshot, [], blink_on=False, info={StageId.FTP: "FTP at 10.0.0.2:2121"})
+    assert panel.info_labels[StageId.FTP].text() == "FTP at 10.0.0.2:2121"
+    assert not panel.info_labels[StageId.FTP].isHidden()
+
+    panel.update_status(snapshot, [], blink_on=False)
+    assert panel.info_labels[StageId.FTP].isHidden()
+    window.close()

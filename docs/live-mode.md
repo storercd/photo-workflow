@@ -139,13 +139,17 @@ Uploads are staged in `incoming/.ftp-uploading` and moved to `incoming` only whe
 transfer completes, then passed to `host.ingest`. Only loopback, private and link-local
 peers may connect; the account can upload but not delete or create folders. A dropped
 connection mid-upload is discarded and shown as a warning. Passive data ports are
-60000–60099. The address/port are logged when the server starts (`FtpServer.status_text`);
-changing credentials or the port takes effect after toggling FTP off and on.
+60000–60099. The address and port to enter on the camera are shown under the FTP row of the
+status panel while the server runs (`StageImplementation.status_text`, polled through
+`LivePipeline.stage_info`) and logged at start; changing credentials or the port takes effect
+after toggling FTP off and on.
+
 ## Export and Cloud Sync
 
-**Export** (`features/export.py`) renders each photo's best source (a finished image, else
-the RAW's largest embedded JPEG; no RAW developer is bundled) with the crop and straighten
-angle from its XMP sidecar into a q95 JPEG in `export/`.
+**Export** (`features/export.py`) renders each photo's best source (the Lighting/Color JPEG,
+else the Mask or Denoise 16-bit linear TIFF encoded to sRGB, else the RAW's largest embedded
+JPEG; no RAW developer is bundled) with the crop and straighten angle from its XMP sidecar
+(written by AutoCrop or by hand) into a q95 JPEG in `export/`.
 
 **Cloud Sync** (`features/cloud_sync.py`) follows `storercd/photo-portal`'s `sync/sync.py`:
 for each exported image it uploads `photos/{thumb,med,web,full}/<stem>-<hash>.jpg` (long

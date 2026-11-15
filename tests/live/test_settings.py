@@ -145,3 +145,11 @@ def test_minimum_rating_round_trips_and_is_validated(tmp_path: Path) -> None:
     assert load_live_settings(store, MemorySecrets()).r2_min_rating == 3
     with pytest.raises(ValueError, match="minimum rating"):
         validate_live_settings(LiveSettings(r2_min_rating=6))
+
+
+def test_color_temperature_must_be_in_the_supported_range() -> None:
+    """A fixed Kelvin outside the editor's range is rejected; none is fine."""
+    validate_live_settings(LiveSettings(color_temperature=None))
+    validate_live_settings(LiveSettings(color_temperature=5200.0))
+    with pytest.raises(ValueError, match="Color temperature"):
+        validate_live_settings(LiveSettings(color_temperature=1500.0))

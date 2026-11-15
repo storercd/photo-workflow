@@ -153,6 +153,15 @@ class StageImplementation:
     def stop(self) -> None:
         """Stop the feature's service when it is switched off."""
 
+    def status_text(self) -> str:
+        """
+        Describe the running service for the status panel (shown while the feature is on).
+
+        Returns:
+            A short line such as connection details, or an empty string for none.
+        """
+        return ""
+
 
 class StageRegistry:
     """Maps stages to their implementations."""

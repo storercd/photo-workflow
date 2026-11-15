@@ -2077,6 +2077,7 @@ class CropWindow(QMainWindow):
                 self._live.pipeline.snapshot(),
                 warning_rows(self._live),
                 blink_on=self._live.blink_on,
+                info=self._live.pipeline.stage_info(),
             )
 
     def _live_changed(self) -> None:

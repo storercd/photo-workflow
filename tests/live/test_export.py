@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -12,6 +13,7 @@ from photo_workflow.editor.metadata import PhotoMetadata
 from photo_workflow.editor.model import CropRect
 from photo_workflow.live.api import StageRegistry
 from photo_workflow.live.features import export
+from photo_workflow.live.imaging import save_linear_rgb
 from photo_workflow.live.layout import LiveLayout
 from photo_workflow.live.settings import LiveSettings
 from photo_workflow.live.stages import StageId, StageStatus
@@ -102,6 +104,17 @@ def test_load_image_source_applies_its_own_orientation(tmp_path: Path) -> None:
 
     assert image.size == (20, 40)
     assert exif[export.EXIF_ORIENTATION_TAG] == 1
+
+
+def test_load_linear_tiff_intermediate_is_encoded_to_srgb(tmp_path: Path) -> None:
+    """A 16-bit linear TIFF (Lighting off) is exported as a display-referred image."""
+    source = tmp_path / "mask.tif"
+    save_linear_rgb(source, np.full((4, 6, 3), 13926, dtype=np.uint16))  # ~0.2125 linear
+
+    image, _ = export.load_source_image(source, 1)
+
+    assert image.size == (6, 4)
+    assert image.getpixel((0, 0))[0] == pytest.approx(127, abs=2)
 
 
 def test_load_raw_uses_the_raw_orientation_when_the_preview_has_none(

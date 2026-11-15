@@ -94,6 +94,7 @@ class FtpServer:
         self._port = settings.ftp_port
         self._username = settings.ftp_username
         self._password = settings.ftp_password
+        self._address = ""
         self._server: FTPServer | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -105,7 +106,8 @@ class FtpServer:
 
     def status_text(self) -> str:
         """Return the connection details to enter on the camera."""
-        return f"FTP server running at {local_address()}:{self.port} (passive mode)"
+        address = self._address or local_address()
+        return f"FTP server running at {address}:{self.port} (passive mode)"
 
     def start(self) -> None:
         """
@@ -113,6 +115,7 @@ class FtpServer:
 
         A port that cannot be bound raises `OSError`, which halts the feature.
         """
+        self._address = local_address()
         self._staging.mkdir(parents=True, exist_ok=True)
         for leftover in self._staging.iterdir():
             leftover.unlink(missing_ok=True)
@@ -206,6 +209,10 @@ class FtpStage(StageImplementation):
     def server(self) -> FtpServer | None:
         """The running server, or `None` when the feature is off."""
         return self._server
+
+    def status_text(self) -> str:
+        """Return the address and port to enter on the camera while the server runs."""
+        return self._server.status_text() if self._server is not None else ""
 
     def start(self, host: StageHost) -> None:
         """Start the server (restarting it if already running)."""

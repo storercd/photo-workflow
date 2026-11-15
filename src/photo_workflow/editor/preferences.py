@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from photo_workflow.config import DEFAULT_CONFIG_PATH
+from photo_workflow.editor.lighting import MAX_KELVIN, MIN_KELVIN
 from photo_workflow.editor.model import (
     DEFAULT_ASPECT_RATIOS,
     AspectRatio,
@@ -422,6 +423,18 @@ class PreferencesDialog(QDialog):
             "Applies the automatic crop to every file in the Live folder, replacing crops "
             "drawn by hand"
         )
+        self.auto_lighting_check = QCheckBox("Automatic lighting")
+        self.auto_lighting_check.setChecked(live.auto_lighting)
+        self.color_temperature_spin = QSpinBox()
+        self.color_temperature_spin.setRange(0, int(MAX_KELVIN))
+        self.color_temperature_spin.setSingleStep(100)
+        self.color_temperature_spin.setSuffix(" K")
+        self.color_temperature_spin.setSpecialValueText("As estimated")
+        self.color_temperature_spin.setValue(round(live.color_temperature or 0))
+        self.color_temperature_spin.setToolTip(
+            f"Fixed white balance for Lighting/Color ({int(MIN_KELVIN)}–{int(MAX_KELVIN)} K); "
+            "0 keeps the estimated or as-shot value"
+        )
         form = QFormLayout()
         form.addRow("Live folder", folder_row)
         form.addRow("FTP port", self.ftp_port_spin)
@@ -432,6 +445,8 @@ class PreferencesDialog(QDialog):
         form.addRow("R2 secret access key", self.r2_secret_edit)
         form.addRow("R2 bucket", self.r2_bucket_edit)
         form.addRow("Cloud Sync minimum stars", self.r2_min_rating_spin)
+        form.addRow("", self.auto_lighting_check)
+        form.addRow("Color temperature", self.color_temperature_spin)
         form.addRow("Auto-crop aspect ratios", self.autocrop_ratios_edit)
         form.addRow("", self.autocrop_ball_check)
         form.addRow("", self.autocrop_force_check)
@@ -466,6 +481,8 @@ class PreferencesDialog(QDialog):
             r2_secret_access_key=self.r2_secret_edit.text(),
             r2_bucket=self.r2_bucket_edit.text().strip(),
             r2_min_rating=self.r2_min_rating_spin.value(),
+            auto_lighting=self.auto_lighting_check.isChecked(),
+            color_temperature=self.color_temperature_spin.value() or None,
             autocrop_ratios=tuple(split_ratio_text(self.autocrop_ratios_edit.text())),
             autocrop_ball=self.autocrop_ball_check.isChecked(),
             autocrop_force=self.autocrop_force_check.isChecked(),

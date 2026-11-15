@@ -402,6 +402,21 @@ class LivePipeline:
                     return ViewSource(output, stage)
         return ViewSource(photo)
 
+    def stage_info(self) -> dict[StageId, str]:
+        """
+        Return the status lines of running feature services (for example the FTP address).
+
+        Returns:
+            Non-empty `status_text` of every enabled stage, keyed by stage.
+        """
+        info = {}
+        for stage in STAGE_ORDER:
+            if self.settings.is_enabled(stage) and stage not in self._state.halted:
+                text = self._registry.get(stage).status_text()
+                if text:
+                    info[stage] = text
+        return info
+
     # ----- running ------------------------------------------------------------------
 
     def _run_job(self, job: StageJob, generation: int) -> None:

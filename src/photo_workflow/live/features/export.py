@@ -13,6 +13,7 @@ from PIL import Image, ImageOps
 from photo_workflow.editor.metadata import extract_preview, read_photo_metadata
 from photo_workflow.editor.model import CropRect
 from photo_workflow.live.api import StageImplementation, StageJob, StageRegistry, StageResult
+from photo_workflow.live.imaging import LINEAR_SUFFIXES, load_srgb8
 from photo_workflow.live.layout import IMAGE_SUFFIXES
 from photo_workflow.live.stages import StageId
 
@@ -69,10 +70,10 @@ def load_source_image(source: Path, orientation: int) -> tuple[Image.Image, Imag
     """
     Load the best available source as an upright image.
 
-    Finished image outputs are opened directly. For RAW files (the original or a
-    denoise intermediate) the largest embedded JPEG is used, since no RAW developer is
-    bundled; `orientation` is the RAW's EXIF orientation, applied when the embedded
-    JPEG carries none.
+    Finished image outputs are opened directly; the 16-bit linear TIFF intermediates of
+    Denoise and Mask (used when Lighting/Color is off) are encoded to sRGB. For the RAW
+    original the largest embedded JPEG is used, since no RAW developer is bundled;
+    `orientation` is the RAW's EXIF orientation, applied when the embedded JPEG carries none.
 
     Args:
         source: The image or RAW file to render.
@@ -84,6 +85,8 @@ def load_source_image(source: Path, orientation: int) -> tuple[Image.Image, Imag
     Raises:
         RuntimeError: If no embedded preview can be read from a RAW source.
     """
+    if source.suffix.lower() in LINEAR_SUFFIXES:
+        return Image.fromarray(load_srgb8(source)), Image.Exif()
     if source.suffix.lower() in IMAGE_SUFFIXES:
         with Image.open(source) as opened:
             return _upright(opened, 1)
