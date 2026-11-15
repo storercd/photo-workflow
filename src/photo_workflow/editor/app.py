@@ -132,7 +132,9 @@ TOGGLE_LIVE_PREVIEW_KEY = Qt.Key.Key_P
 XMP_DIRTY_WARNING = (
     "⚠ LIGHTROOM EDITS NOT SAVED TO XMP\nSave metadata in Lightroom (Cmd+S) first"
 )
-FLAG_COLOR_KEY = Qt.Key.Key_F
+FLAG_COLOR_KEY = Qt.Key.Key_G
+FULL_SCREEN_KEY = Qt.Key.Key_F
+TOGGLE_TOOLBARS_KEY = Qt.Key.Key_Tab
 COPY_PREVIOUS_CROP_KEY = Qt.Key.Key_C
 COLOR_LABELS = ("Red", "Yellow", "Green", "Blue", "Purple")
 COLOR_LABEL_HEX = {
@@ -767,7 +769,9 @@ class CropWindow(QMainWindow):
         """Construct the compact navigation bar and crop canvas."""
         container = CropDropArea()
         layout = QVBoxLayout(container)
-        toolbar = QHBoxLayout()
+        self.toolbar_widget = QWidget()
+        toolbar = QHBoxLayout(self.toolbar_widget)
+        toolbar.setContentsMargins(0, 0, 0, 0)
         self.open_button = QToolButton()
         self.open_button.setText("Open")
         self.open_button.setIcon(qta.icon("fa5s.folder-open"))
@@ -1052,7 +1056,7 @@ class CropWindow(QMainWindow):
         preview_layout.addWidget(self.view, 1)
         preview_layout.addWidget(result_panel, 1)
         result_panel.setVisible(False)
-        layout.addLayout(toolbar)
+        layout.addWidget(self.toolbar_widget)
         layout.addWidget(self.preview_container, 1)
         self.setCentralWidget(container)
         self._build_menu()
@@ -1470,11 +1474,31 @@ class CropWindow(QMainWindow):
         self._add_shortcut(BALL_DETECTION_KEY, self.ball_button.click)
         self._add_shortcut(FLAG_COLOR_KEY, self._apply_flag_color)
         self._add_shortcut(COPY_PREVIOUS_CROP_KEY, self._copy_previous_crop)
+        self._add_shortcut(FULL_SCREEN_KEY, self._toggle_full_screen)
+        self._add_shortcut(Qt.Key.Key_Escape, self._exit_full_screen)
+        self._add_shortcut(TOGGLE_TOOLBARS_KEY, self._toggle_toolbars)
         self._add_shortcut(QKeySequence.StandardKey.Open, self._choose_folder)
         self._add_shortcut(QKeySequence.StandardKey.Save, self._start_save)
         self._build_ratio_shortcuts()
         self._build_review_shortcuts()
         self._build_alternate_hotkeys()
+
+    def _toggle_full_screen(self) -> None:
+        """Enter full screen, or leave it when already full screen."""
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def _exit_full_screen(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+
+    def _toggle_toolbars(self) -> None:
+        """Show or hide the toolbar and status bar."""
+        visible = not self.toolbar_widget.isVisible()
+        self.toolbar_widget.setVisible(visible)
+        self.statusBar().setVisible(visible and self._debug)
 
     def _build_review_shortcuts(self) -> None:
         """Install 0-5 (star rating) and 6-9 (color label) hotkeys used in Review mode."""
