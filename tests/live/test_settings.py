@@ -76,6 +76,8 @@ def test_settings_round_trip_keeps_secrets_out_of_plain_settings(tmp_path: Path)
         r2_secret_access_key="r2-secret",
         r2_bucket="bucket",
         autocrop_ratios=("1:1", "3:2"),
+        autocrop_force=True,
+        autocrop_ball=True,
     ).with_enabled(StageId.DENOISE, True)
 
     save_live_settings(store, live, secrets)

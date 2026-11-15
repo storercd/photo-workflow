@@ -245,6 +245,9 @@ class LivePipeline:
             ]
             for stage in changed:
                 self._apply_toggle(stage, settings.is_enabled(stage))
+            if _autocrop_options(previous) != _autocrop_options(settings):
+                for photo in self._state.images:
+                    self._invalidate(photo, StageId.AUTOCROP, include_self=True)
         self._call_hooks(changed)
         self.pump()
 
@@ -591,3 +594,7 @@ def _signature(path: Path) -> tuple[int, float]:
     except OSError:
         return (-1, 0.0)
     return (stat.st_size, stat.st_mtime)
+
+
+def _autocrop_options(settings: LiveSettings) -> tuple[tuple[str, ...], bool, bool]:
+    return (settings.autocrop_ratios, settings.autocrop_ball, settings.autocrop_force)
