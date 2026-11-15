@@ -50,7 +50,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
-    QGroupBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -59,7 +59,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QSizePolicy,
     QSlider,
-    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -67,6 +66,7 @@ from PySide6.QtWidgets import (
 )
 
 from photo_workflow.config import load_workflow_config
+from photo_workflow.editor import toolbar_icons
 from photo_workflow.editor.ball import (
     DEFAULT_SENSITIVITY,
     SENSITIVITY_HIGH,
@@ -864,52 +864,117 @@ class CropWindow(QMainWindow):
         else:
             self._settings.remove("last_photo")
 
+    @staticmethod
+    def _divider() -> QFrame:
+        """
+        Create a 1 px vertical toolbar divider.
+
+        Returns:
+            The divider widget.
+        """
+        divider = QFrame()
+        divider.setProperty("role", "divider")
+        divider.setFixedSize(1, 20)
+        return divider
+
+    @staticmethod
+    def _value_field(text: str, widest: str) -> QLineEdit:
+        """
+        Create an inset, right-aligned, directly editable value field.
+
+        Returns:
+            A line edit sized to fit `widest`.
+        """
+        field = QLineEdit(text)
+        field.setProperty("role", "value")
+        field.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        field.setFixedWidth(field.fontMetrics().horizontalAdvance(widest) + 24)
+        return field
+
+    def _toolbar_group(
+        self, label: str, widgets: list[QWidget], *, divider: bool = True
+    ) -> QWidget:
+        """
+        Build a labeled toolbar group, optionally preceded by a divider.
+
+        Returns:
+            One widget holding the divider, the label and the controls, so a mode can hide it.
+        """
+        group = QWidget()
+        layout = QHBoxLayout(group)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        if divider:
+            layout.addSpacing(2)
+            layout.addWidget(self._divider())
+            layout.addSpacing(2)
+        if label:
+            caption = QLabel(label)
+            caption.setProperty("role", "group")
+            layout.addWidget(caption)
+        for widget in widgets:
+            layout.addWidget(widget)
+        return group
+
     def _build_ui(self) -> None:
         """Construct the compact navigation bar and crop canvas."""
         container = CropDropArea()
         layout = QVBoxLayout(container)
         self.toolbar_widget = QWidget()
-        toolbar = QHBoxLayout(self.toolbar_widget)
-        toolbar.setContentsMargins(0, 0, 0, 0)
+        self.toolbar_widget.setObjectName("toolbarRoot")
+        self.toolbar_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.toolbar_widget.setStyleSheet(toolbar_icons.TOOLBAR_STYLE)
+        toolbar_rows = QVBoxLayout(self.toolbar_widget)
+        toolbar_rows.setContentsMargins(8, 6, 8, 6)
+        toolbar_rows.setSpacing(6)
+        self.toolbar_row1 = QHBoxLayout()
+        self.toolbar_row1.setSpacing(6)
+        self.toolbar_row2 = QHBoxLayout()
+        self.toolbar_row2.setSpacing(6)
+        toolbar_rows.addLayout(self.toolbar_row1)
+        toolbar_rows.addLayout(self.toolbar_row2)
         self.open_button = QToolButton()
         self.open_button.setText("Open")
         self.open_button.setIcon(qta.icon("fa5s.folder-open"))
         self.open_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.open_button.setToolTip(f"Open a photo folder ({shortcut_modifier()}O)")
         self.open_button.setAccessibleName("Open photo folder")
+        self.open_button.setFixedSize(74, 28)
         self.previous_button = QToolButton()
-        self.previous_button.setIcon(qta.icon("fa5s.arrow-left"))
+        self.previous_button.setIcon(qta.icon("fa5s.chevron-left", color="#d8d8dc"))
         self.previous_button.setToolTip("Previous photo (←)")
         self.previous_button.setAccessibleName("Previous photo")
         self.next_button = QToolButton()
-        self.next_button.setIcon(qta.icon("fa5s.arrow-right"))
+        self.next_button.setIcon(qta.icon("fa5s.chevron-right", color="#d8d8dc"))
         self.next_button.setToolTip("Next photo (→)")
         self.next_button.setAccessibleName("Next photo")
         self.position_label = ClickableLabel("")
+        self.position_label.setProperty("role", "filename")
+        self.position_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.position_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.position_label.setToolTip("Reveal the current photo in the file manager")
         self.position_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.label_indicator = QLabel()
         self.label_indicator.setFixedSize(10, 10)
         self.label_indicator.setVisible(False)
         self.position_count_label = ClickableLabel("No folder open")
+        self.position_count_label.setProperty("role", "counter")
         self.position_count_label.clicked.connect(self._open_live_folder)
         self.position_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         navigation_panel = QWidget()
-        navigation_layout = QVBoxLayout(navigation_panel)
+        navigation_layout = QHBoxLayout(navigation_panel)
         navigation_layout.setContentsMargins(0, 0, 0, 0)
-        navigation_layout.setSpacing(1)
+        navigation_layout.setSpacing(4)
+        navigation_layout.addWidget(self.previous_button)
         navigation_layout.addWidget(self.position_count_label)
-        navigation_buttons = QHBoxLayout()
-        navigation_buttons.setContentsMargins(0, 0, 0, 0)
-        navigation_buttons.setSpacing(2)
-        navigation_buttons.addWidget(self.previous_button)
-        navigation_buttons.addWidget(self.next_button)
-        navigation_layout.addLayout(navigation_buttons)
+        navigation_layout.addWidget(self.next_button)
         self.star_filter_button = QToolButton()
         self.star_filter_button.setIcon(qta.icon("fa5s.star", color="#e5bd48"))
         self.star_filter_button.setText("*")
         self.star_filter_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.star_filter_button.setFixedWidth(52)
+        self.star_filter_button.setFixedSize(46, 28)
         self.star_filter_button.setToolTip("Filter by minimum star rating")
         self.star_filter_button.setAccessibleName("Filter by star rating")
         self.star_filter_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -934,8 +999,7 @@ class CropWindow(QMainWindow):
         self.star_filter_button.setMenu(star_menu)
         self.color_filter_button = QToolButton()
         self.color_filter_button.setIcon(self._color_filter_icon(None))
-        self.color_filter_button.setFixedSize(32, 28)
-        self.color_filter_button.setAutoRaise(True)
+        self.color_filter_button.setFixedSize(46, 28)
         self.color_filter_button.setToolTip("Filter by Lightroom color label")
         self.color_filter_button.setAccessibleName("Filter by color label")
         self.color_filter_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -964,8 +1028,7 @@ class CropWindow(QMainWindow):
             self._color_filter_actions[label_value] = action
         self.color_filter_button.setMenu(color_menu)
         self.flag_button = QToolButton()
-        self.flag_button.setFixedSize(32, 28)
-        self.flag_button.setAutoRaise(True)
+        self.flag_button.setFixedSize(28, 28)
         self.flag_button.setAccessibleName("Flag current photo with color label")
         self.flag_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.flag_button.clicked.connect(self._apply_flag_color)
@@ -988,41 +1051,30 @@ class CropWindow(QMainWindow):
         self.rotation_slider.setRange(-450, 450)
         self.rotation_slider.setSingleStep(1)
         self.rotation_slider.setPageStep(10)
-        self.rotation_slider.setFixedWidth(150)
+        self.rotation_slider.setFixedWidth(110)
         self.rotation_slider.setToolTip("Rotate the photo beneath the crop frame")
         self.rotation_slider.setEnabled(False)
-        self.rotation_value = QLabel("0.0°")
-        self.rotation_value.setFixedWidth(
-            self.rotation_value.fontMetrics().horizontalAdvance("-45.0°") + 4
-        )
-        self.rotation_value.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
+        self.rotation_value = self._value_field("0.0°", "-45.0°")
+        self.rotation_value.setToolTip("Type an angle in degrees, then press Enter")
+        self.rotation_value.setAccessibleName("Rotation angle")
+        self.rotation_value.setEnabled(False)
         self.rotation_reset = QToolButton()
-        self.rotation_reset.setIcon(
-            self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
-        )
+        self.rotation_reset.setIcon(toolbar_icons.angle_reset_icon())
         self.rotation_reset.setToolTip("Reset rotation")
         self.rotation_reset.setAccessibleName("Reset rotation")
         self.rotation_reset.setEnabled(False)
-        self.angle_group = QGroupBox("Angle")
-        angle_layout = QHBoxLayout(self.angle_group)
-        angle_layout.setContentsMargins(0, 0, 0, 0)
-        angle_layout.setSpacing(4)
-        angle_layout.addWidget(self.rotation_slider)
-        angle_layout.addWidget(self.rotation_value)
-        angle_layout.addWidget(self.rotation_reset)
+        self.rotation_reset.setFixedSize(28, 28)
+        self.rotation_reset.setIconSize(QSize(20, 20))
         self.auto_level_button = QToolButton()
-        self.auto_level_button.setIcon(qta.icon("fa5s.magic", color="#45d6d0"))
+        self.auto_level_button.setIcon(toolbar_icons.auto_level_icon())
         self.auto_level_button.setToolTip(
             f"Auto-level to the strongest detected line ({key_hint(AUTO_LEVEL_KEY)})"
         )
         self.auto_level_button.setAccessibleName("Auto level")
         self.auto_level_button.setFixedSize(28, 28)
-        self.auto_level_button.setAutoRaise(True)
         self.auto_level_button.setEnabled(False)
         self.show_horizon_button = QToolButton()
-        self.show_horizon_button.setIcon(qta.icon("fa5s.eye-slash", color="#f4f2ec"))
+        self.show_horizon_button.setIcon(toolbar_icons.guides_icon())
         self.show_horizon_button.setToolTip(
             "Show detected horizon candidates without changing the angle "
             f"({key_hint(SHOW_HORIZON_KEY)})"
@@ -1030,15 +1082,20 @@ class CropWindow(QMainWindow):
         self.show_horizon_button.setAccessibleName("Show horizon candidates")
         self.show_horizon_button.setCheckable(True)
         self.show_horizon_button.setFixedSize(28, 28)
-        self.show_horizon_button.setAutoRaise(True)
         self.show_horizon_button.setEnabled(False)
-        for control in (
-            self.auto_level_button,
-            self.show_horizon_button,
-        ):
-            angle_layout.addWidget(control)
+        self.angle_group = self._toolbar_group(
+            "ANGLE",
+            [
+                self.rotation_slider,
+                self.rotation_value,
+                self.rotation_reset,
+                self.auto_level_button,
+                self.show_horizon_button,
+            ],
+            divider=False,
+        )
         self.ball_button = QToolButton()
-        self.ball_button.setIcon(qta.icon("fa5s.volleyball-ball", color="#f4f2ec"))
+        self.ball_button.setIcon(toolbar_icons.ball_icon())
         self.ball_button.setToolTip(
             f"Detect ball ({key_hint(BALL_DETECTION_KEY)}); "
             "right-click for ring color and sensitivity"
@@ -1047,15 +1104,14 @@ class CropWindow(QMainWindow):
         self.ball_button.setAccessibleName("Detect ball")
         self.ball_button.setCheckable(True)
         self.ball_button.setFixedSize(28, 28)
-        self.ball_button.setAutoRaise(True)
         self.auto_light_button = QToolButton()
-        self.auto_light_button.setIcon(qta.icon("fa5s.magic", color="#f4f2ec"))
+        self.auto_light_button.setIcon(toolbar_icons.wand_icon())
         self.auto_light_button.setToolTip(f"Show original ({key_hint(AUTO_LIGHT_KEY)})")
         self.auto_light_button.setAccessibleName("Auto-adjust lighting")
         self.auto_light_button.setCheckable(True)
         self.auto_light_button.setChecked(True)
         self.auto_light_button.setFixedSize(28, 28)
-        self.auto_light_button.setAutoRaise(True)
+        self.wand_group = self._toolbar_group("", [self.auto_light_button])
         self.wb_slider = QSlider(Qt.Orientation.Horizontal)
         self.wb_slider.setRange(WB_SLIDER_MIN_KELVIN, WB_SLIDER_MAX_KELVIN)
         self.wb_slider.setSingleStep(100)
@@ -1066,104 +1122,82 @@ class CropWindow(QMainWindow):
             "White balance in Kelvin (lower = cooler, higher = warmer). Shows the automatic value; "
             "moving it fixes the value for all photos"
         )
-        self.wb_value = ClickableLabel(f"{round(REFERENCE_KELVIN)}K")
-        value_width = self.wb_value.fontMetrics().horizontalAdvance("12000K") + 4
-        self.wb_value.setFixedWidth(value_width)
-        self.wb_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.wb_value.setCursor(Qt.CursorShape.IBeamCursor)
-        self.wb_value.setToolTip("Click to type a color temperature in Kelvin, then press Enter")
-        self.wb_edit = QLineEdit()
-        self.wb_edit.setFixedWidth(value_width + 12)
-        self.wb_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.wb_edit.hide()
+        self.wb_value = self._value_field(f"{round(REFERENCE_KELVIN)}K", "12000K")
+        self.wb_value.setToolTip("Type a color temperature in Kelvin, then press Enter")
+        self.wb_value.setAccessibleName("Color temperature")
         self.wb_fixed_button = QToolButton()
-        self.wb_fixed_button.setIcon(qta.icon("fa5s.thermometer-half", color="#f4f2ec"))
+        self.wb_fixed_button.setIcon(toolbar_icons.thermometer_icon())
         self.wb_fixed_button.setToolTip("Use this white-balance value for all photos")
         self.wb_fixed_button.setAccessibleName("Fix white balance for all photos")
         self.wb_fixed_button.setCheckable(True)
         self.wb_fixed_button.setFixedSize(28, 28)
-        self.wb_fixed_button.setAutoRaise(True)
         self._wb_timer = QTimer(self)
         self._wb_timer.setSingleShot(True)
         self._wb_timer.setInterval(120)
         self._wb_timer.timeout.connect(self._apply_wb_override)
-        self.wb_group = QGroupBox("WB")
-        wb_layout = QHBoxLayout(self.wb_group)
-        wb_layout.setContentsMargins(0, 0, 0, 0)
-        wb_layout.addWidget(self.wb_slider)
-        wb_layout.addWidget(self.wb_value)
-        wb_layout.addWidget(self.wb_edit)
-        wb_layout.addWidget(self.wb_fixed_button)
-        self.ball_group = QGroupBox("Ball")
-        ball_layout = QHBoxLayout(self.ball_group)
-        ball_layout.setContentsMargins(0, 0, 0, 0)
-        ball_layout.addWidget(self.ball_button)
+        self.wb_group = self._toolbar_group(
+            "WB", [self.wb_slider, self.wb_value, self.wb_fixed_button]
+        )
+        self.ball_group = self._toolbar_group("BALL", [self.ball_button])
         self.side_by_side_button = QToolButton()
-        self.side_by_side_button.setIcon(qta.icon("fa5s.columns", color="#f4f2ec"))
+        self.side_by_side_button.setIcon(toolbar_icons.preview_icon())
         self.side_by_side_button.setToolTip(
             f"Show Live Preview ({key_hint(TOGGLE_LIVE_PREVIEW_KEY)})"
         )
         self.side_by_side_button.setAccessibleName("Toggle Live Preview")
         self.side_by_side_button.setCheckable(True)
         self.side_by_side_button.setFixedSize(28, 28)
-        self.side_by_side_button.setAutoRaise(True)
         self.revert_button = QToolButton()
-        self.revert_button.setIcon(qta.icon("fa5s.undo", color="#f4f2ec"))
+        self.revert_button.setIcon(toolbar_icons.refresh_icon())
         self.revert_button.setToolTip("Revert crop and angle to when this photo was opened")
         self.revert_button.setAccessibleName("Revert this photo's crop and angle")
         self.revert_button.setFixedSize(28, 28)
-        self.revert_button.setAutoRaise(True)
         self.revert_button.setEnabled(False)
         self.lock_checkbox = QToolButton()
         self.lock_checkbox.setCheckable(True)
         self.lock_checkbox.setToolTip("Lock crop ratio (L)")
         self.lock_checkbox.setAccessibleName("Lock crop ratio")
-        self.lock_checkbox.setIcon(qta.icon("fa5s.lock-open", color="#f4f2ec"))
+        self.lock_checkbox.setIcon(toolbar_icons.lock_icon(False))
         self.snap_checkbox = QToolButton()
         self.snap_checkbox.setCheckable(True)
         self.snap_checkbox.setChecked(True)
         self.snap_checkbox.setToolTip("Aspect-ratio snapping enabled (S)")
         self.snap_checkbox.setAccessibleName("Toggle aspect-ratio snapping")
         self._update_snap_icon(True)
-        self.aspect_group = QGroupBox("Aspect")
-        aspect_layout = QHBoxLayout(self.aspect_group)
-        aspect_layout.setContentsMargins(0, 0, 0, 0)
-        aspect_layout.setSpacing(4)
-        aspect_layout.addWidget(self.ratio_combo)
-        aspect_layout.addWidget(self.lock_checkbox)
-        aspect_layout.addWidget(self.snap_checkbox)
+        for button in (self.lock_checkbox, self.snap_checkbox):
+            button.setFixedSize(28, 28)
+            button.setIconSize(QSize(20, 20))
+        self.aspect_group = self._toolbar_group(
+            "ASPECT", [self.ratio_combo, self.lock_checkbox, self.snap_checkbox]
+        )
         self.save_label = QLabel(" ")
         self.save_label.setToolTip(f"Save current crop ({shortcut_modifier()}S)")
         status_width = self.save_label.fontMetrics().horizontalAdvance("Saving...") + 8
         self.save_label.setFixedWidth(status_width)
         self.save_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.mode_button = QToolButton()
-        self.mode_button.setFixedSize(32, 28)
-        self.mode_button.setAutoRaise(True)
+        self.mode_button.setFixedSize(28, 28)
         self.mode_button.setAccessibleName("Toggle Crop/Review mode")
         self.live_button = QToolButton()
-        self.live_button.setFixedSize(32, 28)
-        self.live_button.setAutoRaise(True)
+        self.live_button.setFixedSize(28, 28)
         self.live_button.setCheckable(True)
         self.live_button.setIcon(qta.icon("fa5s.broadcast-tower", color="#f4f2ec"))
         self.live_button.setToolTip("Live mode: work on photos arriving in the Live folder")
         self.live_button.setAccessibleName("Toggle Live mode")
-        self.review_group = QGroupBox("Review")
+        self.review_group = QWidget()
         review_layout = QHBoxLayout(self.review_group)
         review_layout.setContentsMargins(0, 0, 0, 0)
         review_layout.setSpacing(2)
         self.star_buttons: list[QToolButton] = []
         for value in range(1, 6):
             button = QToolButton()
-            button.setFixedSize(26, 28)
-            button.setAutoRaise(True)
+            button.setFixedSize(28, 28)
             button.setAccessibleName(f"Set {value} star rating")
             button.clicked.connect(lambda checked=False, stars=value: self._set_rating(stars))
             review_layout.addWidget(button)
             self.star_buttons.append(button)
         self.clear_rating_button = QToolButton()
-        self.clear_rating_button.setFixedSize(26, 28)
-        self.clear_rating_button.setAutoRaise(True)
+        self.clear_rating_button.setFixedSize(28, 28)
         self.clear_rating_button.setIcon(qta.icon("fa5s.ban", color="#8c9299"))
         self.clear_rating_button.setToolTip("Clear star rating (0)")
         self.clear_rating_button.setAccessibleName("Clear star rating")
@@ -1173,8 +1207,7 @@ class CropWindow(QMainWindow):
         key_for_color = {color: key for key, color in REVIEW_COLOR_KEYS.items()}
         for color in COLOR_LABELS:
             button = QToolButton()
-            button.setFixedSize(26, 28)
-            button.setAutoRaise(True)
+            button.setFixedSize(28, 28)
             button.setAccessibleName(f"Toggle {color} color label")
             hint = f" ({key_for_color[color]})" if color in key_for_color else ""
             button.setToolTip(f"Toggle {color} label{hint}")
@@ -1182,22 +1215,33 @@ class CropWindow(QMainWindow):
             review_layout.addWidget(button)
             self.color_buttons[color] = button
         self.review_group.setVisible(False)
-        toolbar.addWidget(self.mode_button)
-        toolbar.addWidget(self.live_button)
-        toolbar.addWidget(self.open_button)
-        toolbar.addWidget(navigation_panel)
-        toolbar.addWidget(self.rating_filter_panel)
-        toolbar.addWidget(self.label_indicator)
-        toolbar.addWidget(self.position_label, 1)
-        toolbar.addWidget(self.review_group)
-        toolbar.addWidget(self.angle_group)
-        toolbar.addWidget(self.auto_light_button)
-        toolbar.addWidget(self.wb_group)
-        toolbar.addWidget(self.ball_group)
-        toolbar.addWidget(self.side_by_side_button)
-        toolbar.addWidget(self.revert_button)
-        toolbar.addWidget(self.aspect_group)
-        toolbar.addWidget(self.save_label)
+        for widget in (
+            self.mode_button,
+            self.live_button,
+            self.open_button,
+            self._divider(),
+            navigation_panel,
+            self._divider(),
+            self.rating_filter_panel,
+            self.label_indicator,
+            self.save_label,
+        ):
+            self.toolbar_row1.addWidget(widget)
+        self.toolbar_row1.addWidget(self.position_label, 1)
+        self.toolbar_row2.addWidget(self.review_group)
+        for widget in (
+            self.angle_group,
+            self.wand_group,
+            self.wb_group,
+            self.ball_group,
+            self.aspect_group,
+        ):
+            self.toolbar_row2.addWidget(widget)
+        self.toolbar_row2.addStretch(1)
+        self.toolbar_row2.addWidget(self.side_by_side_button)
+        self.toolbar_row2.addWidget(self.revert_button)
+        for button in self.toolbar_widget.findChildren(QToolButton):
+            button.setIconSize(QSize(toolbar_icons.ICON_SIZE, toolbar_icons.ICON_SIZE))
         self.view = CropView()
         self.cropped_preview = CroppedPreview()
         result_panel = QWidget()
@@ -1232,8 +1276,10 @@ class CropWindow(QMainWindow):
         self.show_horizon_button.clicked.connect(self._toggle_horizon_visibility)
         self.auto_light_button.toggled.connect(self._auto_light_toggled)
         self.wb_slider.valueChanged.connect(self._wb_slider_changed)
-        self.wb_value.clicked.connect(self._begin_wb_edit)
-        self.wb_edit.editingFinished.connect(self._finish_wb_edit)
+        self.wb_value.returnPressed.connect(self._finish_wb_edit)
+        self.wb_value.editingFinished.connect(self._restore_wb_text)
+        self.rotation_value.returnPressed.connect(self._finish_rotation_edit)
+        self.rotation_value.editingFinished.connect(self._restore_rotation_text)
         self.wb_fixed_button.toggled.connect(self._wb_fixed_toggled)
         self.ball_button.toggled.connect(self._ball_toggled)
         self.ball_button.customContextMenuRequested.connect(self._show_ball_menu)
@@ -1468,6 +1514,7 @@ class CropWindow(QMainWindow):
         self._starting_rotation = None
         self.revert_button.setEnabled(False)
         self.rotation_slider.setEnabled(False)
+        self.rotation_value.setEnabled(False)
         self.rotation_reset.setEnabled(False)
         self.auto_level_button.setEnabled(False)
         self.show_horizon_button.setEnabled(False)
@@ -2254,6 +2301,7 @@ class CropWindow(QMainWindow):
         self.rotation_slider.setValue(0)
         self.rotation_value.setText("0.0°")
         self.rotation_slider.setEnabled(False)
+        self.rotation_value.setEnabled(False)
         self.rotation_reset.setEnabled(False)
         self.rotation_slider.blockSignals(False)
         self._clear_horizon_candidates()
@@ -2365,6 +2413,7 @@ class CropWindow(QMainWindow):
         self.rotation_slider.setValue(round(self._current_rotation * 10))
         self.rotation_value.setText(f"{self._current_rotation:.1f}°")
         self.rotation_slider.setEnabled(True)
+        self.rotation_value.setEnabled(True)
         self.rotation_reset.setEnabled(True)
         self.rotation_slider.blockSignals(False)
         self._set_preview_rotation(self._current_rotation)
@@ -2470,30 +2519,39 @@ class CropWindow(QMainWindow):
         self._enable_auto_light()
         self._wb_timer.start()
 
-    def _begin_wb_edit(self) -> None:
-        """Swap the Kelvin label for a text box holding the current value."""
-        self.wb_edit.setText(str(self.wb_slider.value()))
-        self.wb_value.hide()
-        self.wb_edit.show()
-        self.wb_edit.setFocus()
-        self.wb_edit.selectAll()
-
     def _finish_wb_edit(self) -> None:
-        """Apply a typed Kelvin value to all photos, then restore the label."""
-        if self.wb_edit.isHidden():
-            return
-        text = self.wb_edit.text().strip().lower().removesuffix("k").strip()
-        self.wb_edit.hide()
-        self.wb_value.show()
+        """Apply a typed Kelvin value (Enter) to all photos."""
+        text = self.wb_value.text().strip().lower().removesuffix("k").strip()
         try:
             kelvin = round(float(text))
         except ValueError:
+            self._restore_wb_text()
             return
         kelvin = min(max(kelvin, round(MIN_KELVIN)), round(MAX_KELVIN))
         self.wb_slider.blockSignals(True)
         self.wb_slider.setValue(kelvin)
         self.wb_slider.blockSignals(False)
         self._wb_slider_changed(kelvin)
+
+    def _restore_wb_text(self) -> None:
+        """Show the slider's Kelvin value again after an uncommitted or invalid edit."""
+        self.wb_value.setText(f"{self.wb_slider.value()}K")
+
+    def _finish_rotation_edit(self) -> None:
+        """Apply a typed angle (Enter) through the rotation slider."""
+        text = self.rotation_value.text().strip().removesuffix("°").strip()
+        try:
+            angle = float(text)
+        except ValueError:
+            self._restore_rotation_text()
+            return
+        slider = self.rotation_slider
+        slider.setValue(min(max(round(angle * 10), slider.minimum()), slider.maximum()))
+        self._restore_rotation_text()
+
+    def _restore_rotation_text(self) -> None:
+        """Show the slider's angle again after an uncommitted or invalid edit."""
+        self.rotation_value.setText(f"{self.rotation_slider.value() / 10:.1f}°")
 
     def _wb_fixed_toggled(self, checked: bool) -> None:
         """Pin the current color temperature for every photo, or return to automatic."""
@@ -3084,24 +3142,12 @@ class CropWindow(QMainWindow):
 
     def _update_lock_icon(self, locked: bool) -> None:
         """Reflect ratio-lock state in the lock control's icon and tooltip."""
-        self.lock_checkbox.setIcon(
-            qta.icon("fa5s.lock" if locked else "fa5s.lock-open", color="#f4f2ec")
-        )
+        self.lock_checkbox.setIcon(toolbar_icons.lock_icon(locked))
         self.lock_checkbox.setToolTip(f"Crop ratio {'locked' if locked else 'unlocked'} (L)")
 
     def _update_snap_icon(self, enabled: bool) -> None:
-        """Reflect snapping state with a magnet or red disabled-state icon."""
-        if enabled:
-            snap_icon = qta.icon("fa5s.magnet", color="#45d6d0")
-        else:
-            snap_icon = qta.icon(
-                "fa5s.magnet",
-                "fa5s.ban",
-                options=[
-                    {"color": "#f4f2ec"},
-                    {"color": "#e45858", "scale_factor": 0.9},
-                ],
-            )
+        """Reflect snapping state with the corner-bracket icon, slashed in red when disabled."""
+        snap_icon = toolbar_icons.snap_icon(enabled)
         self.snap_checkbox.setIcon(snap_icon)
         self.snap_checkbox.setToolTip(
             f"Aspect-ratio snapping {'enabled' if enabled else 'disabled'} (S)"

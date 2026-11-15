@@ -355,7 +355,6 @@ def test_lock_and_snap_icon_controls_reflect_toggle_state() -> None:
     assert "⌘S" in window.save_label.toolTip()
     assert "H" in window.show_horizon_button.toolTip()
     assert window.lock_checkbox.isCheckable()
-    assert window.aspect_group.title() == "Aspect"
     assert not window.lock_checkbox.isChecked()
     assert "unlocked" in window.lock_checkbox.toolTip().lower()
     assert "L" in window.lock_checkbox.toolTip()
@@ -403,13 +402,14 @@ def test_compact_navigation_and_filename_reveal_controls(
     assert window.next_button.text() == ""
     assert not window.previous_button.icon().isNull()
     assert not window.next_button.icon().isNull()
-    toolbar = window.toolbar_widget.layout()
+    row1 = window.toolbar_row1
     assert (
-        toolbar.indexOf(window.previous_button.parentWidget())
-        < toolbar.indexOf(window.rating_filter_panel)
-        < toolbar.indexOf(window.position_label)
-        < toolbar.indexOf(window.angle_group)
+        row1.indexOf(window.previous_button.parentWidget())
+        < row1.indexOf(window.rating_filter_panel)
+        < row1.indexOf(window.position_label)
     )
+    assert row1.indexOf(window.position_label) == row1.count() - 1
+    assert window.toolbar_row2.indexOf(window.angle_group) >= 0
     window.position_label.clicked.emit()
 
     assert calls == [("open", ["-R", str(raw_path.resolve())])]
@@ -991,7 +991,6 @@ def test_show_horizon_candidates_does_not_change_angle_until_candidate_selected(
     window._current_rotation = original_angle
     window._current_metadata = PhotoMetadata(640, 480, CropRect(0, 0, 1, 1))
     window._preview_cache[raw_path] = preview
-    assert window.angle_group.title() == "Angle"
     assert not window.auto_level_button.icon().isNull()
     assert window.auto_level_button.accessibleName() == "Auto level"
     auto_hint = f"({crop_app.key_hint(crop_app.AUTO_LEVEL_KEY)})"
@@ -1465,20 +1464,24 @@ def test_typed_kelvin_value_fixes_white_balance(monkeypatch) -> None:
     window = CropWindow()
     monkeypatch.setattr(window, "_schedule_prefetch", lambda *_: None)
 
-    window._begin_wb_edit()
-    window.wb_edit.setText("4200K")
-    window._finish_wb_edit()
+    window.wb_value.setText("4200K")
+    window.wb_value.returnPressed.emit()
 
     assert window._wb_override == 4200.0
     assert window.wb_slider.value() == 4200
     assert window.wb_fixed_button.isChecked()
-    assert window.wb_edit.isHidden()
+    assert window.wb_value.text() == "4200K"
 
-    window._begin_wb_edit()
-    window.wb_edit.setText("99999")
-    window._finish_wb_edit()
+    window.wb_value.setText("99999")
+    window.wb_value.returnPressed.emit()
 
     assert window._wb_override == crop_app.MAX_KELVIN
+
+    window.wb_value.setText("not a number")
+    window.wb_value.returnPressed.emit()
+
+    assert window._wb_override == crop_app.MAX_KELVIN
+    assert window.wb_value.text() == f"{window.wb_slider.value()}K"
 
 
 def test_decode_preview_of_a_tiff_does_not_crash() -> None:
@@ -1493,3 +1496,73 @@ def test_decode_preview_of_a_tiff_does_not_crash() -> None:
     for _ in range(50):
         decoded = decode_preview(bytes(buffer.data()))
         assert (decoded.width(), decoded.height()) == (40, 30)
+
+
+def test_typed_angle_value_moves_the_slider_and_is_clamped() -> None:
+    """Typing an angle and pressing Enter drives the slider; stray text reverts."""
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+    window.rotation_slider.setEnabled(True)
+
+    window.rotation_value.setText("12.5°")
+    window.rotation_value.returnPressed.emit()
+    assert window.rotation_slider.value() == 125
+    assert window.rotation_value.text() == "12.5°"
+
+    window.rotation_value.setText("99")
+    window.rotation_value.returnPressed.emit()
+    assert window.rotation_slider.value() == window.rotation_slider.maximum()
+
+    window.rotation_value.setText("oops")
+    window.rotation_value.editingFinished.emit()
+    assert window.rotation_value.text() == f"{window.rotation_slider.maximum() / 10:.1f}°"
+    window.close()
+
+
+def test_toolbar_is_two_rows_with_uniform_buttons_and_no_visible_status_bar() -> None:
+    """Row 1 holds session/culling with the filename last; row 2 the labeled adjustment groups."""
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+
+    row1, row2 = window.toolbar_row1, window.toolbar_row2
+    assert row1.indexOf(window.mode_button) < row1.indexOf(window.live_button)
+    assert row1.indexOf(window.live_button) < row1.indexOf(window.open_button)
+    assert row1.indexOf(window.position_label) == row1.count() - 1
+    nav = window.previous_button.parentWidget().layout()
+    assert [nav.itemAt(i).widget() for i in range(3)] == [
+        window.previous_button,
+        window.position_count_label,
+        window.next_button,
+    ]
+    order = [
+        window.angle_group,
+        window.wand_group,
+        window.wb_group,
+        window.ball_group,
+        window.aspect_group,
+        window.side_by_side_button,
+        window.revert_button,
+    ]
+    indexes = [row2.indexOf(widget) for widget in order]
+    assert indexes == sorted(indexes)
+    assert all(index >= 0 for index in indexes)
+    for button in (
+        window.rotation_reset,
+        window.auto_level_button,
+        window.show_horizon_button,
+        window.auto_light_button,
+        window.wb_fixed_button,
+        window.ball_button,
+        window.lock_checkbox,
+        window.snap_checkbox,
+        window.side_by_side_button,
+        window.revert_button,
+        window.mode_button,
+        window.live_button,
+        window.flag_button,
+    ):
+        assert button.maximumHeight() == 28
+        assert button.minimumHeight() == 28
+        assert not button.icon().isNull() or button is window.flag_button
+    assert window.statusBar().isHidden()
+    window.close()

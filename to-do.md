@@ -45,6 +45,6 @@ Things deliberately deferred during the Live mode proof of concept. All Live fea
 
 ## UI
 
-- [ ] Optimize the editor toolbar. It has so many controls (Live mode added several) that the
+- [x] Optimize the editor toolbar (done: two-row layout, uniform 28px buttons). It has so many controls (Live mode added several) that the
       window cannot be shrunk much. Options: an overflow/extension menu, grouping, icon-only
       buttons, moving Live controls into the status panel, or a responsive/collapsing layout.
