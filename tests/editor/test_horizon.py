@@ -6,7 +6,7 @@ import pytest
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QImage
 
-from photo_workflow.crop_tool.horizon import (
+from photo_workflow.editor.horizon import (
     detect_horizon_candidates,
     qimage_to_rgb_array,
 )

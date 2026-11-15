@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import pytest
 
-from photo_workflow.crop_tool.ball import (
+from photo_workflow.editor.ball import (
     COLOR_SHARE_MINIMUMS,
     color_share_minimums,
     detect_ball_candidates,

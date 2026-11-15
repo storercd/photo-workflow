@@ -4,7 +4,7 @@ from math import cos, radians, sin
 
 import pytest
 
-from photo_workflow.crop_tool.model import (
+from photo_workflow.editor.model import (
     AspectRatio,
     CropRect,
     aspect_ratio_for_crop,

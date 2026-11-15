@@ -1,4 +1,4 @@
-"""Tests for per-user crop tool preferences."""
+"""Tests for per-user editor preferences."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from PySide6.QtCore import QEvent, QPointF, QSettings, Qt
 from PySide6.QtGui import QMouseEvent, QShortcut
 from PySide6.QtWidgets import QApplication
 
-from photo_workflow.crop_tool.app import CropWindow
-from photo_workflow.crop_tool.preferences import (
+from photo_workflow.editor.app import CropWindow
+from photo_workflow.editor.preferences import (
     LEGACY_IMPORTED_KEY,
     CropPreferences,
     PreferencesDialog,

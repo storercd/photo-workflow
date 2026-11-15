@@ -20,8 +20,8 @@ from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QImage, QKey
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel
 
-from photo_workflow.crop_tool import app as crop_app
-from photo_workflow.crop_tool.app import (
+from photo_workflow.editor import app as crop_app
+from photo_workflow.editor.app import (
     PREFETCH_FORWARD_COUNT,
     PREFETCH_REVERSE_COUNT,
     PREVIEW_CACHE_SIZE,
@@ -33,9 +33,9 @@ from photo_workflow.crop_tool.app import (
     resolve_drop_path,
     update_saved_crop_cache,
 )
-from photo_workflow.crop_tool.horizon import HorizonCandidate
-from photo_workflow.crop_tool.metadata import PhotoMetadata
-from photo_workflow.crop_tool.model import CropRect
+from photo_workflow.editor.horizon import HorizonCandidate
+from photo_workflow.editor.metadata import PhotoMetadata
+from photo_workflow.editor.model import CropRect
 
 
 def test_resolve_drop_path_opens_folder_without_specific_selection(tmp_path: Path) -> None:

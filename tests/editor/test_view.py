@@ -6,9 +6,9 @@ from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
-from photo_workflow.crop_tool.horizon import HorizonCandidate
-from photo_workflow.crop_tool.model import AspectRatio, CropRect, crop_aspect_ratio
-from photo_workflow.crop_tool.view import CroppedPreview, CropView
+from photo_workflow.editor.horizon import HorizonCandidate
+from photo_workflow.editor.model import AspectRatio, CropRect, crop_aspect_ratio
+from photo_workflow.editor.view import CroppedPreview, CropView
 
 
 def test_crop_grips_are_reachable_outside_edges_and_corners() -> None:
