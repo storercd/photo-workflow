@@ -76,6 +76,8 @@ class LiveSettings:
     autocrop_ratios: tuple[str, ...] = DEFAULT_AUTOCROP_RATIOS
     auto_lighting: bool = True
     color_temperature: float | None = None
+    autocrop_force: bool = False
+    autocrop_ball: bool = False
 
     def folder_path(self, camera_root: Path) -> Path:
         """Return the configured Live folder, defaulting to the one next to the camera folder."""
@@ -148,6 +150,8 @@ def load_live_settings(
         autocrop_ratios=ratios or defaults.autocrop_ratios,
         auto_lighting=settings.value("live/auto_lighting", True, type=bool),
         color_temperature=settings.value("live/color_temperature", 0.0, type=float) or None,
+        autocrop_force=settings.value("live/autocrop_force", False, type=bool),
+        autocrop_ball=settings.value("live/autocrop_ball", False, type=bool),
     )
     try:
         validate_live_settings(loaded)
@@ -175,6 +179,8 @@ def save_live_settings(
     settings.setValue("live/autocrop_ratios", ", ".join(live.autocrop_ratios))
     settings.setValue("live/auto_lighting", live.auto_lighting)
     settings.setValue("live/color_temperature", live.color_temperature or 0.0)
+    settings.setValue("live/autocrop_force", live.autocrop_force)
+    settings.setValue("live/autocrop_ball", live.autocrop_ball)
     store.set(SECRET_FTP_PASSWORD, live.ftp_password)
     store.set(SECRET_R2_SECRET_KEY, live.r2_secret_access_key)
     settings.sync()

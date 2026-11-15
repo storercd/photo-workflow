@@ -408,6 +408,14 @@ class PreferencesDialog(QDialog):
         self.r2_bucket_edit = QLineEdit(live.r2_bucket)
         self.autocrop_ratios_edit = QLineEdit(", ".join(live.autocrop_ratios))
         self.autocrop_ratios_edit.setToolTip("Aspect ratios automatic crop may choose from")
+        self.autocrop_ball_check = QCheckBox("Let the ball influence automatic crop")
+        self.autocrop_ball_check.setChecked(live.autocrop_ball)
+        self.autocrop_force_check = QCheckBox("Force automatic crop (overwrites manual crops)")
+        self.autocrop_force_check.setChecked(live.autocrop_force)
+        self.autocrop_force_check.setToolTip(
+            "Applies the automatic crop to every file in the Live folder, replacing crops "
+            "drawn by hand"
+        )
         form = QFormLayout()
         form.addRow("Live folder", folder_row)
         form.addRow("FTP port", self.ftp_port_spin)
@@ -418,6 +426,8 @@ class PreferencesDialog(QDialog):
         form.addRow("R2 secret access key", self.r2_secret_edit)
         form.addRow("R2 bucket", self.r2_bucket_edit)
         form.addRow("Auto-crop aspect ratios", self.autocrop_ratios_edit)
+        form.addRow("", self.autocrop_ball_check)
+        form.addRow("", self.autocrop_force_check)
         box = QGroupBox("Live (credentials are stored in the system keychain)")
         box.setLayout(form)
         return box
@@ -449,6 +459,8 @@ class PreferencesDialog(QDialog):
             r2_secret_access_key=self.r2_secret_edit.text(),
             r2_bucket=self.r2_bucket_edit.text().strip(),
             autocrop_ratios=tuple(split_ratio_text(self.autocrop_ratios_edit.text())),
+            autocrop_ball=self.autocrop_ball_check.isChecked(),
+            autocrop_force=self.autocrop_force_check.isChecked(),
         )
 
     def _browse_live_folder(self) -> None:

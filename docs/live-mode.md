@@ -96,6 +96,24 @@ LibRaw via `rawpy`: camera white balance, no tone curve, cropped to the active a
 `live/detection.py` is the shared detection API: Mask publishes normalized subject (and ball)
 boxes per photo; Automatic Cropping calls `get_detection(photo)` or
 `detect_photo(photo, source)` (detects and caches when missing).
+## AutoCrop
+
+`live/features/autocrop.py` computes a crop per photo and writes it to the XMP sidecar via
+`editor/metadata.write_photo_crop(..., source="auto")`; scoring is the fixed, Qt-free
+`live/autocrop_scoring.py` (spec: lead room, size, ball, thirds, edge tension, headroom).
+Only ratios from Preferences → Live are used. Options: *include the ball* and *Force
+automatic crop*; changing either (or the ratios) re-runs AutoCrop on every photo.
+
+- **Manual vs auto:** sidecars carry `pwf:CropSource` (`manual`/`auto`, namespace in
+  `editor/resources/photo_workflow_xmp.config`). `write_photo_crop` defaults to `manual`, so
+  Crop mode needs no changes. A crop without a marker predates auto crop and counts as manual.
+  `is_manual_crop` is what the stage checks; it always computes, but only overwrites a manual
+  crop when Force is on.
+- **Detection:** the stage uses a `Detector` (`detect(image, want_ball=) -> Detection | None`).
+  The default imports `photo_workflow.live.detection.detect_scene(image, want_ball=...)`
+  returning an object with `image_width`, `image_height`, `subject`, `ball`, `direction`
+  (boxes `(x0, y0, x1, y1)` in displayed orientation). If that is missing the stage logs once
+  per photo and skips with a warning, leaving the sidecar untouched.
 
 ## Code map
 

@@ -78,6 +78,8 @@ def test_settings_round_trip_keeps_secrets_out_of_plain_settings(tmp_path: Path)
         autocrop_ratios=("1:1", "3:2"),
         auto_lighting=False,
         color_temperature=4200.0,
+        autocrop_force=True,
+        autocrop_ball=True,
     ).with_enabled(StageId.DENOISE, True)
 
     save_live_settings(store, live, secrets)
