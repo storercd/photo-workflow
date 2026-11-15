@@ -1418,3 +1418,20 @@ def test_ball_button_stays_visible_in_review_mode() -> None:
 
     assert not window.angle_group.isVisible()
     assert window.ball_button.isVisible()
+
+
+def test_fixing_white_balance_turns_auto_light_back_on(monkeypatch) -> None:
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+    path = Path("a.cr3")
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda *_: None)
+    window._photos = [path]
+    window._current_path = path
+    window._preview_cache[path] = QImage(40, 30, QImage.Format.Format_RGB888)
+    window._preview_cache[path].fill(0x808080)
+    window.auto_light_button.setChecked(False)
+
+    window.wb_fixed_button.click()
+
+    assert window.auto_light_button.isChecked()
+    assert window._wb_override == float(window.wb_slider.value())

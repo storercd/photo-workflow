@@ -2100,12 +2100,20 @@ class CropWindow(QMainWindow):
             self.wb_fixed_button.setChecked(True)
             self.wb_fixed_button.blockSignals(False)
         self._wb_override = float(value)
+        self._enable_auto_light()
         self._wb_timer.start()
 
     def _wb_fixed_toggled(self, checked: bool) -> None:
         """Pin the current color temperature for every photo, or return to automatic."""
         self._wb_override = float(self.wb_slider.value()) if checked else None
+        if checked:
+            self._enable_auto_light()
         self._apply_wb_override()
+
+    def _enable_auto_light(self) -> None:
+        """Turn auto lighting on so a color-temperature change is visible, not hidden."""
+        if not self.auto_light_button.isChecked():
+            self.auto_light_button.setChecked(True)
 
     def _apply_wb_override(self) -> None:
         """Recompute auto lighting everywhere after the color-temperature override changed."""
@@ -2165,8 +2173,8 @@ class CropWindow(QMainWindow):
         else:
             width, height = image.width(), image.height()
         display = image
+        self._ensure_adjusted(self._current_path, image)
         if self.auto_light_button.isChecked():
-            self._ensure_adjusted(self._current_path, image)
             display = self._adjusted_cache.get(self._current_path, image)
         self._set_preview_image(display, width, height)
         self._sync_wb_controls()
