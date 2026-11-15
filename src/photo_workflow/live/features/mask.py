@@ -5,7 +5,7 @@ The subject is found with `photo_workflow.live.detection` (Apple Vision); the ma
 inverted, feathered, and used to scale the scene-linear intermediate, which makes
 the background slightly darker so the subject stands out. The detected boxes are cached
 for Automatic Cropping. When no subject is found the stage is skipped, the input continues
-downstream unchanged, and a warning marks the photo as "mask not applied".
+downstream unchanged, and the viewer badge marks the photo as "mask not applied".
 """
 
 from __future__ import annotations
@@ -72,7 +72,6 @@ class Mask(StageImplementation):
         output = job.output_path(suffix=".tif")
         if analysis.mask is None:
             output.unlink(missing_ok=True)
-            job.warn(NO_SUBJECT_MESSAGE)
             return StageResult.skipped(NO_SUBJECT_MESSAGE)
         save_linear_rgb(output, apply_inverted_mask(linear, analysis.mask))
         return StageResult.done(output)

@@ -143,7 +143,7 @@ def test_mask_stage_writes_intermediate_and_publishes_detection(
 def test_mask_stage_skips_and_flags_when_no_subject(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Without a subject the stage is skipped, a warning is raised, and no stale output stays."""
+    """Without a subject the stage is skipped without a warning and no stale output stays."""
     source = tmp_path / "denoise.tif"
     save_linear_rgb(source, np.full((40, 60, 3), 20000, dtype=np.uint16))
     monkeypatch.setattr(detection, "detect_subject_mask", lambda _rgb: None)
@@ -157,7 +157,8 @@ def test_mask_stage_skips_and_flags_when_no_subject(
     result = registry.get(StageId.MASK).process(job)
 
     assert result.status is StageStatus.SKIPPED and not result.outputs
-    assert warnings == [NO_SUBJECT_MESSAGE]
+    assert result.message == NO_SUBJECT_MESSAGE
+    assert warnings == []
     assert not stale.exists()
     assert get_detection(job.photo) == detection.Detection()
 
