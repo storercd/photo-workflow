@@ -1435,7 +1435,7 @@ def test_fixing_white_balance_turns_auto_light_back_on(monkeypatch) -> None:
     window.wb_fixed_button.click()
 
     assert window.auto_light_button.isChecked()
-    assert window._wb_override == float(window.wb_slider.value())
+    assert window._wb_override == crop_app.REFERENCE_KELVIN
 
 
 def test_metadata_load_shows_auto_lit_image(monkeypatch) -> None:
