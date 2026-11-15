@@ -891,7 +891,8 @@ class CropWindow(QMainWindow):
         self.label_indicator = QLabel()
         self.label_indicator.setFixedSize(10, 10)
         self.label_indicator.setVisible(False)
-        self.position_count_label = QLabel("No folder open")
+        self.position_count_label = ClickableLabel("No folder open")
+        self.position_count_label.clicked.connect(self._open_live_folder)
         self.position_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         navigation_panel = QWidget()
         navigation_layout = QVBoxLayout(navigation_panel)
@@ -2166,6 +2167,7 @@ class CropWindow(QMainWindow):
                 else []
             )
         self._photos = list(self._all_photos)
+        self._set_idle_link(self._live_mode and not self._all_photos)
         self._photo_ratings = {path: (0, None) for path in self._all_photos}
         self._load_failures.clear()
         self._queued_loads.clear()
@@ -3077,6 +3079,26 @@ class CropWindow(QMainWindow):
         self.snap_checkbox.setToolTip(
             f"Aspect-ratio snapping {'enabled' if enabled else 'disabled'} (S)"
         )
+
+    def _set_idle_link(self, active: bool) -> None:
+        """Style the position label as a link while Live mode is idle and empty."""
+        label = self.position_count_label
+        font = label.font()
+        font.setUnderline(active)
+        label.setFont(font)
+        label.setToolTip("Open the Live folder in the file manager" if active else "")
+        if active:
+            label.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            label.unsetCursor()
+
+    def _open_live_folder(self) -> None:
+        """Open the Live watch folder in the file manager, creating it first if needed."""
+        if not self._live_mode or self._live is None or self._all_photos:
+            return
+        folder = self._live.pipeline.layout.root
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _reveal_current_photo(self) -> None:
         """Reveal the current RAW photo in the platform's file manager."""

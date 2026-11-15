@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication
 
 from photo_workflow.editor.app import CropWindow
@@ -163,4 +163,38 @@ def test_no_subject_badge_shows_only_for_a_mask_skipped_photo(
     skipped["message"] = ""
     window._refresh_live_failure()
     assert window.view._badge is None
+    window.close()
+
+
+def test_idle_message_opens_and_creates_the_live_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The empty Live message is a link that creates and opens the watched folder."""
+    opened: list[str] = []
+    monkeypatch.setattr(
+        "photo_workflow.editor.app.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toLocalFile()) or True,
+    )
+    window = make_window(tmp_path, monkeypatch)
+    label = window.position_count_label
+
+    window._open_live_folder()
+    assert opened == []
+
+    window._toggle_live_mode()
+    root = window._live.pipeline.layout.root
+    assert label.text() == "Waiting for Live photos"
+    assert label.cursor().shape() == Qt.CursorShape.PointingHandCursor
+
+    label.clicked.emit()
+
+    assert root.is_dir()
+    assert opened == [str(root)]
+
+    make_live_photo(root)
+    window._live.pipeline.scan()
+    window.open_folder(root)
+    assert label.cursor().shape() != Qt.CursorShape.PointingHandCursor
+    window._open_live_folder()
+    assert opened == [str(root)]
     window.close()
