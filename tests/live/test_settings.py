@@ -128,14 +128,13 @@ def test_rename_arrival_uses_card_naming_and_overwrites(tmp_path: Path) -> None:
     assert not arrived.exists()
 
 
-def test_feature_discovery_registers_only_implemented_stages() -> None:
-    """Discovery loads every feature module; the framework stages stay no-ops."""
+def test_feature_discovery_registers_every_stage() -> None:
+    """Discovery loads every feature module, so each stage has a real implementation."""
     registry = StageRegistry()
 
     load_features(registry)
 
-    assert all(registry.get(stage) is not None for stage in StageId)
-    assert not registry.is_registered(StageId.DENOISE)
+    assert all(registry.is_registered(stage) for stage in StageId)
 
 
 def test_minimum_rating_round_trips_and_is_validated(tmp_path: Path) -> None:

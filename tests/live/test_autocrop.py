@@ -14,6 +14,7 @@ from test_pipeline import ManualExecutor, make_photo
 from photo_workflow.editor import metadata as crop_metadata
 from photo_workflow.editor.metadata import PhotoMetadata
 from photo_workflow.editor.model import CropRect
+from photo_workflow.live import detection as live_detection
 from photo_workflow.live.api import StageImplementation, StageRegistry
 from photo_workflow.live.features import autocrop
 from photo_workflow.live.features.autocrop import AutoCrop, Detection
@@ -34,14 +35,16 @@ class FakeDetector:
         self.detection = detection
         self.calls: list[tuple[Path, bool]] = []
 
-    def detect(self, image: Path, *, want_ball: bool) -> Detection | None:
+    def detect(
+        self, photo: Path, source: Path, size: tuple[int, int], *, want_ball: bool
+    ) -> Detection | None:
         """
         Record the call.
 
         Returns:
             The fixed detection.
         """
-        self.calls.append((image, want_ball))
+        self.calls.append((source, want_ball))
         return self.detection
 
 
@@ -153,15 +156,39 @@ def test_no_subject_skips_with_a_warning(tmp_path: Path, monkeypatch: pytest.Mon
     assert "no subject" in harness.pipeline.warnings()[0].message
 
 
-def test_missing_detection_module_is_inert(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no live.detection module the default detector finds nothing."""
+def test_shared_detector_converts_normalized_boxes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Normalized, upright boxes from live.detection become pixels of the photo size."""
+    found = live_detection.Detection(
+        subject=live_detection.BoundingBox(0.4, 0.3, 0.5, 0.7),
+        ball=live_detection.BoundingBox(0.5, 0.65, 0.53, 0.7),
+    )
+    monkeypatch.setattr(autocrop, "get_detection", lambda _: found)
+    detector = autocrop.SharedDetector()
 
-    def fail(_: str) -> object:
-        raise ImportError
+    with_ball = detector.detect(Path("x.cr3"), Path("x.cr3"), (WIDTH, HEIGHT), want_ball=True)
+    without = detector.detect(Path("x.cr3"), Path("x.cr3"), (WIDTH, HEIGHT), want_ball=False)
 
-    monkeypatch.setattr(autocrop.importlib, "import_module", fail)
+    assert with_ball is not None
+    assert with_ball.subject == (2400.0, 1200.0, 3000.0, 2800.0)
+    assert with_ball.ball == (3000.0, 2600.0, 3180.0, 2800.0)
+    assert without is not None
+    assert without.ball is None
 
-    assert autocrop.default_detector().detect(Path("x.cr3"), want_ball=True) is None
+
+def test_shared_detector_finds_nothing_without_a_subject_or_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No subject, or no detection backend, yields no detection (the stage then warns)."""
+    detector = autocrop.SharedDetector()
+    monkeypatch.setattr(autocrop, "get_detection", lambda _: live_detection.Detection())
+    assert detector.detect(Path("x.cr3"), Path("x.cr3"), (10, 10), want_ball=True) is None
+
+    def unavailable(*_: object) -> None:
+        raise live_detection.DetectionUnavailableError
+
+    monkeypatch.setattr(autocrop, "get_detection", lambda _: None)
+    monkeypatch.setattr(autocrop, "detect_photo", unavailable)
+    assert detector.detect(Path("x.cr3"), Path("x.cr3"), (10, 10), want_ball=True) is None
 
 
 def test_detection_is_scaled_from_a_preview_to_the_photo(monkeypatch: pytest.MonkeyPatch) -> None:

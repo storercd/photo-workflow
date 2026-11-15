@@ -1,15 +1,14 @@
 """
 AutoCrop stage: choose a crop with no human review and write it to the XMP sidecar.
 
-Detection (the subject and, optionally, the ball) comes from the Preprocessing session's
-`photo_workflow.live.detection` when it exists; this module only depends on the small
-`Detector` protocol below. Without a detector the stage skips each photo with a warning,
-so it stays harmless. Scoring lives in `photo_workflow.live.autocrop_scoring`.
+Detection (the subject and, optionally, the ball) comes from `photo_workflow.live.detection`,
+shared with the Mask stage; this module only depends on the small `Detector` protocol below.
+Without a subject the stage skips the photo with a warning. Scoring lives in
+`photo_workflow.live.autocrop_scoring`.
 """
 
 from __future__ import annotations
 
-import importlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,11 +18,15 @@ from photo_workflow.editor.metadata import is_manual_crop, read_photo_metadata, 
 from photo_workflow.editor.model import CropRect, parse_aspect_ratios
 from photo_workflow.live.api import StageImplementation, StageJob, StageRegistry, StageResult
 from photo_workflow.live.autocrop_scoring import Box, choose_crop
+from photo_workflow.live.detection import (
+    BoundingBox,
+    DetectionUnavailableError,
+    detect_photo,
+    get_detection,
+)
 from photo_workflow.live.stages import StageId
 
 LOGGER = logging.getLogger(__name__)
-DETECTION_MODULE = "photo_workflow.live.detection"
-DETECTION_ENTRY_POINT = "detect_scene"
 
 
 @dataclass(frozen=True)
@@ -47,91 +50,61 @@ class Detection:
 
 
 class Detector(Protocol):
-    """Finds the subject (and ball) of an image."""
+    """Finds the subject (and ball) of a photo."""
 
-    def detect(self, image: Path, *, want_ball: bool) -> Detection | None:
+    def detect(
+        self, photo: Path, source: Path, size: tuple[int, int], *, want_ball: bool
+    ) -> Detection | None:
         """
-        Analyse an image.
+        Analyse a photo.
 
-        Boxes are in the displayed orientation of the image. Skip ball detection when
-        `want_ball` is false.
+        Boxes are in pixels of a `size` (width, height) image in the displayed orientation.
+        Skip the ball when `want_ball` is false.
 
         Returns:
             The detection, or `None` when no subject was found.
         """
 
 
-class _ModuleDetector:
-    """Adapts `live.detection.detect_scene(image, want_ball=...)` to `Detector`."""
+class SharedDetector:
+    """Uses the cached `live.detection` result, running the detector when it is missing."""
 
-    def __init__(self, module: object) -> None:
-        self._entry = getattr(module, DETECTION_ENTRY_POINT)
-
-    def detect(self, image: Path, *, want_ball: bool) -> Detection | None:
+    def detect(
+        self, photo: Path, source: Path, size: tuple[int, int], *, want_ball: bool
+    ) -> Detection | None:
         """
-        Run the shared detector and normalise its result.
+        Fetch the photo's normalized boxes and convert them to pixels.
 
         Returns:
-            The detection, or `None` when no subject was found.
+            The detection, or `None` when no subject was found or detection is unavailable.
         """
-        scene = self._entry(image, want_ball=want_ball)
-        if scene is None or getattr(scene, "subject", None) is None:
+        try:
+            found = get_detection(photo) or detect_photo(photo, source)
+        except DetectionUnavailableError:
+            LOGGER.warning("no subject detector available; automatic crop skips %s", photo.name)
             return None
-        ball = getattr(scene, "ball", None)
+        if found.subject is None:
+            return None
+        width, height = size
+        ball = found.ball if want_ball else None
         return Detection(
-            image_width=int(scene.image_width),
-            image_height=int(scene.image_height),
-            subject=_box(scene.subject),
-            ball=_box(ball) if ball is not None else None,
-            direction=int(getattr(scene, "direction", 0) or 0),
+            image_width=width,
+            image_height=height,
+            subject=_pixels(found.subject, width, height),
+            ball=_pixels(ball, width, height) if ball is not None else None,
         )
 
 
-class _MissingDetector:
-    """Stand-in used when no detection module exists; finds nothing."""
-
-    def detect(self, image: Path, *, want_ball: bool) -> Detection | None:  # noqa: ARG002
-        """
-        Report that nothing was detected.
-
-        Returns:
-            Always `None`.
-        """
-        return None
-
-
-def _box(value: object) -> Box:
-    x0, y0, x1, y1 = value  # type: ignore[misc]
-    return (float(x0), float(y0), float(x1), float(y1))
-
-
-def default_detector() -> Detector:
-    """
-    Return the Preprocessing detector, or one that finds nothing (logged once per call).
-
-    Returns:
-        A detector for the AutoCrop stage.
-    """
-    try:
-        module = importlib.import_module(DETECTION_MODULE)
-    except ImportError:
-        LOGGER.warning("%s not available; automatic crop has no detector", DETECTION_MODULE)
-        return _MissingDetector()
-    if not hasattr(module, DETECTION_ENTRY_POINT):
-        LOGGER.warning(
-            "%s has no %s(); automatic crop has no detector",
-            DETECTION_MODULE,
-            DETECTION_ENTRY_POINT,
-        )
-        return _MissingDetector()
-    return _ModuleDetector(module)
+def _pixels(box: BoundingBox, width: int, height: int) -> Box:
+    left, top, right, bottom = box.to_pixels(width, height)
+    return (float(left), float(top), float(right), float(bottom))
 
 
 class AutoCrop(StageImplementation):
     """Computes and writes an automatic crop for each photo."""
 
     def __init__(self, detector: Detector | None = None) -> None:
-        """Create the stage; `detector` defaults to the shared Preprocessing detector."""
+        """Create the stage; `detector` defaults to the shared `live.detection` module."""
         self._detector = detector
 
     def process(self, job: StageJob) -> StageResult:
@@ -145,14 +118,19 @@ class AutoCrop(StageImplementation):
             Done when a crop was computed, skipped when there was no subject.
         """
         settings = job.settings
-        detector = self._detector if self._detector is not None else default_detector()
-        detection = detector.detect(job.source, want_ball=settings.autocrop_ball)
+        xmp_path = job.photo.with_suffix(".xmp")
+        metadata = read_photo_metadata(job.photo, xmp_path)
+        detector = self._detector if self._detector is not None else SharedDetector()
+        detection = detector.detect(
+            job.photo,
+            job.source,
+            (metadata.image_width, metadata.image_height),
+            want_ball=settings.autocrop_ball,
+        )
         if detection is None:
             job.warn("Automatic crop skipped: no subject detected")
             return StageResult.skipped("no subject")
 
-        xmp_path = job.photo.with_suffix(".xmp")
-        metadata = read_photo_metadata(job.photo, xmp_path)
         crop, summary = compute_crop(
             detection,
             metadata.image_width,

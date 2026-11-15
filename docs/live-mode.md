@@ -109,11 +109,12 @@ automatic crop*; changing either (or the ratios) re-runs AutoCrop on every photo
   Crop mode needs no changes. A crop without a marker predates auto crop and counts as manual.
   `is_manual_crop` is what the stage checks; it always computes, but only overwrites a manual
   crop when Force is on.
-- **Detection:** the stage uses a `Detector` (`detect(image, want_ball=) -> Detection | None`).
-  The default imports `photo_workflow.live.detection.detect_scene(image, want_ball=...)`
-  returning an object with `image_width`, `image_height`, `subject`, `ball`, `direction`
-  (boxes `(x0, y0, x1, y1)` in displayed orientation). If that is missing the stage logs once
-  per photo and skips with a warning, leaving the sidecar untouched.
+- **Detection:** the stage uses a `Detector`. The default (`SharedDetector`) reads
+  `live.detection.get_detection(photo)` (cached by Mask) or runs `detect_photo(photo, source)`
+  on the best source, and converts the normalized boxes to pixels of the photo's displayed
+  size with `BoundingBox.to_pixels`. The ball is only used with the ball option; direction is
+  unknown (0). With no subject, or no detection backend, the stage skips with a warning and
+  leaves the sidecar untouched.
 
 ## Code map
 
