@@ -1456,3 +1456,25 @@ def test_metadata_load_shows_auto_lit_image(monkeypatch) -> None:
 
     assert window.auto_light_button.isChecked()
     assert shown[-1] is window._adjusted_cache[path]
+
+
+def test_typed_kelvin_value_fixes_white_balance(monkeypatch) -> None:
+    """Typing a Kelvin value and pressing Enter clamps it and pins it for all photos."""
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda *_: None)
+
+    window._begin_wb_edit()
+    window.wb_edit.setText("4200K")
+    window._finish_wb_edit()
+
+    assert window._wb_override == 4200.0
+    assert window.wb_slider.value() == 4200
+    assert window.wb_fixed_button.isChecked()
+    assert not window.wb_edit.isVisible()
+
+    window._begin_wb_edit()
+    window.wb_edit.setText("99999")
+    window._finish_wb_edit()
+
+    assert window._wb_override == float(window.wb_slider.maximum())

@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QProgressBar,
@@ -998,9 +999,16 @@ class CropWindow(QMainWindow):
             "White balance in Kelvin (lower = cooler, higher = warmer). Shows the automatic value; "
             "moving it fixes the value for all photos"
         )
-        self.wb_value = QLabel(f"{round(REFERENCE_KELVIN)}K")
-        self.wb_value.setFixedWidth(self.wb_value.fontMetrics().horizontalAdvance("12000K") + 4)
+        self.wb_value = ClickableLabel(f"{round(REFERENCE_KELVIN)}K")
+        value_width = self.wb_value.fontMetrics().horizontalAdvance("12000K") + 4
+        self.wb_value.setFixedWidth(value_width)
         self.wb_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.wb_value.setCursor(Qt.CursorShape.IBeamCursor)
+        self.wb_value.setToolTip("Click to type a color temperature in Kelvin, then press Enter")
+        self.wb_edit = QLineEdit()
+        self.wb_edit.setFixedWidth(value_width + 12)
+        self.wb_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.wb_edit.hide()
         self.wb_fixed_button = QToolButton()
         self.wb_fixed_button.setIcon(qta.icon("fa5s.thermometer-half", color="#f4f2ec"))
         self.wb_fixed_button.setToolTip("Use this white-balance value for all photos")
@@ -1017,6 +1025,7 @@ class CropWindow(QMainWindow):
         wb_layout.setContentsMargins(0, 0, 0, 0)
         wb_layout.addWidget(self.wb_slider)
         wb_layout.addWidget(self.wb_value)
+        wb_layout.addWidget(self.wb_edit)
         wb_layout.addWidget(self.wb_fixed_button)
         self.ball_group = QGroupBox("Ball")
         ball_layout = QHBoxLayout(self.ball_group)
@@ -1145,6 +1154,8 @@ class CropWindow(QMainWindow):
         self.show_horizon_button.clicked.connect(self._toggle_horizon_visibility)
         self.auto_light_button.toggled.connect(self._auto_light_toggled)
         self.wb_slider.valueChanged.connect(self._wb_slider_changed)
+        self.wb_value.clicked.connect(self._begin_wb_edit)
+        self.wb_edit.editingFinished.connect(self._finish_wb_edit)
         self.wb_fixed_button.toggled.connect(self._wb_fixed_toggled)
         self.ball_button.toggled.connect(self._ball_toggled)
         self.ball_button.customContextMenuRequested.connect(self._show_ball_menu)
@@ -2102,6 +2113,31 @@ class CropWindow(QMainWindow):
         self._wb_override = float(value)
         self._enable_auto_light()
         self._wb_timer.start()
+
+    def _begin_wb_edit(self) -> None:
+        """Swap the Kelvin label for a text box holding the current value."""
+        self.wb_edit.setText(str(self.wb_slider.value()))
+        self.wb_value.hide()
+        self.wb_edit.show()
+        self.wb_edit.setFocus()
+        self.wb_edit.selectAll()
+
+    def _finish_wb_edit(self) -> None:
+        """Apply a typed Kelvin value to all photos, then restore the label."""
+        if not self.wb_edit.isVisible():
+            return
+        text = self.wb_edit.text().strip().lower().removesuffix("k").strip()
+        self.wb_edit.hide()
+        self.wb_value.show()
+        try:
+            kelvin = round(float(text))
+        except ValueError:
+            return
+        kelvin = min(max(kelvin, self.wb_slider.minimum()), self.wb_slider.maximum())
+        self.wb_slider.blockSignals(True)
+        self.wb_slider.setValue(kelvin)
+        self.wb_slider.blockSignals(False)
+        self._wb_slider_changed(kelvin)
 
     def _wb_fixed_toggled(self, checked: bool) -> None:
         """Pin the current color temperature for every photo, or return to automatic."""
