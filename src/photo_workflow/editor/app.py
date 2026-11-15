@@ -2802,6 +2802,17 @@ class CropWindow(QMainWindow):
     def _open_dropped_path(self, resolved_path: DropTarget) -> None:
         """Open a dropped folder or its selected RAW photo."""
         folder, selected_photo = resolved_path
+        if (
+            selected_photo is not None
+            and self._current_index >= 0
+            and self._pending_folder is None
+            and selected_photo in self._photos
+        ):
+            target_index = self._photos.index(selected_photo)
+            if target_index == self._current_index:
+                return
+            self.navigate(target_index - self._current_index)
+            return
         self.open_folder(folder, selected_photo)
 
     def closeEvent(self, event: object) -> None:
