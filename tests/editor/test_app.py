@@ -1477,4 +1477,4 @@ def test_typed_kelvin_value_fixes_white_balance(monkeypatch) -> None:
     window.wb_edit.setText("99999")
     window._finish_wb_edit()
 
-    assert window._wb_override == float(window.wb_slider.maximum())
+    assert window._wb_override == crop_app.MAX_KELVIN

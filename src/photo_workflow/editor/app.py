@@ -137,6 +137,8 @@ AUTO_LEVEL_KEY = Qt.Key.Key_A
 SHOW_HORIZON_KEY = Qt.Key.Key_H
 BALL_DETECTION_KEY = Qt.Key.Key_B
 AUTO_LIGHT_KEY = Qt.Key.Key_E
+WB_SLIDER_MIN_KELVIN = 3000
+WB_SLIDER_MAX_KELVIN = 5000
 DEFAULT_BALL_RING_COLOR = "#ff6b9d"
 TOGGLE_LIVE_PREVIEW_KEY = Qt.Key.Key_P
 XMP_DIRTY_WARNING = (
@@ -1005,7 +1007,7 @@ class CropWindow(QMainWindow):
         self.auto_light_button.setFixedSize(28, 28)
         self.auto_light_button.setAutoRaise(True)
         self.wb_slider = QSlider(Qt.Orientation.Horizontal)
-        self.wb_slider.setRange(round(MIN_KELVIN), round(MAX_KELVIN))
+        self.wb_slider.setRange(WB_SLIDER_MIN_KELVIN, WB_SLIDER_MAX_KELVIN)
         self.wb_slider.setSingleStep(100)
         self.wb_slider.setPageStep(500)
         self.wb_slider.setValue(round(REFERENCE_KELVIN))
@@ -2155,7 +2157,7 @@ class CropWindow(QMainWindow):
             kelvin = round(float(text))
         except ValueError:
             return
-        kelvin = min(max(kelvin, self.wb_slider.minimum()), self.wb_slider.maximum())
+        kelvin = min(max(kelvin, round(MIN_KELVIN)), round(MAX_KELVIN))
         self.wb_slider.blockSignals(True)
         self.wb_slider.setValue(kelvin)
         self.wb_slider.blockSignals(False)
@@ -2163,7 +2165,7 @@ class CropWindow(QMainWindow):
 
     def _wb_fixed_toggled(self, checked: bool) -> None:
         """Pin the current color temperature for every photo, or return to automatic."""
-        self._wb_override = float(self.wb_slider.value()) if checked else None
+        self._wb_override = float(self.wb_value.text().removesuffix("K")) if checked else None
         if checked:
             self._enable_auto_light()
         self._apply_wb_override()
