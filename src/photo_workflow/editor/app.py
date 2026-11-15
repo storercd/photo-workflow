@@ -78,6 +78,13 @@ from photo_workflow.editor.horizon import (
     detect_horizon_candidates,
     qimage_to_rgb_array,
 )
+from photo_workflow.editor.lighting import (
+    MAX_KELVIN,
+    MIN_KELVIN,
+    REFERENCE_KELVIN,
+    LightingAdjustment,
+    auto_light_image,
+)
 from photo_workflow.editor.lightroom import (
     find_lightroom_preview,
     xmp_lacks_catalog_edits,
@@ -127,6 +134,7 @@ RATIO_MATCH_TOLERANCE = 0.005
 AUTO_LEVEL_KEY = Qt.Key.Key_A
 SHOW_HORIZON_KEY = Qt.Key.Key_H
 BALL_DETECTION_KEY = Qt.Key.Key_B
+AUTO_LIGHT_KEY = Qt.Key.Key_E
 DEFAULT_BALL_RING_COLOR = "#ff6b9d"
 TOGGLE_LIVE_PREVIEW_KEY = Qt.Key.Key_P
 XMP_DIRTY_WARNING = (
@@ -165,6 +173,7 @@ class WorkerSignals(QObject):
     metadata = Signal(str, object)
     preview = Signal(str, object, bool)
     preview_source = Signal(str, str)
+    preview_adjusted = Signal(str, object, object, object)
     xmp_dirty = Signal(str, bool)
     error = Signal(str, str)
     finished = Signal(str)
@@ -385,11 +394,17 @@ class XmpStatusTask(QRunnable):
 class PhotoLoadTask(QRunnable):
     """Read metadata and progressively extract preview images off the UI thread."""
 
-    def __init__(self, raw_path: Path, lightroom_catalog: Path | None = None) -> None:
-        """Initialize a task for one RAW photo."""
+    def __init__(
+        self,
+        raw_path: Path,
+        lightroom_catalog: Path | None = None,
+        temperature: float | None = None,
+    ) -> None:
+        """Initialize a task for one RAW photo, optionally forcing the color temperature."""
         super().__init__()
         self.raw_path = raw_path
         self.lightroom_catalog = lightroom_catalog
+        self.temperature = temperature
         self.signals = WorkerSignals()
 
     def run(self) -> None:
@@ -437,7 +452,19 @@ class PhotoLoadTask(QRunnable):
             if not image.isNull():
                 self.signals.preview_source.emit(str(self.raw_path), f"Embedded {tag}{reason}")
                 self.signals.preview.emit(str(self.raw_path), image, True)
+                self._emit_adjusted_preview(image)
                 break
+
+    def _emit_adjusted_preview(self, image: QImage) -> None:
+        """Emit an auto-lit copy of the embedded preview so the original stays untouched."""
+        try:
+            adjusted, adjustment = auto_light_image(image, self.temperature)
+        except Exception as error:
+            self.signals.error.emit(str(self.raw_path), f"Auto lighting failed: {error}")
+            return
+        self.signals.preview_adjusted.emit(
+            str(self.raw_path), adjusted, adjustment, self.temperature
+        )
 
     def _emit_lightroom_preview(self, metadata: PhotoMetadata | None) -> str | None:
         """
@@ -723,6 +750,9 @@ class CropWindow(QMainWindow):
         self._metadata_cache: dict[Path, PhotoMetadata] = {}
         self._preview_cache: OrderedDict[Path, QImage] = OrderedDict()
         self._preview_sources: dict[Path, str] = {}
+        self._adjusted_cache: dict[Path, QImage] = {}
+        self._lighting_adjustments: dict[Path, LightingAdjustment] = {}
+        self._wb_override: float | None = None
         self._xmp_dirty: dict[Path, bool] = {}
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -950,6 +980,44 @@ class CropWindow(QMainWindow):
         self.ball_button.setCheckable(True)
         self.ball_button.setFixedSize(28, 28)
         self.ball_button.setAutoRaise(True)
+        self.auto_light_button = QToolButton()
+        self.auto_light_button.setIcon(qta.icon("fa5s.magic", color="#f4f2ec"))
+        self.auto_light_button.setToolTip(f"Show original ({key_hint(AUTO_LIGHT_KEY)})")
+        self.auto_light_button.setAccessibleName("Auto-adjust lighting")
+        self.auto_light_button.setCheckable(True)
+        self.auto_light_button.setChecked(True)
+        self.auto_light_button.setFixedSize(28, 28)
+        self.auto_light_button.setAutoRaise(True)
+        self.wb_slider = QSlider(Qt.Orientation.Horizontal)
+        self.wb_slider.setRange(round(MIN_KELVIN), round(MAX_KELVIN))
+        self.wb_slider.setSingleStep(100)
+        self.wb_slider.setPageStep(500)
+        self.wb_slider.setValue(round(REFERENCE_KELVIN))
+        self.wb_slider.setFixedWidth(110)
+        self.wb_slider.setToolTip(
+            "White balance in Kelvin (lower = cooler, higher = warmer). Shows the automatic value; "
+            "moving it fixes the value for all photos"
+        )
+        self.wb_value = QLabel(f"{round(REFERENCE_KELVIN)}K")
+        self.wb_value.setFixedWidth(self.wb_value.fontMetrics().horizontalAdvance("12000K") + 4)
+        self.wb_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.wb_fixed_button = QToolButton()
+        self.wb_fixed_button.setIcon(qta.icon("fa5s.thermometer-half", color="#f4f2ec"))
+        self.wb_fixed_button.setToolTip("Use this white-balance value for all photos")
+        self.wb_fixed_button.setAccessibleName("Fix white balance for all photos")
+        self.wb_fixed_button.setCheckable(True)
+        self.wb_fixed_button.setFixedSize(28, 28)
+        self.wb_fixed_button.setAutoRaise(True)
+        self._wb_timer = QTimer(self)
+        self._wb_timer.setSingleShot(True)
+        self._wb_timer.setInterval(120)
+        self._wb_timer.timeout.connect(self._apply_wb_override)
+        self.wb_group = QGroupBox("WB")
+        wb_layout = QHBoxLayout(self.wb_group)
+        wb_layout.setContentsMargins(0, 0, 0, 0)
+        wb_layout.addWidget(self.wb_slider)
+        wb_layout.addWidget(self.wb_value)
+        wb_layout.addWidget(self.wb_fixed_button)
         self.ball_group = QGroupBox("Ball")
         ball_layout = QHBoxLayout(self.ball_group)
         ball_layout.setContentsMargins(0, 0, 0, 0)
@@ -1039,6 +1107,8 @@ class CropWindow(QMainWindow):
         toolbar.addWidget(self.position_label, 1)
         toolbar.addWidget(self.review_group)
         toolbar.addWidget(self.angle_group)
+        toolbar.addWidget(self.auto_light_button)
+        toolbar.addWidget(self.wb_group)
         toolbar.addWidget(self.ball_group)
         toolbar.addWidget(self.side_by_side_button)
         toolbar.addWidget(self.revert_button)
@@ -1073,6 +1143,9 @@ class CropWindow(QMainWindow):
         self.rotation_reset.clicked.connect(lambda: self.rotation_slider.setValue(0))
         self.auto_level_button.clicked.connect(self._auto_level_clicked)
         self.show_horizon_button.clicked.connect(self._toggle_horizon_visibility)
+        self.auto_light_button.toggled.connect(self._auto_light_toggled)
+        self.wb_slider.valueChanged.connect(self._wb_slider_changed)
+        self.wb_fixed_button.toggled.connect(self._wb_fixed_toggled)
         self.ball_button.toggled.connect(self._ball_toggled)
         self.ball_button.customContextMenuRequested.connect(self._show_ball_menu)
         self.view.set_ball_ring_color(QColor(self._ball_ring_color))
@@ -1370,9 +1443,27 @@ class CropWindow(QMainWindow):
             f"DEBUG | Cache: {cache_count}/{PREVIEW_CACHE_SIZE} | "
             f"In-flight: {in_flight} | Queued: {queued} | "
             f"Ratings: {ratings_status} | "
-            f"Source: {self._preview_sources.get(self._current_path, '-')}"
+            f"Source: {self._preview_sources.get(self._current_path, '-')} | "
+            f"Auto-light: {self._auto_light_status()}"
         )
         self._status_label.setText(metrics)
+
+    def _auto_light_status(self) -> str:
+        """
+        Describe whether auto lighting is applied to the viewed photo.
+
+        Returns:
+            Debug-bar text with the on/off state and the chosen adjustments.
+        """
+        adjustment = self._lighting_adjustments.get(self._current_path)
+        if adjustment is None:
+            return "n/a (not computed)"
+        note = adjustment.describe()
+        if self._wb_override is not None:
+            note += " [WB fixed]"
+        if not self.auto_light_button.isChecked():
+            return f"OFF (available: {note})"
+        return f"ON ({note})"
 
     def _set_side_by_side_visible(self, visible: bool) -> None:
         """Show or hide the read-only crop result pane."""
@@ -1474,6 +1565,7 @@ class CropWindow(QMainWindow):
         self._add_shortcut(TOGGLE_LIVE_PREVIEW_KEY, self.side_by_side_button.click)
         self._add_shortcut(SHOW_HORIZON_KEY, self._show_horizon_clicked)
         self._add_shortcut(BALL_DETECTION_KEY, self.ball_button.click)
+        self._add_shortcut(AUTO_LIGHT_KEY, self.auto_light_button.click)
         self._add_shortcut(FLAG_COLOR_KEY, self._apply_flag_color)
         self._add_shortcut(COPY_PREVIOUS_CROP_KEY, self._copy_previous_crop)
         self._add_shortcut(FULL_SCREEN_KEY, self._toggle_full_screen)
@@ -1622,6 +1714,7 @@ class CropWindow(QMainWindow):
             "live_preview": self.side_by_side_button.click,
             "show_horizon": self._show_horizon_clicked,
             "ball_detection": self.ball_button.click,
+            "auto_light": self.auto_light_button.click,
             "flag": self._apply_flag_color,
             "copy_previous_crop": self._copy_previous_crop,
         }
@@ -1881,10 +1974,11 @@ class CropWindow(QMainWindow):
 
     def _start_photo_load(self, raw_path: Path) -> None:
         """Submit one selected load task to the bounded thread pool."""
-        task = PhotoLoadTask(raw_path, self._lightroom_catalog)
+        task = PhotoLoadTask(raw_path, self._lightroom_catalog, self._wb_override)
         task.signals.metadata.connect(self._metadata_loaded)
         task.signals.preview.connect(self._preview_loaded)
         task.signals.preview_source.connect(self._preview_source_loaded)
+        task.signals.preview_adjusted.connect(self._preview_adjusted_loaded)
         task.signals.xmp_dirty.connect(self._xmp_dirty_loaded)
         task.signals.error.connect(self._load_error)
         task.signals.finished.connect(self._load_finished)
@@ -1959,6 +2053,80 @@ class CropWindow(QMainWindow):
         self._preview_sources[Path(path_text)] = source
         self._update_status_bar()
 
+    def _preview_adjusted_loaded(
+        self,
+        path_text: str,
+        image: QImage,
+        adjustment: LightingAdjustment,
+        temperature: float | None,
+    ) -> None:
+        """Cache an auto-lit preview and show it if it belongs to the selected photo."""
+        path = Path(path_text)
+        if path not in self._preview_cache or temperature != self._wb_override:
+            return
+        self._adjusted_cache[path] = image
+        self._lighting_adjustments[path] = adjustment
+        self._update_status_bar()
+        if path == self._current_path and self.auto_light_button.isChecked():
+            self._show_image(self._preview_cache[path])
+
+    def _ensure_adjusted(self, path: Path, original: QImage) -> None:
+        """Compute a missing auto-lit copy now, once the photo's background load is done."""
+        if path in self._adjusted_cache or path in self._loading:
+            return
+        image, adjustment = auto_light_image(original, self._wb_override)
+        self._adjusted_cache[path] = image
+        self._lighting_adjustments[path] = adjustment
+
+    def _sync_wb_controls(self) -> None:
+        """Show the viewed photo's automatic color temperature unless a fixed one is set."""
+        adjustment = self._lighting_adjustments.get(self._current_path)
+        if self._wb_override is not None or adjustment is None:
+            return
+        self._set_wb_slider(adjustment.temperature)
+
+    def _set_wb_slider(self, value: float) -> None:
+        """Move the color-temperature slider without treating it as a user override."""
+        self.wb_slider.blockSignals(True)
+        self.wb_slider.setValue(round(value))
+        self.wb_slider.blockSignals(False)
+        self.wb_value.setText(f"{round(value)}K")
+
+    def _wb_slider_changed(self, value: int) -> None:
+        """Fix the color temperature for all photos as soon as the user moves the slider."""
+        self.wb_value.setText(f"{value}K")
+        if not self.wb_fixed_button.isChecked():
+            self.wb_fixed_button.blockSignals(True)
+            self.wb_fixed_button.setChecked(True)
+            self.wb_fixed_button.blockSignals(False)
+        self._wb_override = float(value)
+        self._wb_timer.start()
+
+    def _wb_fixed_toggled(self, checked: bool) -> None:
+        """Pin the current color temperature for every photo, or return to automatic."""
+        self._wb_override = float(self.wb_slider.value()) if checked else None
+        self._apply_wb_override()
+
+    def _apply_wb_override(self) -> None:
+        """Recompute auto lighting everywhere after the color-temperature override changed."""
+        self._adjusted_cache.clear()
+        self._lighting_adjustments.clear()
+        image = self._preview_cache.get(self._current_path)
+        if image is not None:
+            self._show_image(image)
+        self._update_status_bar()
+
+    def _auto_light_toggled(self, checked: bool) -> None:
+        """Switch the displayed preview between original and auto-lit versions."""
+        self.auto_light_button.setToolTip(
+            f"{'Show original' if checked else 'Auto-adjust lighting'} "
+            f"({key_hint(AUTO_LIGHT_KEY)})"
+        )
+        image = self._preview_cache.get(self._current_path)
+        if image is not None:
+            self._show_image(image)
+        self._update_status_bar()
+
     def _preview_loaded(self, path_text: str, image: QImage, high_quality: bool) -> None:
         """Cache previews and display progressive updates for the selected photo."""
         path = Path(path_text)
@@ -1987,6 +2155,8 @@ class CropWindow(QMainWindow):
                 self._preview_cache.move_to_end(oldest_key)
                 oldest_key = next(iter(self._preview_cache))
             self._preview_cache.pop(oldest_key, None)
+            self._adjusted_cache.pop(oldest_key, None)
+            self._lighting_adjustments.pop(oldest_key, None)
 
     def _show_image(self, image: QImage) -> None:
         """Set the visible preview using current source dimensions when known."""
@@ -1994,7 +2164,12 @@ class CropWindow(QMainWindow):
             width, height = displayed_image_size(self._current_metadata, self._current_rotation)
         else:
             width, height = image.width(), image.height()
-        self._set_preview_image(image, width, height)
+        display = image
+        if self.auto_light_button.isChecked():
+            self._ensure_adjusted(self._current_path, image)
+            display = self._adjusted_cache.get(self._current_path, image)
+        self._set_preview_image(display, width, height)
+        self._sync_wb_controls()
         self._refresh_ball_detection(image)
 
     def _refresh_ball_detection(self, image: QImage | None = None) -> None:
@@ -2104,6 +2279,14 @@ class CropWindow(QMainWindow):
         self._active_load_tasks.pop(path, None)
         self._loading.discard(path)
         self._update_status_bar()
+        original = self._preview_cache.get(path)
+        if (
+            path == self._current_path
+            and original is not None
+            and self.auto_light_button.isChecked()
+            and path not in self._adjusted_cache
+        ):
+            self._show_image(original)
         if self._current_index >= 0:
             self._schedule_prefetch(self._current_index)
 
