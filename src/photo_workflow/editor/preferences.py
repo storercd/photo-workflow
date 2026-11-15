@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass, field
-from fractions import Fraction
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
@@ -21,12 +20,18 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from photo_workflow.config import DEFAULT_CONFIG_PATH
-from photo_workflow.editor.model import DEFAULT_ASPECT_RATIOS, AspectRatio
+from photo_workflow.editor.model import (
+    DEFAULT_ASPECT_RATIOS,
+    AspectRatio,
+    parse_aspect_ratios,
+)
+from photo_workflow.live.settings import LiveSettings, validate_live_settings
 
 DEFAULT_SNAP_TOLERANCE = 0.05
 LEGACY_IMPORTED_KEY = "preferences/legacy_toml_imported"
@@ -115,33 +120,6 @@ class CropPreferences:
             return None
         catalog = Path(self.lightroom_catalog.strip()).expanduser()
         return catalog if catalog.is_file() else None
-
-
-def parse_aspect_ratios(values: list[str]) -> tuple[AspectRatio, ...]:
-    """
-    Parse integer or decimal ratio labels such as `4:5` and `1.91:1`.
-
-    Returns:
-        The parsed aspect ratios.
-
-    Raises:
-        ValueError: If a ratio is malformed or the list is empty.
-    """
-    ratios = []
-    for value in values:
-        try:
-            width_text, height_text = value.split(":", maxsplit=1)
-            ratio = Fraction(width_text) / Fraction(height_text)
-        except (ValueError, ZeroDivisionError) as error:
-            raise ValueError(
-                f"Invalid aspect ratio {value!r}; expected positive width:height"
-            ) from error
-        if ratio <= 0:
-            raise ValueError(f"Invalid aspect ratio {value!r}; values must be positive")
-        ratios.append(AspectRatio(ratio.numerator, ratio.denominator, value))
-    if not ratios:
-        raise ValueError("At least one aspect ratio is required")
-    return tuple(ratios)
 
 
 def split_ratio_text(text: str) -> list[str]:
@@ -343,9 +321,16 @@ class HotkeyEdit(QPushButton):
 class PreferencesDialog(QDialog):
     """Modal editor for `CropPreferences`."""
 
-    def __init__(self, preferences: CropPreferences, parent: QWidget | None = None) -> None:
-        """Build the form populated from the given preferences."""
+    def __init__(
+        self,
+        preferences: CropPreferences,
+        parent: QWidget | None = None,
+        live: LiveSettings | None = None,
+        default_live_folder: str = "",
+    ) -> None:
+        """Build the form populated from the given preferences (and Live settings, if given)."""
         super().__init__(parent)
+        self._live = live
         self.setWindowTitle("Preferences")
         self.setModal(True)
         self.ratios_edit = QLineEdit()
@@ -392,9 +377,87 @@ class PreferencesDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(hotkey_box)
+        if live is not None:
+            layout.addWidget(self._build_live_box(live, default_live_folder))
         layout.addWidget(buttons)
         self.setMinimumWidth(520)
         self._populate(preferences)
+
+    def _build_live_box(self, live: LiveSettings, default_folder: str) -> QGroupBox:
+        """
+        Build the Live section.
+
+        Returns:
+            The group box holding the Live fields.
+        """
+        self.live_folder_edit = QLineEdit(live.folder)
+        self.live_folder_edit.setPlaceholderText(default_folder or "Next to the camera folder")
+        folder_button = QPushButton("Browse…")
+        folder_button.clicked.connect(self._browse_live_folder)
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(self.live_folder_edit, 1)
+        folder_row.addWidget(folder_button)
+        self.ftp_port_spin = QSpinBox()
+        self.ftp_port_spin.setRange(1, 65535)
+        self.ftp_port_spin.setValue(live.ftp_port)
+        self.ftp_user_edit = QLineEdit(live.ftp_username)
+        self.ftp_password_edit = self._secret_edit(live.ftp_password)
+        self.r2_account_edit = QLineEdit(live.r2_account_id)
+        self.r2_key_edit = QLineEdit(live.r2_access_key_id)
+        self.r2_secret_edit = self._secret_edit(live.r2_secret_access_key)
+        self.r2_bucket_edit = QLineEdit(live.r2_bucket)
+        self.autocrop_ratios_edit = QLineEdit(", ".join(live.autocrop_ratios))
+        self.autocrop_ratios_edit.setToolTip("Aspect ratios automatic crop may choose from")
+        form = QFormLayout()
+        form.addRow("Live folder", folder_row)
+        form.addRow("FTP port", self.ftp_port_spin)
+        form.addRow("FTP username", self.ftp_user_edit)
+        form.addRow("FTP password", self.ftp_password_edit)
+        form.addRow("R2 account ID", self.r2_account_edit)
+        form.addRow("R2 access key ID", self.r2_key_edit)
+        form.addRow("R2 secret access key", self.r2_secret_edit)
+        form.addRow("R2 bucket", self.r2_bucket_edit)
+        form.addRow("Auto-crop aspect ratios", self.autocrop_ratios_edit)
+        box = QGroupBox("Live (credentials are stored in the system keychain)")
+        box.setLayout(form)
+        return box
+
+    @staticmethod
+    def _secret_edit(value: str) -> QLineEdit:
+        """
+        Create a masked line edit.
+
+        Returns:
+            The edit holding `value`.
+        """
+        edit = QLineEdit(value)
+        edit.setEchoMode(QLineEdit.EchoMode.Password)
+        return edit
+
+    def live_settings(self) -> LiveSettings | None:
+        """Return the Live values shown in the form, or `None` when Live was not offered."""
+        if self._live is None:
+            return None
+        return replace(
+            self._live,
+            folder=self.live_folder_edit.text().strip(),
+            ftp_port=self.ftp_port_spin.value(),
+            ftp_username=self.ftp_user_edit.text().strip(),
+            ftp_password=self.ftp_password_edit.text(),
+            r2_account_id=self.r2_account_edit.text().strip(),
+            r2_access_key_id=self.r2_key_edit.text().strip(),
+            r2_secret_access_key=self.r2_secret_edit.text(),
+            r2_bucket=self.r2_bucket_edit.text().strip(),
+            autocrop_ratios=tuple(split_ratio_text(self.autocrop_ratios_edit.text())),
+        )
+
+    def _browse_live_folder(self) -> None:
+        """Choose the Live folder."""
+        path = QFileDialog.getExistingDirectory(
+            self, "Choose Live folder", self.live_folder_edit.text()
+        )
+        if path:
+            self.live_folder_edit.setText(path)
 
     def preferences(self) -> CropPreferences:
         """Return the values currently shown in the form."""
@@ -436,6 +499,9 @@ class PreferencesDialog(QDialog):
         """Accept only when the entered values validate."""
         try:
             validate_preferences(self.preferences())
+            live = self.live_settings()
+            if live is not None:
+                validate_live_settings(live)
         except ValueError as error:
             QMessageBox.warning(self, "Invalid preferences", str(error))
             return

@@ -1,0 +1,120 @@
+"""Tests for Live mode in the editor window."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from PySide6.QtCore import QSettings
+from PySide6.QtWidgets import QApplication
+
+from photo_workflow.editor.app import CropWindow
+from photo_workflow.live import settings as live_settings
+from photo_workflow.live.stages import StageId, StageStatus
+
+
+@pytest.fixture(autouse=True)
+def no_keychain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep these tests away from the real system keychain."""
+    monkeypatch.setattr(live_settings.KeychainSecretStore, "get", lambda self, name: "")
+    monkeypatch.setattr(live_settings.KeychainSecretStore, "set", lambda self, name, value: None)
+
+
+def make_live_photo(live_root: Path) -> Path:
+    """
+    Create a renamed fake original in a Live date folder.
+
+    Returns:
+        The photo path.
+    """
+    photo = live_root / "2025" / "10" / "20251031" / "input" / "20251031_101500_00_IMG_1.CR3"
+    photo.parent.mkdir(parents=True)
+    photo.write_bytes(b"raw")
+    return photo
+
+
+def make_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CropWindow:
+    """
+    Create a window whose Live folder is `tmp_path/live`, without decoding previews.
+
+    Returns:
+        The window.
+    """
+    QApplication.instance() or QApplication([])
+    settings = QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+    window = CropWindow(settings=settings, camera_root=tmp_path / "camera")
+    monkeypatch.setattr(window, "_start_photo_load", lambda path: None)
+    return window
+
+
+def test_live_mode_lists_live_photos_and_keeps_crop_review_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live mode opens photos from the Live folder, and Crop/Review still toggles."""
+    photo = make_live_photo(tmp_path / "live")
+    window = make_window(tmp_path, monkeypatch)
+
+    window._toggle_live_mode()
+
+    assert "Live Crop Mode" in window.windowTitle()
+    assert window._photos == [photo]
+    assert not window.live_dock.isHidden()
+    window._toggle_review_mode()
+    assert "Live Review Mode" in window.windowTitle()
+    window._toggle_live_mode()
+    assert window.live_dock.isHidden()
+    assert "Live" not in window.windowTitle()
+    window.close()
+
+
+def test_status_panel_toggle_persists_and_tab_hides_panel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Feature toggles are stored; the edge tab hides and shows the panel."""
+    make_live_photo(tmp_path / "live")
+    window = make_window(tmp_path, monkeypatch)
+    window._toggle_live_mode()
+    panel = window.live_dock.panel
+
+    panel.toggles[StageId.DENOISE].setChecked(True)
+
+    assert window._live.pipeline.settings.is_enabled(StageId.DENOISE)
+    assert window._settings.value("live/enabled", "", type=str) == "denoise"
+    assert not panel.toggles[StageId.AUTOCROP].isEnabled()
+    window.live_dock.toggle_panel()
+    assert panel.isHidden()
+    window.live_dock.toggle_panel()
+    assert not panel.isHidden()
+    window.close()
+
+
+def test_failed_photo_is_grayed_with_warning_overlay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A photo whose stage failed shows the large failure overlay."""
+    photo = make_live_photo(tmp_path / "live")
+    window = make_window(tmp_path, monkeypatch)
+    window._toggle_live_mode()
+    pipeline = window._live.pipeline
+
+    record = pipeline._state.images[photo][StageId.DENOISE]
+    record.status, record.error = StageStatus.FAILED, "boom"
+    window._refresh_live_failure()
+
+    assert window.view._failed is not None
+    assert "boom" in window.view._failed
+    window.close()
+
+
+def test_clean_wipes_live_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Clean action empties the Live folder, input included."""
+    photo = make_live_photo(tmp_path / "live")
+    window = make_window(tmp_path, monkeypatch)
+    window._toggle_live_mode()
+
+    window._live.pipeline.clean()
+    window._live_cleaned("")
+
+    assert not photo.exists()
+    assert window._photos == []
+    window.close()

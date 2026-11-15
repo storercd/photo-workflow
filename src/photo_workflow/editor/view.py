@@ -59,6 +59,7 @@ class CropView(QWidget):
         self._passive_crop = False
         self._show_grid = True
         self._warning: str | None = None
+        self._failed: str | None = None
 
     def set_image(self, image: QImage, image_width: int, image_height: int) -> None:
         """Set the displayed preview and source dimensions."""
@@ -156,12 +157,35 @@ class CropView(QWidget):
         self._warning = text
         self.update()
 
+    def set_failed(self, text: str | None) -> None:
+        """Gray out the image and show a large centered warning, or clear it with `None`."""
+        self._failed = text
+        self.update()
+
     def paintEvent(self, event: object) -> None:
         """Paint the image surface, then the warning watermark on top."""
         painter = QPainter(self)
         self._paint_content(painter, event)
+        if self._failed:
+            self._draw_failed(painter, self._failed)
         if self._warning:
             self._draw_warning(painter, self._warning)
+
+    def _draw_failed(self, painter: QPainter, text: str) -> None:
+        """Gray out the whole canvas and draw a large red warning in its center."""
+        painter.save()
+        painter.fillRect(self.rect(), QColor(90, 90, 90, 185))
+        font = painter.font()
+        font.setBold(True)
+        font.setPixelSize(max(24, min(self.width() // 14, 72)))
+        painter.setFont(font)
+        painter.setPen(QColor("#ff3b30"))
+        painter.drawText(
+            self.rect().adjusted(24, 24, -24, -24),
+            Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+            text,
+        )
+        painter.restore()
 
     def _draw_warning(self, painter: QPainter, text: str) -> None:
         """Draw a bold translucent red banner in the top-left corner."""

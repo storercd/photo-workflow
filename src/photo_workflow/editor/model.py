@@ -512,6 +512,33 @@ def _bounds_rect(points: list[tuple[float, float]]) -> CropRect:
     )
 
 
+def parse_aspect_ratios(values: list[str]) -> tuple[AspectRatio, ...]:
+    """
+    Parse integer or decimal ratio labels such as `4:5` and `1.91:1`.
+
+    Returns:
+        The parsed aspect ratios.
+
+    Raises:
+        ValueError: If a ratio is malformed or the list is empty.
+    """
+    ratios = []
+    for value in values:
+        try:
+            width_text, height_text = value.split(":", maxsplit=1)
+            ratio = Fraction(width_text) / Fraction(height_text)
+        except (ValueError, ZeroDivisionError) as error:
+            raise ValueError(
+                f"Invalid aspect ratio {value!r}; expected positive width:height"
+            ) from error
+        if ratio <= 0:
+            raise ValueError(f"Invalid aspect ratio {value!r}; values must be positive")
+        ratios.append(AspectRatio(ratio.numerator, ratio.denominator, value))
+    if not ratios:
+        raise ValueError("At least one aspect ratio is required")
+    return tuple(ratios)
+
+
 def aspect_ratio_for_crop(
     crop: CropRect,
     image_width: int,

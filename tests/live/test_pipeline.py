@@ -1,0 +1,380 @@
+"""Tests for the Live pipeline framework."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from concurrent.futures import Executor, Future
+from pathlib import Path
+
+import pytest
+
+from photo_workflow.live.api import (
+    PermanentStageError,
+    StageImplementation,
+    StageJob,
+    StageRegistry,
+    StageResult,
+)
+from photo_workflow.live.layout import LiveLayout
+from photo_workflow.live.pipeline import LivePipeline
+from photo_workflow.live.settings import LiveSettings
+from photo_workflow.live.stages import StageId, StageStatus
+
+PHOTO_NAME = "20251031_101500_00_IMG_0001.CR3"
+
+
+class ManualExecutor(Executor):
+    """Queues work so tests decide when background jobs run."""
+
+    def __init__(self) -> None:
+        """Start with an empty queue."""
+        self.queue: list[Callable[[], None]] = []
+
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> Future:
+        """
+        Queue a call instead of running it.
+
+        Returns:
+            A future that is never resolved by the executor itself.
+        """
+        self.queue.append(lambda: fn(*args, **kwargs))
+        return Future()
+
+    def run_all(self) -> None:
+        """Run queued work, including work queued by that work, until idle."""
+        while self.queue:
+            self.queue.pop(0)()
+
+
+class Recorder(StageImplementation):
+    """Stage that writes one file and records what it was given."""
+
+    def __init__(self, subfolder_suffix: str = ".out") -> None:
+        """Create a recorder writing files with the given suffix."""
+        self.calls: list[StageJob] = []
+        self.suffix = subfolder_suffix
+
+    def process(self, job: StageJob) -> StageResult:
+        """
+        Write an output file and remember the job.
+
+        Returns:
+            A done result listing the file.
+        """
+        self.calls.append(job)
+        target = job.output_path(suffix=self.suffix)
+        target.write_text(job.source.name)
+        return StageResult.done(target)
+
+
+class Flaky(StageImplementation):
+    """Stage that raises for a number of calls before succeeding."""
+
+    def __init__(self, failures: int, error: Exception | None = None) -> None:
+        """Fail `failures` times (use a large number to always fail)."""
+        self.failures = failures
+        self.error = error or RuntimeError("network down")
+        self.calls = 0
+
+    def process(self, job: StageJob) -> StageResult:
+        """
+        Raise until the failure budget is used up.
+
+        Returns:
+            A skipped result once the budget is exhausted.
+        """
+        self.calls += 1
+        if self.calls <= self.failures:
+            raise self.error  # noqa: DOC501
+        return StageResult.skipped("recovered")
+
+
+def make_photo(root: Path, name: str = PHOTO_NAME) -> Path:
+    """
+    Create a renamed original in a date folder.
+
+    Returns:
+        The photo path.
+    """
+    input_dir = root / "2025" / "10" / "20251031" / "input"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    photo = input_dir / name
+    photo.write_bytes(b"raw")
+    return photo
+
+
+def make_pipeline(
+    tmp_path: Path,
+    registry: StageRegistry | None = None,
+    enabled: set[StageId] | None = None,
+) -> tuple[LivePipeline, ManualExecutor, list[float]]:
+    """
+    Create a pipeline over `tmp_path` with a manual executor and recorded sleeps.
+
+    Returns:
+        The pipeline, its executor and the list of backoff delays it slept.
+    """
+    executor = ManualExecutor()
+    sleeps: list[float] = []
+    settings = LiveSettings(enabled=frozenset(enabled or ()))
+    pipeline = LivePipeline(
+        LiveLayout(tmp_path),
+        settings,
+        registry or StageRegistry(),
+        executor=executor,
+        sleep=sleeps.append,
+        backoff=(0.1, 0.2),
+    )
+    return pipeline, executor, sleeps
+
+
+ALL_FEATURES = {
+    StageId.FTP,
+    StageId.DENOISE,
+    StageId.MASK,
+    StageId.LIGHTING,
+    StageId.EXPORT,
+    StageId.CLOUD_SYNC,
+}
+
+
+def test_features_are_off_by_default_and_images_wait_at_blocking_export(tmp_path: Path) -> None:
+    """Soft stages pass through; Export holds images and flags them as waiting."""
+    photo = make_photo(tmp_path)
+    pipeline, executor, _ = make_pipeline(tmp_path)
+
+    pipeline.scan()
+    executor.run_all()
+
+    assert pipeline.status(photo, StageId.AUTOCROP) is StageStatus.SKIPPED
+    summaries = {summary.stage: summary for summary in pipeline.snapshot().stages}
+    assert summaries[StageId.EXPORT].count == 1
+    assert summaries[StageId.EXPORT].waiting_disabled
+    assert summaries[StageId.DENOISE].count == 0
+    assert summaries[StageId.CLOUD_SYNC].count == 0
+
+
+def test_autocrop_cannot_be_disabled(tmp_path: Path) -> None:
+    """Toggling AutoCrop is ignored."""
+    pipeline, _, _ = make_pipeline(tmp_path)
+
+    pipeline.toggle(StageId.AUTOCROP, False)
+
+    assert pipeline.settings.is_enabled(StageId.AUTOCROP)
+
+
+def test_stage_uses_most_advanced_earlier_output_and_falls_back(tmp_path: Path) -> None:
+    """Missing or disabled upstream outputs fall back as far as the original input."""
+    photo = make_photo(tmp_path)
+    denoise, lighting = Recorder(".dng"), Recorder(".jpg")
+    registry = StageRegistry()
+    registry.register(StageId.DENOISE, denoise)
+    registry.register(StageId.LIGHTING, lighting)
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, {StageId.LIGHTING})
+
+    pipeline.scan()
+    executor.run_all()
+
+    assert denoise.calls == []
+    assert lighting.calls[0].source == photo
+    assert lighting.calls[0].source_stage is None
+
+    pipeline.toggle(StageId.DENOISE, True)
+    executor.run_all()
+
+    assert denoise.calls[0].source == photo
+    assert lighting.calls[-1].source.name == photo.with_suffix(".dng").name
+    assert lighting.calls[-1].source_stage is StageId.DENOISE
+
+
+def test_regenerating_a_stage_invalidates_and_reruns_downstream(tmp_path: Path) -> None:
+    """Redoing an upstream stage re-runs everything after it immediately."""
+    make_photo(tmp_path)
+    mask, lighting = Recorder(".mask"), Recorder(".jpg")
+    registry = StageRegistry()
+    registry.register(StageId.MASK, mask)
+    registry.register(StageId.LIGHTING, lighting)
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, {StageId.MASK, StageId.LIGHTING})
+    pipeline.scan()
+    executor.run_all()
+    assert (len(mask.calls), len(lighting.calls)) == (1, 1)
+
+    pipeline.invalidate(StageId.MASK, include_self=True)
+    executor.run_all()
+
+    assert (len(mask.calls), len(lighting.calls)) == (2, 2)
+    assert lighting.calls[-1].source_stage is StageId.MASK
+
+
+def test_result_of_invalidated_job_is_discarded(tmp_path: Path) -> None:
+    """An in-flight job whose input was invalidated does not record a stale result."""
+    photo = make_photo(tmp_path)
+    mask = Recorder(".mask")
+    registry = StageRegistry()
+    registry.register(StageId.MASK, mask)
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, {StageId.MASK})
+    pipeline.scan()
+    assert pipeline.status(photo, StageId.MASK) is StageStatus.RUNNING
+
+    pipeline.invalidate(StageId.MASK, include_self=True)
+    executor.run_all()
+
+    assert len(mask.calls) == 2
+    assert pipeline.status(photo, StageId.MASK) is StageStatus.DONE
+
+
+def test_failure_retries_then_halts_feature_and_toggle_clears_and_retries(
+    tmp_path: Path,
+) -> None:
+    """Retries use backoff, exhaustion halts the feature, off/on recovers failed images."""
+    first = make_photo(tmp_path)
+    second = make_photo(tmp_path, "20251031_101501_00_IMG_0002.CR3")
+    flaky = Flaky(failures=3)
+    registry = StageRegistry()
+    registry.register(StageId.DENOISE, flaky)
+    pipeline, executor, sleeps = make_pipeline(tmp_path, registry, {StageId.DENOISE})
+
+    pipeline.scan()
+    executor.run_all()
+
+    assert sleeps == [0.1, 0.2]
+    assert flaky.calls == 3
+    assert pipeline.status(first, StageId.DENOISE) is StageStatus.FAILED
+    assert "network down" in pipeline.failure(first)
+    assert "network down" in pipeline.halted(StageId.DENOISE)
+    assert pipeline.status(second, StageId.DENOISE) is StageStatus.PENDING
+
+    pipeline.toggle(StageId.DENOISE, False)
+    assert pipeline.halted(StageId.DENOISE) == ""
+    assert pipeline.failure(first) == ""
+    executor.run_all()
+
+    pipeline.toggle(StageId.DENOISE, True)
+    executor.run_all()
+
+    assert pipeline.status(first, StageId.DENOISE) is StageStatus.SKIPPED
+    assert pipeline.status(second, StageId.DENOISE) is StageStatus.SKIPPED
+    assert pipeline.failure(first) == ""
+
+
+def test_permanent_error_halts_without_retries(tmp_path: Path) -> None:
+    """A permanent error skips the backoff retries."""
+    photo = make_photo(tmp_path)
+    flaky = Flaky(failures=99, error=PermanentStageError("corrupt file"))
+    registry = StageRegistry()
+    registry.register(StageId.MASK, flaky)
+    pipeline, executor, sleeps = make_pipeline(tmp_path, registry, {StageId.MASK})
+
+    pipeline.scan()
+    executor.run_all()
+
+    assert flaky.calls == 1
+    assert sleeps == []
+    assert pipeline.status(photo, StageId.MASK) is StageStatus.FAILED
+    assert pipeline.halted(StageId.MASK)
+
+
+def test_failed_stage_holds_image_in_status_snapshot(tmp_path: Path) -> None:
+    """A failed image stays counted at the failed stage."""
+    make_photo(tmp_path)
+    registry = StageRegistry()
+    registry.register(StageId.LIGHTING, Flaky(failures=99))
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, {StageId.LIGHTING})
+
+    pipeline.scan()
+    executor.run_all()
+
+    summary = {s.stage: s for s in pipeline.snapshot().stages}[StageId.LIGHTING]
+    assert (summary.count, summary.failed) == (1, 1)
+    assert summary.halted
+
+
+def test_enabling_export_releases_waiting_images(tmp_path: Path) -> None:
+    """Turning Export on lets waiting images move on to Cloud Sync."""
+    photo = make_photo(tmp_path)
+    pipeline, executor, _ = make_pipeline(tmp_path)
+    pipeline.scan()
+    executor.run_all()
+
+    pipeline.toggle(StageId.EXPORT, True)
+    executor.run_all()
+
+    assert pipeline.status(photo, StageId.EXPORT) is StageStatus.SKIPPED
+    summaries = {s.stage: s for s in pipeline.snapshot().stages}
+    assert summaries[StageId.CLOUD_SYNC].count == 1
+    assert summaries[StageId.CLOUD_SYNC].waiting_disabled
+
+
+def test_view_source_prefers_final_output_then_falls_back(tmp_path: Path) -> None:
+    """The viewer gets the output JPEG when it exists, else the original."""
+    photo = make_photo(tmp_path)
+    registry = StageRegistry()
+    registry.register(StageId.LIGHTING, Recorder(".jpg"))
+    pipeline, executor, _ = make_pipeline(tmp_path, registry)
+    pipeline.scan()
+    executor.run_all()
+    assert pipeline.view_source(photo).path == photo
+
+    pipeline.toggle(StageId.LIGHTING, True)
+    executor.run_all()
+
+    source = pipeline.view_source(photo)
+    assert source.stage is StageId.LIGHTING
+    assert source.path.parent.name == "lighting"
+
+
+def test_warnings_can_be_listed_and_dismissed(tmp_path: Path) -> None:
+    """Warnings are recorded without failing anything."""
+    photo = make_photo(tmp_path)
+    pipeline, _, _ = make_pipeline(tmp_path)
+
+    pipeline.add_warning(StageId.FTP, "upload interrupted", photo)
+    warning = pipeline.warnings()[0]
+    pipeline.clear_warnings(warning.id)
+
+    assert warning.message == "upload interrupted"
+    assert pipeline.warnings() == []
+    assert pipeline.halted(StageId.FTP) == ""
+
+
+def test_clean_wipes_live_folder_including_input(tmp_path: Path) -> None:
+    """Clean removes originals and forgets every image."""
+    photo = make_photo(tmp_path)
+    pipeline, executor, _ = make_pipeline(tmp_path)
+    pipeline.scan()
+    executor.run_all()
+
+    pipeline.clean()
+
+    assert not photo.exists()
+    assert pipeline.photos() == []
+    assert tmp_path.is_dir()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_arrival_is_renamed_before_entering_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Newly arrived files are renamed with the card-import naming, overwriting targets."""
+    from datetime import datetime  # noqa: PLC0415
+
+    from photo_workflow.live import ingest  # noqa: PLC0415
+
+    layout = LiveLayout(tmp_path)
+    layout.incoming.mkdir()
+    arrived = layout.incoming / "IMG_0001.CR3"
+    arrived.write_bytes(b"new")
+    monkeypatch.setattr(
+        ingest, "read_arrival_timestamp", lambda path: datetime(2025, 10, 31, 10, 15, 0, 120000)
+    )
+    pipeline, executor, _ = make_pipeline(tmp_path)
+
+    existing = tmp_path / "2025" / "10" / "20251031" / "input" / "20251031_101500_12_IMG_0001.CR3"
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(b"old")
+    pipeline.ingest(arrived)
+    executor.run_all()
+
+    assert not arrived.exists()
+    assert existing.read_bytes() == b"new"
+    assert pipeline.photos() == [existing]

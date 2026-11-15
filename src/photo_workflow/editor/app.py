@@ -66,6 +66,7 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
+from photo_workflow.config import load_workflow_config
 from photo_workflow.editor.ball import (
     DEFAULT_SENSITIVITY,
     SENSITIVITY_HIGH,
@@ -90,6 +91,7 @@ from photo_workflow.editor.lightroom import (
     find_lightroom_preview,
     xmp_lacks_catalog_edits,
 )
+from photo_workflow.editor.live_ui import LiveController, LiveDock, warning_rows
 from photo_workflow.editor.metadata import (
     PhotoMetadata,
     extract_preview,
@@ -119,6 +121,10 @@ from photo_workflow.editor.preferences import (
     save_preferences,
 )
 from photo_workflow.editor.view import CroppedPreview, CropView
+from photo_workflow.live.layout import IMAGE_SUFFIXES
+from photo_workflow.live.logs import configure_live_logging
+from photo_workflow.live.settings import LiveSettings, load_live_settings, save_live_settings
+from photo_workflow.live.stages import StageId
 
 PREVIEW_TAGS_BY_SUFFIX = {
     ".cr2": ("PreviewImage",),
@@ -404,12 +410,21 @@ class PhotoLoadTask(QRunnable):
         raw_path: Path,
         lightroom_catalog: Path | None = None,
         temperature: float | None = None,
+        live_source: Path | None = None,
+        adjust_light: bool = True,
     ) -> None:
-        """Initialize a task for one RAW photo, optionally forcing the color temperature."""
+        """
+        Initialize a task for one RAW photo, optionally forcing the color temperature.
+
+        `live_source` is a Live pipeline output image shown instead of the RAW preview;
+        `adjust_light` is off when that image already has lighting applied.
+        """
         super().__init__()
         self.raw_path = raw_path
         self.lightroom_catalog = lightroom_catalog
         self.temperature = temperature
+        self.live_source = live_source
+        self.adjust_light = adjust_light
         self.reference_kelvin = REFERENCE_KELVIN
         self.signals = WorkerSignals()
 
@@ -451,7 +466,9 @@ class PhotoLoadTask(QRunnable):
             self.signals.xmp_dirty.emit(str(self.raw_path), dirty)
 
     def _emit_previews(self, orientation: int, metadata: PhotoMetadata | None = None) -> None:
-        """Emit a Lightroom cached preview if present, else the embedded RAW preview."""
+        """Emit a Live output, else a Lightroom cached preview, else the embedded preview."""
+        if self._emit_live_preview():
+            return
         reason = self._emit_lightroom_preview(metadata)
         if reason is None:
             return
@@ -471,6 +488,28 @@ class PhotoLoadTask(QRunnable):
                 self.signals.preview.emit(str(self.raw_path), image, True)
                 self._emit_adjusted_preview(image)
                 break
+
+    def _emit_live_preview(self) -> bool:
+        """
+        Emit the Live pipeline's output image for this photo, if it can be decoded.
+
+        Returns:
+            Whether a preview was emitted.
+        """
+        source = self.live_source
+        if source is None or source.suffix.lower() not in IMAGE_SUFFIXES:
+            return False
+        try:
+            image = decode_preview(source.read_bytes())
+        except OSError:
+            return False
+        if image.isNull():
+            return False
+        self.signals.preview_source.emit(str(self.raw_path), f"Live {source.parent.name}")
+        self.signals.preview.emit(str(self.raw_path), image, True)
+        if self.adjust_light:
+            self._emit_adjusted_preview(image)
+        return True
 
     def _emit_adjusted_preview(self, image: QImage) -> None:
         """Emit an auto-lit copy of the embedded preview so the original stays untouched."""
@@ -677,12 +716,18 @@ class CropWindow(QMainWindow):
         restore_last_session: bool = False,
         settings: QSettings | None = None,
         debug: bool = False,
+        camera_root: Path | None = None,
     ) -> None:
         """Create the window, controls, and background worker pools."""
         super().__init__()
         self.setWindowTitle("Photo Workflow Editor")
         self.resize(1280, 820)
         self._settings = settings
+        self._camera_root = camera_root
+        self._live_settings = load_live_settings(settings)
+        self._live_mode = settings is not None and settings.value("live_mode", False, type=bool)
+        self._live: LiveController | None = None
+        self._live_view_signatures: dict[Path, tuple[Path, int]] = {}
         self._debug = debug
         self._preferences = load_preferences(settings)
         self._ratios = self._preferences.ratios()
@@ -779,7 +824,9 @@ class CropWindow(QMainWindow):
         self._build_shortcuts()
         self._wheel_delta = 0
         QApplication.instance().installEventFilter(self)
-        if initial_folder is not None:
+        if self._live_mode:
+            self._open_live()
+        elif initial_folder is not None:
             resolved = resolve_drop_path(initial_folder)
             if resolved is not None:
                 self.open_folder(resolved[0], resolved[1])
@@ -1092,6 +1139,13 @@ class CropWindow(QMainWindow):
         self.mode_button.setFixedSize(32, 28)
         self.mode_button.setAutoRaise(True)
         self.mode_button.setAccessibleName("Toggle Crop/Review mode")
+        self.live_button = QToolButton()
+        self.live_button.setFixedSize(32, 28)
+        self.live_button.setAutoRaise(True)
+        self.live_button.setCheckable(True)
+        self.live_button.setIcon(qta.icon("fa5s.broadcast-tower", color="#f4f2ec"))
+        self.live_button.setToolTip("Live mode: work on photos arriving in the Live folder")
+        self.live_button.setAccessibleName("Toggle Live mode")
         self.review_group = QGroupBox("Review")
         review_layout = QHBoxLayout(self.review_group)
         review_layout.setContentsMargins(0, 0, 0, 0)
@@ -1127,6 +1181,7 @@ class CropWindow(QMainWindow):
             self.color_buttons[color] = button
         self.review_group.setVisible(False)
         toolbar.addWidget(self.mode_button)
+        toolbar.addWidget(self.live_button)
         toolbar.addWidget(self.open_button)
         toolbar.addWidget(navigation_panel)
         toolbar.addWidget(self.rating_filter_panel)
@@ -1155,6 +1210,9 @@ class CropWindow(QMainWindow):
         preview_layout.addWidget(self.view, 1)
         preview_layout.addWidget(result_panel, 1)
         result_panel.setVisible(False)
+        self.live_dock = LiveDock()
+        self.live_dock.setVisible(False)
+        preview_layout.addWidget(self.live_dock)
         layout.addWidget(self.toolbar_widget)
         layout.addWidget(self.preview_container, 1)
         self.setCentralWidget(container)
@@ -1192,6 +1250,11 @@ class CropWindow(QMainWindow):
         self._update_lock_icon(self.lock_checkbox.isChecked())
         self._update_crop_mode()
         self.mode_button.clicked.connect(self._toggle_review_mode)
+        self.live_button.clicked.connect(self._toggle_live_mode)
+        self.live_dock.panel.stage_toggled.connect(self._live_stage_toggled)
+        self.live_dock.panel.warning_selected.connect(self._live_warning_selected)
+        self.live_dock.panel.warnings_cleared.connect(self._live_warnings_cleared)
+        self.live_dock.panel.clean_requested.connect(self._live_clean_requested)
         self._apply_review_mode()
 
     def _set_star_filter(self, minimum_stars: int | None) -> None:
@@ -1651,7 +1714,10 @@ class CropWindow(QMainWindow):
     def _apply_review_mode(self) -> None:
         """Switch the toolbar, number keys, and mode icon between Crop and Review."""
         review = self._review_mode
-        self.setWindowTitle(f"Photo Workflow Editor — {'Review' if review else 'Crop'} Mode")
+        mode_name = f"{'Review' if review else 'Crop'} Mode"
+        prefix = "Live " if self._live_mode else ""
+        self.setWindowTitle(f"Photo Workflow Editor — {prefix}{mode_name}")
+        self.live_button.setChecked(self._live_mode)
         for shortcut in self._review_shortcuts:
             shortcut.setEnabled(review)
         for shortcut in self._ratio_shortcuts:
@@ -1821,10 +1887,18 @@ class CropWindow(QMainWindow):
 
     def _show_preferences(self) -> None:
         """Open the preferences dialog and apply accepted changes."""
-        dialog = PreferencesDialog(self._preferences, self)
+        dialog = PreferencesDialog(
+            self._preferences,
+            self,
+            live=self._live_settings,
+            default_live_folder=str(self._live_settings.folder_path(self._resolve_camera_root())),
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self._apply_preferences(dialog.preferences())
+        live = dialog.live_settings()
+        if live is not None:
+            self._apply_live_settings(live)
 
     def _apply_preferences(self, preferences: CropPreferences) -> None:
         """Persist and apply new preferences without restarting."""
@@ -1862,6 +1936,199 @@ class CropWindow(QMainWindow):
         shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         shortcut.activated.connect(callback)
 
+    def _resolve_camera_root(self) -> Path:
+        """Return the camera folder the Live folder sits next to."""
+        return self._camera_root or load_workflow_config().camera_root
+
+    def _toggle_live_mode(self) -> None:
+        """Switch between Live mode and the normal folder mode."""
+        self._live_mode = not self._live_mode
+        if self._settings is not None:
+            self._settings.setValue("live_mode", self._live_mode)
+        if self._live_mode:
+            self._open_live()
+        else:
+            self._leave_live()
+
+    def _open_live(self) -> None:
+        """Show Live photos, starting the pipeline on first use."""
+        self._live_mode = True
+        controller = self._ensure_live_controller()
+        self.live_dock.setVisible(True)
+        self.live_dock.panel.set_enabled_stages(self._live_settings)
+        self._apply_review_mode()
+        self._live_view_signatures.clear()
+        self._metadata_cache.clear()
+        self._preview_cache.clear()
+        self._adjusted_cache.clear()
+        self._update_live_panel()
+        self.open_folder(controller.pipeline.layout.root)
+
+    def _leave_live(self) -> None:
+        """Return to the last normal folder; the pipeline keeps running in the background."""
+        self.live_dock.setVisible(False)
+        self.view.set_failed(None)
+        self._apply_review_mode()
+        self._metadata_cache.clear()
+        self._preview_cache.clear()
+        self._adjusted_cache.clear()
+        last_folder = (
+            self._settings.value("last_folder", type=str) if self._settings is not None else ""
+        )
+        if last_folder and Path(last_folder).is_dir():
+            self.open_folder(Path(last_folder))
+        else:
+            self.open_folder(self._resolve_camera_root())
+
+    def _ensure_live_controller(self) -> LiveController:
+        """
+        Create and start the Live controller if it does not exist yet.
+
+        Returns:
+            The running controller.
+        """
+        if self._live is None:
+            layout = self._live_settings.layout(self._resolve_camera_root())
+            self._live = LiveController(layout, self._live_settings, self)
+            self._live.changed.connect(self._live_changed)
+            self._live.cleaned.connect(self._live_cleaned)
+            self._live.start()
+        return self._live
+
+    def _apply_live_settings(self, live: LiveSettings) -> None:
+        """Persist new Live settings; a changed folder restarts the pipeline."""
+        folder_changed = live.folder != self._live_settings.folder
+        self._live_settings = live
+        if self._settings is not None:
+            save_live_settings(self._settings, live)
+        if self._live is None:
+            return
+        if folder_changed:
+            self._live.stop()
+            self._live.deleteLater()
+            self._live = None
+            if self._live_mode:
+                self._open_live()
+            return
+        self._live.pipeline.set_settings(live)
+
+    def _live_stage_toggled(self, stage: StageId, enabled: bool) -> None:
+        """Turn one Live feature on or off and remember the choice."""
+        self._live_settings = self._live_settings.with_enabled(stage, enabled)
+        if self._settings is not None:
+            save_live_settings(self._settings, self._live_settings)
+        if self._live is not None:
+            self._live.pipeline.toggle(stage, enabled)
+
+    def _live_warning_selected(self, warning_id: int, photo_text: str) -> None:
+        """Jump to a warning's photo and dismiss the warning."""
+        if self._live is None:
+            return
+        self._live.pipeline.clear_warnings(warning_id)
+        photo = Path(photo_text) if photo_text else None
+        if photo is not None and photo in self._photos:
+            self.navigate(self._photos.index(photo) - self._current_index)
+
+    def _live_warnings_cleared(self) -> None:
+        if self._live is not None:
+            self._live.pipeline.clear_warnings()
+
+    def _live_clean_requested(self) -> None:
+        """Wipe the Live folder after the panel's confirmation."""
+        if self._live is None:
+            return
+        self._dirty = False
+        self.live_dock.panel.clean_button.setEnabled(False)
+        self._live.clean()
+
+    def _live_cleaned(self, error: str) -> None:
+        self.live_dock.panel.clean_button.setEnabled(True)
+        if self._live is not None:
+            self._live.resume_polling()
+        if error:
+            self.statusBar().showMessage(f"Live clean failed: {error}", 8000)
+        self._live_view_signatures.clear()
+        self._metadata_cache.clear()
+        self._preview_cache.clear()
+        self._adjusted_cache.clear()
+        if self._live_mode and self._live is not None:
+            self.open_folder(self._live.pipeline.layout.root)
+
+    def _live_preview_source(self, raw_path: Path) -> tuple[Path | None, bool]:
+        """
+        Pick the best pipeline output to show for a Live photo.
+
+        Returns:
+            The output image (or `None` for the embedded RAW preview) and whether the
+            editor's own auto lighting should still be applied to it.
+        """
+        if not self._live_mode or self._live is None:
+            return None, True
+        source = self._live.pipeline.view_source(raw_path)
+        if source.stage is None:
+            return None, True
+        return source.path, source.stage is not StageId.LIGHTING
+
+    def _update_live_panel(self) -> None:
+        if self._live is not None:
+            self.live_dock.panel.update_status(
+                self._live.pipeline.snapshot(),
+                warning_rows(self._live),
+                blink_on=self._live.blink_on,
+            )
+
+    def _live_changed(self) -> None:
+        """Refresh the panel, newly arrived photos, regenerated previews, and failure overlay."""
+        if self._live is None:
+            return
+        self._update_live_panel()
+        if not self._live_mode:
+            return
+        self._live_add_arrivals(self._live.pipeline.photos())
+        self._live_reload_regenerated()
+        self._refresh_live_failure()
+
+    def _live_add_arrivals(self, photos: list[Path]) -> None:
+        """Add newly arrived photos to the list without disturbing the current one."""
+        if photos == self._all_photos:
+            return
+        known = set(self._all_photos)
+        for photo in photos:
+            self._photo_ratings.setdefault(photo, (0, None))
+        added = [photo for photo in photos if photo not in known]
+        self._all_photos = photos
+        if not self._all_photos or self._current_index < 0:
+            if added:
+                self.open_folder(self._live.pipeline.layout.root)
+            return
+        self._refresh_rating_filter()
+
+    def _live_reload_regenerated(self) -> None:
+        """Reload the current preview when its pipeline output appeared or was rewritten."""
+        path = self._current_path
+        if path is None or self._dirty or path in self._loading:
+            return
+        source = self._live.pipeline.view_source(path)
+        try:
+            signature = (source.path, source.path.stat().st_mtime_ns)
+        except OSError:
+            return
+        previous = self._live_view_signatures.get(path)
+        self._live_view_signatures[path] = signature
+        if previous is None or previous == signature:
+            return
+        self._preview_cache.pop(path, None)
+        self._adjusted_cache.pop(path, None)
+        self._start_photo_load(path)
+
+    def _refresh_live_failure(self) -> None:
+        """Gray out the current image with a large warning when a stage failed on it."""
+        if self._current_path is None or self._live is None:
+            self.view.set_failed(None)
+            return
+        message = self._live.pipeline.failure(self._current_path)
+        self.view.set_failed(f"⚠ PROCESSING FAILED\n{message}" if message else None)
+
     def open_folder(self, folder: Path, selected_photo: Path | None = None) -> None:
         """Load supported RAW files and optionally start on one selected photo."""
         if self._dirty or self._save_busy:
@@ -1870,15 +2137,18 @@ class CropWindow(QMainWindow):
             self._pending_navigation = 0
             self._start_save()
             return
-        self._all_photos = (
-            sorted(
-                path
-                for path in folder.iterdir()
-                if path.is_file() and path.suffix.lower() in RAW_SUFFIXES
+        if self._live_mode and self._live is not None:
+            self._all_photos = self._live.pipeline.photos()
+        else:
+            self._all_photos = (
+                sorted(
+                    path
+                    for path in folder.iterdir()
+                    if path.is_file() and path.suffix.lower() in RAW_SUFFIXES
+                )
+                if folder.is_dir()
+                else []
             )
-            if folder.is_dir()
-            else []
-        )
         self._photos = list(self._all_photos)
         self._photo_ratings = {path: (0, None) for path in self._all_photos}
         self._load_failures.clear()
@@ -1890,9 +2160,11 @@ class CropWindow(QMainWindow):
             self._rating_scan_generation += 1
             self._ratings_loaded = False
             self._photo_ratings = {}
-            if folder.is_dir():
+            if folder.is_dir() and not self._live_mode:
                 self._record_session_state(folder, None)
-            self.position_count_label.setText("No CR2 or CR3 files in folder")
+            self.position_count_label.setText(
+                "Waiting for Live photos" if self._live_mode else "No CR2 or CR3 files in folder"
+            )
             self.position_label.setText("")
             self._set_preview_loading(False)
             self._set_preview_image(QImage(), 1, 1)
@@ -1925,9 +2197,11 @@ class CropWindow(QMainWindow):
         self._current_index = index
         self._current_path = self._photos[index]
         self._refresh_xmp_warning()
+        self._refresh_live_failure()
         self._recheck_xmp_status()
         self._update_status_bar()
-        self._record_session_state(self._current_path.parent, self._current_path)
+        if not self._live_mode:
+            self._record_session_state(self._current_path.parent, self._current_path)
         self.previous_button.setEnabled(self._ratings_loaded and self._current_index > 0)
         self.next_button.setEnabled(
             self._ratings_loaded and self._current_index < len(self._photos) - 1
@@ -2019,7 +2293,14 @@ class CropWindow(QMainWindow):
 
     def _start_photo_load(self, raw_path: Path) -> None:
         """Submit one selected load task to the bounded thread pool."""
-        task = PhotoLoadTask(raw_path, self._lightroom_catalog, self._wb_override)
+        live_source, adjust_light = self._live_preview_source(raw_path)
+        task = PhotoLoadTask(
+            raw_path,
+            self._lightroom_catalog,
+            self._wb_override,
+            live_source=live_source,
+            adjust_light=adjust_light,
+        )
         task.signals.metadata.connect(self._metadata_loaded)
         task.signals.preview.connect(self._preview_loaded)
         task.signals.preview_source.connect(self._preview_source_loaded)
@@ -2811,6 +3092,8 @@ class CropWindow(QMainWindow):
             self._start_save()
             event.ignore()
             return
+        if self._live is not None:
+            self._live.stop()
         self._queued_loads.clear()
         self._load_pool.clear()
         self._load_pool.waitForDone()
@@ -2951,6 +3234,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     app = QApplication.instance() or QApplication([])
     settings = QSettings("photo-workflow", "crop-tool")
+    configure_live_logging()
     window = CropWindow(
         args.folder,
         restore_last_session=args.folder is None,
