@@ -112,6 +112,12 @@ LibRaw via `rawpy`: camera white balance, no tone curve, cropped to the active a
   warning: the stage is `StageResult.skipped` (later stages use the earlier source) and the
   viewer shows a small amber "Mask not applied: no subject detected" badge (top right) for that
   photo while Mask is enabled. Real mask errors are still failures.
+- **Camera look** (`imaging.match_camera_look`): linear data has no tone curve or picture
+  style, so shown plainly it is dark and flat next to the camera's own JPEG. Wherever a
+  RAW or linear intermediate becomes a display image (Lighting/Color input, Export without
+  Lighting), a monotonic per-channel curve is fitted from it to the RAW's embedded JPEG
+  and applied at full size, so the starting point matches the camera's rendering. It falls
+  back to the plain sRGB encoding if the embedded preview is missing or a different shape.
 - **Lighting/Color** → `output/<name>.jpg` (quality 95, 4:4:4, sRGB profile): reuses
   `editor/lighting.py` (`estimate_adjustment`/`apply_adjustment`/`gains_from_kelvin`). Settings:
   `auto_lighting` (default on) and `color_temperature` (Kelvin override, default none).

@@ -52,7 +52,7 @@ class Export(StageImplementation):
             A done result listing the exported JPEG.
         """
         metadata = read_photo_metadata(job.photo, job.photo.with_suffix(".xmp"))
-        image, exif = load_source_image(job.source, metadata.orientation)
+        image, exif = load_source_image(job.source, metadata.orientation, job.photo)
         rendered = apply_crop(image, metadata.crop, metadata.crop_angle)
         target = job.output_path(suffix=EXPORT_SUFFIX)
         save_jpeg(rendered, target, exif)
@@ -66,18 +66,22 @@ class Export(StageImplementation):
         return StageResult.done(target)
 
 
-def load_source_image(source: Path, orientation: int) -> tuple[Image.Image, Image.Exif]:
+def load_source_image(
+    source: Path, orientation: int, camera_reference: Path | None = None
+) -> tuple[Image.Image, Image.Exif]:
     """
     Load the best available source as an upright image.
 
     Finished image outputs are opened directly; the 16-bit linear TIFF intermediates of
-    Denoise and Mask (used when Lighting/Color is off) are encoded to sRGB. For the RAW
+    Denoise and Mask (used when Lighting/Color is off) are encoded to sRGB with the look of
+    the camera's own JPEG when `camera_reference` is given. For the RAW
     original the largest embedded JPEG is used, since no RAW developer is bundled;
     `orientation` is the RAW's EXIF orientation, applied when the embedded JPEG carries none.
 
     Args:
         source: The image or RAW file to render.
         orientation: EXIF orientation of the RAW file.
+        camera_reference: The RAW whose embedded JPEG sets the look of linear sources.
 
     Returns:
         The upright RGB image and its EXIF data (orientation reset).
@@ -86,7 +90,7 @@ def load_source_image(source: Path, orientation: int) -> tuple[Image.Image, Imag
         RuntimeError: If no embedded preview can be read from a RAW source.
     """
     if source.suffix.lower() in LINEAR_SUFFIXES:
-        return Image.fromarray(load_srgb8(source)), Image.Exif()
+        return Image.fromarray(load_srgb8(source, camera_reference)), Image.Exif()
     if source.suffix.lower() in IMAGE_SUFFIXES:
         with Image.open(source) as opened:
             return _upright(opened, 1)

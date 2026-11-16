@@ -10,14 +10,20 @@ import numpy as np
 import pytest
 
 from photo_workflow.editor.lighting import REFERENCE_KELVIN, estimate_adjustment
-from photo_workflow.live import detection
+from photo_workflow.live import detection, imaging
 from photo_workflow.live.api import StageJob, StageRegistry
 from photo_workflow.live.detection import clear_detections, get_detection
 from photo_workflow.live.features import lighting as lighting_stage
 from photo_workflow.live.features import load_features
 from photo_workflow.live.features.denoise import MIN_STRENGTH, _strength, denoise_linear
 from photo_workflow.live.features.mask import NO_SUBJECT_MESSAGE, apply_inverted_mask
-from photo_workflow.live.imaging import linear_to_srgb8, load_linear_rgb, save_linear_rgb
+from photo_workflow.live.imaging import (
+    linear_to_srgb8,
+    load_linear_rgb,
+    load_srgb8,
+    match_camera_look,
+    save_linear_rgb,
+)
 from photo_workflow.live.layout import LiveLayout
 from photo_workflow.live.settings import LiveSettings
 from photo_workflow.live.stages import StageId, StageStatus
@@ -107,6 +113,40 @@ def test_denoise_strength_follows_the_noise_level() -> None:
 
     assert _strength(quiet, 0.9) == MIN_STRENGTH
     assert 0.9 * 0.03 * 65535 * 0.8 < _strength(noisy, 0.9) < 0.9 * 0.03 * 65535 * 1.2
+
+
+def test_camera_look_follows_the_embedded_jpeg_tone_curve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Linear data is rendered like the camera JPEG, here a brighter, punchier curve."""
+    linear = linear_gradient(80, 120)
+    plain = linear_to_srgb8(linear)
+    camera = np.clip(255 * (plain / 255.0) ** 0.7, 0, 255).astype(np.uint8)
+    monkeypatch.setattr(imaging, "_embedded_preview", lambda _path: camera)
+
+    matched = match_camera_look(linear, tmp_path / "x.CR3")
+
+    assert matched is not None
+    assert matched.shape == plain.shape
+    assert np.abs(matched.astype(int) - camera.astype(int)).mean() < 2
+    assert matched.mean() > plain.mean() + 10
+
+
+def test_camera_look_is_skipped_without_a_matching_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing or differently shaped preview falls back to the plain sRGB encoding."""
+    linear = linear_gradient(80, 120)
+    path = tmp_path / "image.tif"
+    save_linear_rgb(path, linear)
+
+    monkeypatch.setattr(imaging, "_embedded_preview", lambda _path: None)
+    assert match_camera_look(linear, path) is None
+    assert np.array_equal(load_srgb8(path, camera_reference=path), linear_to_srgb8(linear))
+
+    portrait = np.zeros((120, 80, 3), np.uint8)
+    monkeypatch.setattr(imaging, "_embedded_preview", lambda _path: portrait)
+    assert match_camera_look(linear, path) is None
 
 
 def test_inverted_mask_darkens_only_the_background_by_a_quarter_stop() -> None:

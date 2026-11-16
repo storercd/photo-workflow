@@ -99,7 +99,7 @@ class Lighting(StageImplementation):
         Returns:
             The result listing the final JPEG.
         """
-        rgb = load_srgb8(job.source)
+        rgb = load_srgb8(job.source, camera_reference=job.photo)
         reference = as_shot_reference(job.photo)
         adjustment = choose_adjustment(rgb, job.settings, reference)
         output = job.output_path(OUTPUT_SUBFOLDER, ".jpg")

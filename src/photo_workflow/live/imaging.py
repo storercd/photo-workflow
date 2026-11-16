@@ -9,6 +9,8 @@ LibRaw through `rawpy`.
 
 from __future__ import annotations
 
+import io
+import logging
 import os
 from pathlib import Path
 
@@ -16,10 +18,16 @@ import cv2
 import numpy as np
 import rawpy
 from numpy.typing import NDArray
+from PIL import Image, ImageOps
 
 from photo_workflow.live.layout import RAW_SUFFIXES
 
+LOGGER = logging.getLogger(__name__)
 MAX_16 = 65535.0
+LOOK_FIT_WIDTH = 480
+LOOK_BINS = 64
+LOOK_MIN_SAMPLES = 40
+LOOK_ASPECT_TOLERANCE = 0.02
 SRGB_THRESHOLD = 0.0031308
 # LibRaw `flip` codes -> number of counter-clockwise quarter turns (3 is a half turn).
 FLIP_QUARTER_TURNS = {3: 2, 5: 1, 6: 3}
@@ -62,9 +70,15 @@ def save_linear_rgb(path: Path, rgb: NDArray[np.uint16]) -> None:
     os.replace(partial, path)
 
 
-def load_srgb8(path: Path) -> NDArray[np.uint8]:
+def load_srgb8(path: Path, camera_reference: Path | None = None) -> NDArray[np.uint8]:
     """
     Load any photo or stage output as an upright 8-bit display-referred RGB array.
+
+    Args:
+        path: The RAW, linear intermediate or ordinary image to load.
+        camera_reference: The RAW whose embedded camera JPEG sets the look (tone curve and
+            color rendering) of RAW or linear sources. Without it, or when the embedded
+            preview does not match, the plain sRGB encoding is used.
 
     Returns:
         An `H x W x 3` RGB array: RAW and linear intermediates are developed and encoded,
@@ -74,7 +88,12 @@ def load_srgb8(path: Path) -> NDArray[np.uint8]:
         ValueError: If the file cannot be read as an image.
     """
     if path.suffix.lower() in RAW_SUFFIXES or path.suffix.lower() in LINEAR_SUFFIXES:
-        return linear_to_srgb8(load_linear_rgb(path))
+        linear = load_linear_rgb(path)
+        if camera_reference is not None:
+            matched = match_camera_look(linear, camera_reference)
+            if matched is not None:
+                return matched
+        return linear_to_srgb8(linear)
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
         raise ValueError(f"Not a readable image: {path}")
@@ -88,13 +107,100 @@ def linear_to_srgb8(rgb: NDArray[np.uint16]) -> NDArray[np.uint8]:
     Returns:
         An 8-bit display-referred array of the same shape.
     """
+    encoded = _encode_srgb(rgb)
+    return np.round(np.clip(encoded, 0, 1) * 255).astype(np.uint8)
+
+
+def match_camera_look(
+    linear: NDArray[np.uint16], raw_path: Path
+) -> NDArray[np.uint8] | None:
+    """
+    Render linear data with the tone and color curves of the camera's own JPEG.
+
+    Linear development has no tone curve or picture style, so it looks dark, flat and
+    desaturated next to the JPEG the camera embeds. Per channel, a monotonic curve from the
+    linear image to the embedded JPEG is fitted on downsized copies and applied at full size.
+
+    Returns:
+        The matched 8-bit image, or `None` when the embedded preview is missing or does not
+        line up with the linear image (so the caller falls back to plain sRGB).
+    """
+    reference = _embedded_preview(raw_path)
+    if reference is None:
+        return None
+    height, width = linear.shape[:2]
+    if abs(reference.shape[1] / reference.shape[0] - width / height) > LOOK_ASPECT_TOLERANCE:
+        LOGGER.info("embedded preview of %s does not match the development", raw_path.name)
+        return None
+    fit_size = (LOOK_FIT_WIDTH, max(1, round(LOOK_FIT_WIDTH * height / width)))
+    encoded = _encode_srgb(linear)
+    source = cv2.resize(encoded, fit_size, interpolation=cv2.INTER_AREA)
+    target = cv2.resize(reference, fit_size, interpolation=cv2.INTER_AREA)
+    result = np.empty(linear.shape, dtype=np.uint8)
+    for channel in range(3):
+        grid, curve = _fit_curve(source[..., channel], target[..., channel])
+        result[..., channel] = np.round(
+            np.interp(encoded[..., channel], grid, curve) * 255
+        ).astype(np.uint8)
+    return result
+
+
+def _encode_srgb(rgb: NDArray[np.uint16]) -> NDArray[np.float32]:
+    """
+    Encode linear 16-bit values with the sRGB curve.
+
+    Returns:
+        Float values in 0..1.
+    """
     linear = rgb.astype(np.float32) / MAX_16
-    encoded = np.where(
+    return np.where(
         linear <= SRGB_THRESHOLD,
         linear * 12.92,
         1.055 * np.power(np.maximum(linear, SRGB_THRESHOLD), 1 / 2.4) - 0.055,
-    )
-    return np.round(np.clip(encoded, 0, 1) * 255).astype(np.uint8)
+    ).astype(np.float32)
+
+
+def _fit_curve(
+    source: NDArray[np.float32], target: NDArray[np.uint8]
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """
+    Fit a monotonic curve mapping `source` (0..1) to `target` (0..255 -> 0..1).
+
+    Returns:
+        The grid of source values and the matching target values.
+    """
+    x = source.ravel()
+    y = target.ravel().astype(np.float32) / 255
+    edges = np.linspace(0, 1, LOOK_BINS + 1)
+    bin_index = np.clip(np.digitize(x, edges) - 1, 0, LOOK_BINS - 1)
+    centers, medians = [], []
+    for index in range(LOOK_BINS):
+        selected = y[bin_index == index]
+        if selected.size >= LOOK_MIN_SAMPLES:
+            centers.append(float(np.median(x[bin_index == index])))
+            medians.append(float(np.median(selected)))
+    if not centers:
+        return np.array([0.0, 1.0]), np.array([0.0, 1.0])
+    return np.array(centers), np.maximum.accumulate(np.array(medians))
+
+
+def _embedded_preview(raw_path: Path) -> NDArray[np.uint8] | None:
+    """
+    Read the camera JPEG embedded in a RAW file, upright.
+
+    Returns:
+        An `H x W x 3` RGB array, or `None` when no JPEG preview can be read.
+    """
+    try:
+        with rawpy.imread(str(raw_path)) as raw:
+            thumb = raw.extract_thumb()
+        if thumb.format != rawpy.ThumbFormat.JPEG:
+            return None
+        with Image.open(io.BytesIO(thumb.data)) as opened:
+            return np.asarray(ImageOps.exif_transpose(opened).convert("RGB"))
+    except (rawpy.LibRawError, OSError, ValueError):
+        LOGGER.warning("could not read the embedded preview of %s", raw_path, exc_info=True)
+        return None
 
 
 def _develop_raw(path: Path) -> NDArray[np.uint16]:
