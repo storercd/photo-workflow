@@ -104,8 +104,10 @@ LibRaw via `rawpy`: camera white balance, no tone curve, cropped to the active a
 
 - **Denoise** → `denoise/<name>.tif`: non-local-means on a luma/chroma split in a
   square-root domain, with the filter strength scaled to the noise measured in each image
-  (so high-ISO frames are cleaned properly and clean frames are left nearly untouched). There is no library that re-encodes a mosaiced CR2/CR3, so the
-  "raw-format" intermediate is the linear developed image.
+  (so high-ISO frames are cleaned properly and clean frames are left nearly untouched).
+  Chroma is smoothed at quarter resolution because colour noise is blotchy, not grainy.
+  There is no library that re-encodes a mosaiced CR2/CR3, so the "raw-format" intermediate
+  is the linear developed image.
 - **Mask** → `mask/<name>.tif`: Apple Vision (`VNGenerateForegroundInstanceMaskRequest`,
   macOS only, `pyobjc-framework-Vision`) finds the main subject; everything outside it is
   scaled by -0.25 stop in linear light. No subject is an expected case, not a

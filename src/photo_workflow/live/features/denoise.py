@@ -24,8 +24,10 @@ from photo_workflow.live.api import StageImplementation, StageJob, StageRegistry
 from photo_workflow.live.imaging import MAX_16, load_linear_rgb, save_linear_rgb
 from photo_workflow.live.stages import StageId
 
-LUMA_STRENGTH_PER_SIGMA = 0.9
-CHROMA_STRENGTH_PER_SIGMA = 1.6
+LUMA_STRENGTH_PER_SIGMA = 1.5
+CHROMA_STRENGTH_PER_SIGMA = 4.0
+# Colour noise is blotchy rather than grainy, so chroma is smoothed at reduced resolution.
+CHROMA_DOWNSCALE = 4
 MIN_STRENGTH = 150.0
 MAX_STRENGTH = 4000.0
 # Immerkaer's noise kernel: a Laplacian-style difference that cancels smooth detail.
@@ -48,8 +50,8 @@ def denoise_linear(rgb: NDArray[np.uint16]) -> NDArray[np.uint16]:
     luma_strength = _strength(luma, LUMA_STRENGTH_PER_SIGMA)
     luma = _smooth(luma, luma_strength)
     blue_plane, red_plane = (blue_diff + 1) / 2, (red_diff + 1) / 2
-    blue_diff = _smooth(blue_plane, _strength(blue_plane, CHROMA_STRENGTH_PER_SIGMA)) * 2 - 1
-    red_diff = _smooth(red_plane, _strength(red_plane, CHROMA_STRENGTH_PER_SIGMA)) * 2 - 1
+    blue_diff = _smooth_chroma(blue_plane) * 2 - 1
+    red_diff = _smooth_chroma(red_plane) * 2 - 1
     green = (luma - LUMA_WEIGHTS[0] * (luma + red_diff) - LUMA_WEIGHTS[2] * (luma + blue_diff)) / (
         LUMA_WEIGHTS[1]
     )
@@ -70,6 +72,20 @@ def _strength(plane: NDArray[np.float32], per_sigma: float) -> float:
     differences = cv2.filter2D(plane, cv2.CV_32F, NOISE_KERNEL)
     sigma = float(np.median(np.abs(differences))) * 1.4826 / 6
     return min(max(per_sigma * sigma * MAX_16, MIN_STRENGTH), MAX_STRENGTH)
+
+
+def _smooth_chroma(plane: NDArray[np.float32]) -> NDArray[np.float32]:
+    """
+    Smooth a 0..1 chroma plane at reduced resolution, where blotchy colour noise is grainy.
+
+    Returns:
+        The filtered plane at the original size.
+    """
+    height, width = plane.shape
+    size = (max(width // CHROMA_DOWNSCALE, 1), max(height // CHROMA_DOWNSCALE, 1))
+    small = cv2.resize(plane, size, interpolation=cv2.INTER_AREA)
+    small = _smooth(small, _strength(plane, CHROMA_STRENGTH_PER_SIGMA) / 2)
+    return cv2.resize(small, (width, height), interpolation=cv2.INTER_CUBIC)
 
 
 def _smooth(plane: NDArray[np.float32], strength: float) -> NDArray[np.float32]:

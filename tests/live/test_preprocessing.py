@@ -104,6 +104,21 @@ def test_denoise_reduces_noise_and_keeps_the_signal() -> None:
     assert abs(float(result.mean()) - float(clean.mean())) < 500
 
 
+def test_denoise_removes_blotchy_colour_noise() -> None:
+    """Colour speckle on a neutral grey is smoothed away."""
+    rng = np.random.default_rng(3)
+    grey = np.full((160, 160, 3), 20000, dtype=np.float32)
+    speckle = cv2.GaussianBlur(rng.normal(0, 12000, grey.shape).astype(np.float32), (0, 0), 0.7)
+    noisy = np.clip(grey + speckle, 0, 65535).astype(np.uint16)
+
+    result = denoise_linear(noisy).astype(np.float32)
+
+    def colour_spread(image: np.ndarray) -> float:
+        return float(np.std(image[..., 0] - image[..., 2]))
+
+    assert colour_spread(result) < colour_spread(noisy.astype(np.float32)) * 0.4
+
+
 def test_denoise_strength_follows_the_noise_level() -> None:
     """A clean frame is barely smoothed; a noisy one gets a much stronger filter."""
     rng = np.random.default_rng(2)
