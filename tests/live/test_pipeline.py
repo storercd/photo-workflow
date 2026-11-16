@@ -239,6 +239,26 @@ def test_regenerating_a_stage_invalidates_and_reruns_downstream(tmp_path: Path) 
     assert lighting.calls[-1].source_stage is StageId.MASK
 
 
+def test_prioritized_photo_is_regenerated_first(tmp_path: Path) -> None:
+    """After an invalidation the photo being viewed is served before the others."""
+    make_photo(tmp_path, "20251031_101500_00_IMG_0001.CR3")
+    viewed = make_photo(tmp_path, "20251031_101500_00_IMG_0002.CR3")
+    mask = Recorder(".mask")
+    registry = StageRegistry()
+    registry.register(StageId.MASK, mask)
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, {StageId.MASK})
+    pipeline.scan()
+    executor.run_all()
+    mask.calls.clear()
+
+    pipeline.prioritize(viewed)
+    pipeline.invalidate(StageId.MASK, include_self=True)
+    executor.run_all()
+
+    assert [job.photo for job in mask.calls] == [viewed, mask.calls[1].photo]
+    assert mask.calls[1].photo != viewed
+
+
 def test_result_of_invalidated_job_is_discarded(tmp_path: Path) -> None:
     """An in-flight job whose input was invalidated does not record a stale result."""
     photo = make_photo(tmp_path)

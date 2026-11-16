@@ -155,6 +155,7 @@ class LivePipeline:
         self._warning_ids = count(1)
         self._paused = False
         self._held = False
+        self._priority: Path | None = None
         self._closed = False
         self._saved_state: dict | None = None
         self._written_state = ""
@@ -375,6 +376,14 @@ class LivePipeline:
 
     # ----- scheduling ---------------------------------------------------------------
 
+    def prioritize(self, photo: Path | None) -> None:
+        """Serve this photo before the others in every stage (the one being viewed)."""
+        with self._lock:
+            if self._priority == photo:
+                return
+            self._priority = photo
+        self.pump()
+
     @property
     def held(self) -> bool:
         """Whether starting new stage work is on hold (running jobs may still finish)."""
@@ -409,7 +418,11 @@ class LivePipeline:
         if stage in self._state.halted or not self.settings.is_enabled(stage):
             return []
         claimed = []
-        for photo in self.photos():
+        photos = self.photos()
+        if self._priority in photos:
+            photos.remove(self._priority)
+            photos.insert(0, self._priority)
+        for photo in photos:
             if self._state.running[stage] >= spec.concurrency:
                 break
             if not self._eligible(photo, stage):

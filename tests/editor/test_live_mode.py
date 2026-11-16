@@ -317,6 +317,21 @@ def test_idle_button_toggles_and_persists_idle_processing(
     window.close()
 
 
+def test_viewed_photo_is_prioritized_in_the_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Selecting a photo in Live mode makes the pipeline serve it first."""
+    photo = make_live_photo(tmp_path / "live")
+    window = make_window(tmp_path, monkeypatch)
+    window._toggle_live_mode()
+
+    window._show_photo(0)
+
+    assert window._live.pipeline._priority == window._photos[0]
+    assert photo.name == window._photos[0].name
+    window.close()
+
+
 def test_saving_a_crop_reruns_export_and_cloud_sync(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

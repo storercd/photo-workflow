@@ -2276,6 +2276,8 @@ class CropWindow(QMainWindow):
         """Select a photo, restore cached state, and queue nearby previews."""
         self._current_index = index
         self._current_path = self._photos[index]
+        if self._live is not None and self._live_mode:
+            self._live.pipeline.prioritize(self._current_path)
         self._refresh_xmp_warning()
         self._refresh_live_failure()
         self._recheck_xmp_status()

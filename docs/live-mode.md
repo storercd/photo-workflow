@@ -39,7 +39,9 @@ in that feature's queue as well as the one it is really at. The counts of off fe
 in the status panel, showing the work that turning them on would add.
 
 Regenerating a stage's output (`pipeline.invalidate`) resets every downstream stage for
-that image and re-runs them immediately; stale in-flight results are discarded.
+that image and re-runs them immediately; stale in-flight results are discarded. The photo
+open in the editor is always served first (`pipeline.prioritize`), so regenerating it
+never waits behind the rest of the queue.
 
 ## Failure model
 
