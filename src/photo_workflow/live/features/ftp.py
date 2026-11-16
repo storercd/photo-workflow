@@ -152,7 +152,8 @@ class FtpServer:
             return
         try:
             while not self._stop.is_set():
-                server.serve_forever(timeout=POLL_SECONDS, blocking=False, handle_exit=False)
+                # `serve_forever` would log its start banner on every poll.
+                server.ioloop.loop(POLL_SECONDS, blocking=False)
         except Exception as error:
             LOGGER.exception("FTP server crashed")
             self._host.fail(StageId.FTP, f"FTP server stopped unexpectedly: {error}")
