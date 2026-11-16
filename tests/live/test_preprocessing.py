@@ -15,7 +15,7 @@ from photo_workflow.live.api import StageJob, StageRegistry
 from photo_workflow.live.detection import clear_detections, get_detection
 from photo_workflow.live.features import lighting as lighting_stage
 from photo_workflow.live.features import load_features
-from photo_workflow.live.features.denoise import denoise_linear
+from photo_workflow.live.features.denoise import MIN_STRENGTH, _strength, denoise_linear
 from photo_workflow.live.features.mask import NO_SUBJECT_MESSAGE, apply_inverted_mask
 from photo_workflow.live.imaging import linear_to_srgb8, load_linear_rgb, save_linear_rgb
 from photo_workflow.live.layout import LiveLayout
@@ -96,6 +96,17 @@ def test_denoise_reduces_noise_and_keeps_the_signal() -> None:
     error_after = np.std(result.astype(np.float32) - clean)
     assert error_after < error_before * 0.7
     assert abs(float(result.mean()) - float(clean.mean())) < 500
+
+
+def test_denoise_strength_follows_the_noise_level() -> None:
+    """A clean frame is barely smoothed; a noisy one gets a much stronger filter."""
+    rng = np.random.default_rng(2)
+    base = np.full((120, 120), 0.4, dtype=np.float32)
+    quiet = base + rng.normal(0, 0.002, base.shape).astype(np.float32)
+    noisy = base + rng.normal(0, 0.03, base.shape).astype(np.float32)
+
+    assert _strength(quiet, 0.9) == MIN_STRENGTH
+    assert 0.9 * 0.03 * 65535 * 0.8 < _strength(noisy, 0.9) < 0.9 * 0.03 * 65535 * 1.2
 
 
 def test_inverted_mask_darkens_only_the_background_by_a_quarter_stop() -> None:

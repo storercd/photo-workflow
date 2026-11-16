@@ -103,7 +103,8 @@ Intermediates are 16-bit scene-linear sRGB TIFFs (`live/imaging.py`; RAW is deve
 LibRaw via `rawpy`: camera white balance, no tone curve, cropped to the active area).
 
 - **Denoise** → `denoise/<name>.tif`: non-local-means on a luma/chroma split in a
-  square-root domain. There is no library that re-encodes a mosaiced CR2/CR3, so the
+  square-root domain, with the filter strength scaled to the noise measured in each image
+  (so high-ISO frames are cleaned properly and clean frames are left nearly untouched). There is no library that re-encodes a mosaiced CR2/CR3, so the
   "raw-format" intermediate is the linear developed image.
 - **Mask** → `mask/<name>.tif`: Apple Vision (`VNGenerateForegroundInstanceMaskRequest`,
   macOS only, `pyobjc-framework-Vision`) finds the main subject; everything outside it is

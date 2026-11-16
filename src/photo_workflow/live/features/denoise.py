@@ -9,7 +9,9 @@ write a re-encoded *mosaiced* RAW, so the "raw-format" intermediate is the scene
 the RAW's linear light and full precision for the later stages.
 
 Noise grows with brightness in linear data, so denoising runs in a square-root domain
-(roughly constant noise) on a luma/chroma split with chroma smoothed more strongly.
+(roughly constant noise) on a luma/chroma split with chroma smoothed more strongly. The
+filter strength follows the noise measured in each image, so a clean low-ISO frame is left
+almost untouched while a high-ISO frame is smoothed enough to matter.
 """
 
 from __future__ import annotations
@@ -22,8 +24,12 @@ from photo_workflow.live.api import StageImplementation, StageJob, StageRegistry
 from photo_workflow.live.imaging import MAX_16, load_linear_rgb, save_linear_rgb
 from photo_workflow.live.stages import StageId
 
-LUMA_STRENGTH = 350.0
-CHROMA_STRENGTH = 1100.0
+LUMA_STRENGTH_PER_SIGMA = 0.9
+CHROMA_STRENGTH_PER_SIGMA = 1.6
+MIN_STRENGTH = 150.0
+MAX_STRENGTH = 4000.0
+# Immerkaer's noise kernel: a Laplacian-style difference that cancels smooth detail.
+NOISE_KERNEL = np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], dtype=np.float32)
 TEMPLATE_WINDOW = 5
 SEARCH_WINDOW = 15
 LUMA_WEIGHTS = np.array([0.299, 0.587, 0.114], dtype=np.float32)
@@ -39,14 +45,31 @@ def denoise_linear(rgb: NDArray[np.uint16]) -> NDArray[np.uint16]:
     encoded = np.sqrt(rgb.astype(np.float32) / MAX_16)
     luma = encoded @ LUMA_WEIGHTS
     blue_diff, red_diff = encoded[..., 2] - luma, encoded[..., 0] - luma
-    luma = _smooth(luma, LUMA_STRENGTH)
-    blue_diff = _smooth((blue_diff + 1) / 2, CHROMA_STRENGTH) * 2 - 1
-    red_diff = _smooth((red_diff + 1) / 2, CHROMA_STRENGTH) * 2 - 1
+    luma_strength = _strength(luma, LUMA_STRENGTH_PER_SIGMA)
+    luma = _smooth(luma, luma_strength)
+    blue_plane, red_plane = (blue_diff + 1) / 2, (red_diff + 1) / 2
+    blue_diff = _smooth(blue_plane, _strength(blue_plane, CHROMA_STRENGTH_PER_SIGMA)) * 2 - 1
+    red_diff = _smooth(red_plane, _strength(red_plane, CHROMA_STRENGTH_PER_SIGMA)) * 2 - 1
     green = (luma - LUMA_WEIGHTS[0] * (luma + red_diff) - LUMA_WEIGHTS[2] * (luma + blue_diff)) / (
         LUMA_WEIGHTS[1]
     )
     clean = np.stack((luma + red_diff, green, luma + blue_diff), axis=-1)
     return np.round(np.clip(clean, 0, 1) ** 2 * MAX_16).astype(np.uint16)
+
+
+def _strength(plane: NDArray[np.float32], per_sigma: float) -> float:
+    """
+    Pick a filter strength from the noise level of a 0..1 plane.
+
+    The noise is the robust (median-based) spread of the plane's second differences, which
+    ignores smooth detail and so is only mildly inflated by texture.
+
+    Returns:
+        The non-local-means strength in 16-bit units, kept within sane limits.
+    """
+    differences = cv2.filter2D(plane, cv2.CV_32F, NOISE_KERNEL)
+    sigma = float(np.median(np.abs(differences))) * 1.4826 / 6
+    return min(max(per_sigma * sigma * MAX_16, MIN_STRENGTH), MAX_STRENGTH)
 
 
 def _smooth(plane: NDArray[np.float32], strength: float) -> NDArray[np.float32]:
