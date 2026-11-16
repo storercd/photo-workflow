@@ -315,3 +315,22 @@ def test_idle_button_toggles_and_persists_idle_processing(
     assert not panel.idle_button.isChecked()
     assert not pipeline.held
     window.close()
+
+
+def test_saving_a_crop_reruns_export_and_cloud_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A manual crop edit makes the exported JPEG stale, so Export and Cloud Sync redo it."""
+    photo = make_live_photo(tmp_path / "live")
+    window = make_window(tmp_path, monkeypatch)
+    window._toggle_live_mode()
+    pipeline = window._live.pipeline
+    for stage in StageId:
+        pipeline._state.images[photo][stage].status = StageStatus.DONE
+
+    window._save_finished(str(photo), 1, CropRect(0.1, 0.1, 0.9, 0.9), 0.0, "")
+
+    assert pipeline.status(photo, StageId.AUTOCROP) is StageStatus.DONE
+    assert pipeline.status(photo, StageId.EXPORT) is StageStatus.PENDING
+    assert pipeline.status(photo, StageId.CLOUD_SYNC) is StageStatus.PENDING
+    window.close()

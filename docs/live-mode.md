@@ -174,7 +174,8 @@ after toggling FTP off and on.
 **Export** (`features/export.py`) renders each photo's best source (the Lighting/Color JPEG,
 else the Mask or Denoise 16-bit linear TIFF encoded to sRGB, else the RAW's largest embedded
 JPEG; no RAW developer is bundled) with the crop and straighten angle from its XMP sidecar
-(written by AutoCrop or by hand) into a q95 JPEG in `export/`.
+(written by AutoCrop or by hand) into a q95 JPEG in `export/`. Saving a crop in the editor
+re-runs Export and Cloud Sync for that photo.
 
 **Cloud Sync** (`features/cloud_sync.py`) follows `storercd/photo-portal`'s `sync/sync.py`:
 for each exported image it uploads `photos/{thumb,med,web,full}/<stem>-<hash>.jpg` (long

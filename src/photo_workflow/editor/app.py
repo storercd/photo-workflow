@@ -3018,6 +3018,8 @@ class CropWindow(QMainWindow):
         )
         if saved_path == self._current_path and saved_metadata is not None:
             self._current_metadata = saved_metadata
+        if self._live is not None and self._live_mode:
+            self._live.pipeline.invalidate(StageId.AUTOCROP, saved_path)
         if self._dirty:
             self._start_save()
         elif self._pending_filter_refresh:
