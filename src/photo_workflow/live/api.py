@@ -133,7 +133,12 @@ class StageImplementation:
     Override `process` for per-photo work. Override `start`/`stop` for features that
     run a service while enabled (the FTP server); they are called when the user turns
     the feature on or off. Unregistered stages use this base, which does nothing.
+
+    Raise `revision` whenever a change makes earlier output out of date: after a restart,
+    photos finished by an older revision of a stage are processed again.
     """
+
+    revision = 1
 
     def process(self, job: StageJob) -> StageResult:
         """

@@ -527,6 +527,30 @@ def test_restart_keeps_finished_work_and_redoes_what_changed(tmp_path: Path) -> 
     assert len(redo.calls) == 1
 
 
+def test_restart_redoes_a_stage_whose_implementation_revision_changed(tmp_path: Path) -> None:
+    """Output from an older revision of a stage is regenerated, with its downstream stages."""
+    make_photo(tmp_path)
+    enabled = {StageId.DENOISE, StageId.LIGHTING}
+    registry = StageRegistry()
+    registry.register(StageId.DENOISE, Recorder(".tif"))
+    registry.register(StageId.LIGHTING, Recorder(".jpg"))
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, enabled)
+    pipeline.scan()
+    executor.run_all()
+
+    newer_denoise, lighting = Recorder(".tif"), Recorder(".jpg")
+    newer_denoise.revision = 2
+    registry = StageRegistry()
+    registry.register(StageId.DENOISE, newer_denoise)
+    registry.register(StageId.LIGHTING, lighting)
+    restarted, executor, _ = make_pipeline(tmp_path, registry, enabled)
+    restarted.scan()
+    executor.run_all()
+
+    assert len(newer_denoise.calls) == 1
+    assert len(lighting.calls) == 1
+
+
 def test_holding_blocks_new_work_but_not_ingest_and_release_resumes(tmp_path: Path) -> None:
     """While held, images are still found and queued, but nothing starts until release."""
     denoise = Recorder(".tif")

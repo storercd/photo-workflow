@@ -105,6 +105,8 @@ def _smooth(plane: NDArray[np.float32], strength: float) -> NDArray[np.float32]:
 class Denoise(StageImplementation):
     """Writes `denoise/<name>.tif`, the denoised linear intermediate."""
 
+    revision = 2
+
     def process(self, job: StageJob) -> StageResult:
         """
         Denoise the photo's most advanced available source.

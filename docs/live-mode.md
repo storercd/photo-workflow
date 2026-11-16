@@ -96,6 +96,10 @@ Rules: `process` runs on a worker thread (never touch Qt); read settings from
 display-oriented JPEG to `output/` (`job.output_path("output", ".jpg")`); Export output is
 never used for viewing. AutoCrop writes the crop into the photo's XMP sidecar.
 
+Bump the class attribute `revision` (default 1) when a change makes earlier output out of
+date; after a restart, photos finished by an older revision are regenerated along with
+everything downstream.
+
 ## Preprocessing features
 
 Three stage modules live in `live/features/`: `denoise.py`, `mask.py`, `lighting.py`.

@@ -29,7 +29,13 @@ def input_signature(photo: Path) -> list[int]:
     return [stat.st_size, stat.st_mtime_ns]
 
 
-def dump_state(root: Path, images: dict, enabled: dict[str, bool], autocrop: list) -> str:
+def dump_state(
+    root: Path,
+    images: dict,
+    enabled: dict[str, bool],
+    autocrop: list,
+    revisions: dict[str, int],
+) -> str:
     """
     Serialize finished stage records; `images` maps each photo to its `ImageStage` records.
 
@@ -52,6 +58,7 @@ def dump_state(root: Path, images: dict, enabled: dict[str, bool], autocrop: lis
         "version": STATE_VERSION,
         "enabled": enabled,
         "autocrop": autocrop,
+        "revisions": revisions,
         "images": saved,
     }
     return json.dumps(state, indent=1, sort_keys=True)
@@ -87,13 +94,14 @@ def restorable_records(
     photo: Path,
     enabled: dict[str, bool],
     autocrop: list,
+    revisions: dict[str, int],
 ) -> dict[StageId, tuple[StageStatus, tuple[Path, ...], str]]:
     """
     Pick the saved stage records that are still valid for a photo.
 
     A record is dropped, along with every stage after it, when the original changed, when
-    the feature's on/off state or the AutoCrop options differ from when it was saved, or
-    when one of its output files is gone.
+    the feature's on/off state, the AutoCrop options or the stage's implementation revision
+    differ from when it was saved, or when one of its output files is gone.
 
     Returns:
         Status, outputs and message per restorable stage.
@@ -102,10 +110,13 @@ def restorable_records(
     if not entry or entry.get("input") != input_signature(photo):
         return {}
     saved_enabled = state.get("enabled", {})
+    saved_revisions = state.get("revisions", {})
     restored = {}
     for stage in STAGE_ORDER:
         record = entry.get("stages", {}).get(stage.value)
         if record is None or not _still_valid(stage, saved_enabled, enabled, state, autocrop):
+            break
+        if saved_revisions.get(stage.value, 1) != revisions.get(stage.value, 1):
             break
         outputs = tuple(root / name for name in record.get("outputs", []))
         if not all(path.exists() for path in outputs):

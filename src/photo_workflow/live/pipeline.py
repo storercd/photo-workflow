@@ -193,6 +193,7 @@ class LivePipeline:
             photo,
             self._enabled_flags(),
             self._autocrop_flags(),
+            self._revisions(),
         )
         for stage, (status, outputs, message) in restored.items():
             stages[stage].status = status
@@ -202,6 +203,9 @@ class LivePipeline:
 
     def _enabled_flags(self) -> dict[str, bool]:
         return {stage.value: self.settings.is_enabled(stage) for stage in STAGE_ORDER}
+
+    def _revisions(self) -> dict[str, int]:
+        return {stage.value: self._registry.get(stage).revision for stage in STAGE_ORDER}
 
     def _autocrop_flags(self) -> list:
         ratios, ball, force = _autocrop_options(self.settings)
@@ -217,6 +221,7 @@ class LivePipeline:
                 self._state.images,
                 self._enabled_flags(),
                 self._autocrop_flags(),
+                self._revisions(),
             )
             if text == self._written_state:
                 return
