@@ -36,6 +36,7 @@ XMP = """<x:xmpmeta xmlns:x='adobe:ns:meta/'>
 
 
 def write_xmp(path: Path, tags: list[str]) -> None:
+    """Write a minimal XMP sidecar containing the given keywords."""
     items = "".join(f"<rdf:li>{tag}</rdf:li>" for tag in tags)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(XMP.format(items=items))
@@ -159,7 +160,9 @@ def test_dry_run_also_fails_without_project_tag(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(shutil.which("exiftool") is None, reason="ExifTool is required")
-@pytest.mark.parametrize(("winner", "expected"), [("first", "Action: Pass"), ("last", "Action: Dig")])
+@pytest.mark.parametrize(
+    ("winner", "expected"), [("first", "Action: Pass"), ("last", "Action: Dig")]
+)
 def test_duplicate_records_follow_configured_winner(
     tmp_path: Path, winner: str, expected: str
 ) -> None:

@@ -16,7 +16,14 @@ from photo_workflow.config import DEFAULT_DUPLICATE_RECORD_WINNER, load_config
 LOGGER = logging.getLogger(__name__)
 
 # Every tag name this importer owns; all existing values are removed on import.
-MANAGED_TAG_NAMES = ("Action", "ActionNotes", "PrimaryPlayer", "InvolvedPlayer", "Player", "BallInFrame")
+MANAGED_TAG_NAMES = (
+    "Action",
+    "ActionNotes",
+    "PrimaryPlayer",
+    "InvolvedPlayer",
+    "Player",
+    "BallInFrame",
+)
 # Record fields we read but deliberately do not import.
 IGNORED_RECORD_FIELDS = frozenset({"file", "confidence_action", "confidence_primary_player"})
 HANDLED_RECORD_FIELDS = frozenset({
@@ -234,6 +241,9 @@ def import_label_file(
 
     Returns:
         The number of sidecars updated and a description of each failure.
+
+    Raises:
+        ActionTagError: If the label file contains an unknown record field.
     """
     records = load_records(label_path)
     updated = 0
