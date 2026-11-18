@@ -9,6 +9,7 @@ import tempfile
 import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from photo_workflow.editor.model import (
     CropRect,
@@ -20,6 +21,9 @@ XMP_NS = "adobe:ns:meta/"
 RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 CRS_NS = "http://ns.adobe.com/camera-raw-settings/1.0/"
 XAP_NS = "http://ns.adobe.com/xap/1.0/"
+PWF_NS = "https://github.com/storercd/photo-workflow/ns/1.0/"
+PWF_CONFIG = Path(__file__).with_name("resources") / "photo_workflow_xmp.config"
+CropSource = Literal["manual", "auto"]
 XMP_TAGS = {
     "CropTop": "top",
     "CropLeft": "left",
@@ -40,6 +44,7 @@ class PhotoMetadata:
     crop: CropRect
     crop_angle: float = 0
     orientation: int = 1
+    auto_crop: bool = False
 
 
 def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
@@ -66,7 +71,12 @@ def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
     if orientation in {5, 6, 7, 8}:
         image_width, image_height = image_height, image_width
     crop_data = (
-        _read_json(exiftool, xmp_path, *(f"-XMP-crs:{tag}" for tag in XMP_TAGS))
+        _read_json(
+            exiftool,
+            xmp_path,
+            "-XMP-pwf:CropSource",
+            *(f"-XMP-crs:{tag}" for tag in XMP_TAGS),
+        )
         if xmp_path.is_file()
         else {}
     )
@@ -96,6 +106,7 @@ def read_photo_metadata(raw_path: Path, xmp_path: Path) -> PhotoMetadata:
         crop=display_crop,
         crop_angle=crop_angle,
         orientation=orientation,
+        auto_crop=str(crop_data.get("CropSource", "")).strip().lower() == "auto",
     )
 
 
@@ -176,8 +187,14 @@ def write_photo_crop(
     crop: CropRect,
     *,
     crop_angle: float = 0,
+    source: CropSource = "manual",
 ) -> None:
-    """Write crop metadata without modifying the RAW; preserve existing XMP data."""
+    """
+    Write crop metadata without modifying the RAW; preserve existing XMP data.
+
+    `source` records who made the crop in `pwf:CropSource`: Crop mode writes "manual" (the
+    default) and Live's AutoCrop stage writes "auto", so a manual crop can be told apart.
+    """
     exiftool = require_exiftool()
     raw_metadata = _read_json(
         exiftool,
@@ -202,6 +219,7 @@ def write_photo_crop(
             int(metadata["ImageHeight"]),
             sensor_crop,
             crop_angle,
+            source,
         )
         return
 
@@ -215,13 +233,47 @@ def write_photo_crop(
     subprocess.run(
         [
             exiftool,
+            "-config",
+            str(PWF_CONFIG),
             *(f"-XMP-crs:{tag}={value}" for tag, value in values.items()),
             "-XMP-crs:HasCrop=True",
+            f"-XMP-pwf:CropSource={source}",
             str(xmp_path),
         ],
         capture_output=True,
         check=True,
         text=True,
+    )
+
+
+def is_manual_crop(xmp_path: Path) -> bool:
+    """
+    Return whether a sidecar holds a crop made by the user.
+
+    A crop counts as manual when `pwf:CropSource` says so, and also when it has no marker
+    (it predates automatic crops, so the user made it). Only a crop marked "auto", or no
+    crop at all, is not manual.
+
+    Returns:
+        `True` when automatic crop must not overwrite the sidecar's crop.
+    """
+    if not xmp_path.is_file():
+        return False
+    record = _read_json(
+        require_exiftool(),
+        xmp_path,
+        "-config",
+        str(PWF_CONFIG),
+        "-XMP-pwf:CropSource",
+        "-XMP-crs:HasCrop",
+        *(f"-XMP-crs:{tag}" for tag in ("CropTop", "CropLeft", "CropBottom", "CropRight")),
+    )
+    marker = str(record.get("CropSource", "")).strip().lower()
+    if marker:
+        return marker != "auto"
+    has_crop = str(record.get("HasCrop", "")).strip().lower() == "true"
+    return has_crop or any(
+        tag in record for tag in ("CropTop", "CropLeft", "CropBottom", "CropRight")
     )
 
 
@@ -420,11 +472,13 @@ def _create_sidecar(
     image_height: int,
     crop: CropRect,
     crop_angle: float,
+    source: CropSource = "manual",
 ) -> None:
     """Create a minimal standalone XMP sidecar atomically for the first edit."""
     ElementTree.register_namespace("x", XMP_NS)
     ElementTree.register_namespace("rdf", RDF_NS)
     ElementTree.register_namespace("crs", CRS_NS)
+    ElementTree.register_namespace("pwf", PWF_NS)
     root = ElementTree.Element(f"{{{XMP_NS}}}xmpmeta")
     rdf = ElementTree.SubElement(root, f"{{{RDF_NS}}}RDF")
     description = ElementTree.SubElement(rdf, f"{{{RDF_NS}}}Description")
@@ -440,6 +494,7 @@ def _create_sidecar(
     ):
         formatted_value = value if isinstance(value, str) else f"{value:.10f}"
         description.set(f"{{{CRS_NS}}}{tag}", formatted_value)
+    description.set(f"{{{PWF_NS}}}CropSource", source)
     description.set(f"{{{CRS_NS}}}RawFileName", raw_path.name)
     description.set(f"{{{CRS_NS}}}ImageWidth", str(image_width))
     description.set(f"{{{CRS_NS}}}ImageHeight", str(image_height))

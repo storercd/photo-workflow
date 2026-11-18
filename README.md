@@ -224,6 +224,14 @@ outward to the preset ratio by default, keeping every edge you already
 placed, up to the image bounds. Turn off "Grow crop" in Preferences to
 instead shrink the crop to fit within its drawn bounds.
 
+### Live mode (work in progress)
+
+The toolbar's broadcast-tower button switches the editor to **Live mode**, which works on
+photos in a Live folder (next to the camera folder, named `live`) and shows a status panel
+for the staged Live pipeline. All Live features are off by default and are enabled one at a
+time from the panel. Configure the folder and FTP/R2 credentials under Preferences → Live.
+See [docs/live-mode.md](docs/live-mode.md) for the developer note on adding a stage.
+
 ## Fonts
 
 The note renderer resolves fonts in this order:

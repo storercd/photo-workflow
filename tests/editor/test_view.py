@@ -445,3 +445,17 @@ def test_locked_mode_shows_aspect_ratio_indicator_when_matching_preset() -> None
     )
     view.close()
     app.quit()
+
+
+def test_user_edit_turns_an_auto_crop_into_a_manual_one() -> None:
+    """Editing an auto-marked crop in the view flips its source to manual."""
+    QApplication.instance() or QApplication([])
+    view = CropView()
+    view.resize(400, 300)
+    view.set_image(QImage(400, 300, QImage.Format.Format_RGB32), 400, 300)
+    view.set_crop(CropRect(0.2, 0.2, 0.8, 0.8))
+    view.set_crop_source("auto")
+    view.grab()  # paints the auto frame and label without error
+
+    view._set_edited_crop(CropRect(0.25, 0.2, 0.8, 0.8))
+    assert view.crop_source == "manual"

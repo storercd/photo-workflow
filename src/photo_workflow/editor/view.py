@@ -23,6 +23,7 @@ HORIZON_HIT_PIXELS = 10
 MIN_CROP_PIXELS = 2
 CANVAS_COLOR = QColor("#555555")
 SNAPPED_CROP_COLOR = QColor("#55e39f")
+AUTO_CROP_COLOR = QColor("#4fb3ff")
 
 
 class CropView(QWidget):
@@ -59,6 +60,19 @@ class CropView(QWidget):
         self._passive_crop = False
         self._show_grid = True
         self._warning: str | None = None
+        self._failed: str | None = None
+        self._badge: str | None = None
+        self._crop_source: str | None = None
+
+    def set_crop_source(self, source: str | None) -> None:
+        """Mark the crop as "auto" or "manual" (colored and labeled), or `None` for neither."""
+        self._crop_source = source
+        self.update()
+
+    @property
+    def crop_source(self) -> str | None:
+        """Whether the shown crop is "auto", "manual", or not classified."""
+        return self._crop_source
 
     def set_image(self, image: QImage, image_width: int, image_height: int) -> None:
         """Set the displayed preview and source dimensions."""
@@ -156,12 +170,59 @@ class CropView(QWidget):
         self._warning = text
         self.update()
 
+    def set_failed(self, text: str | None) -> None:
+        """Gray out the image and show a large centered warning, or clear it with `None`."""
+        self._failed = text
+        self.update()
+
+    def set_badge(self, text: str | None) -> None:
+        """Show a small, unobtrusive note in the top-right corner, or clear it with `None`."""
+        self._badge = text
+        self.update()
+
     def paintEvent(self, event: object) -> None:
         """Paint the image surface, then the warning watermark on top."""
         painter = QPainter(self)
         self._paint_content(painter, event)
+        if self._failed:
+            self._draw_failed(painter, self._failed)
         if self._warning:
             self._draw_warning(painter, self._warning)
+        if self._badge:
+            self._draw_badge(painter, self._badge)
+
+    def _draw_badge(self, painter: QPainter, text: str) -> None:
+        """Draw a small translucent label in the top-right corner."""
+        painter.save()
+        font = painter.font()
+        font.setPixelSize(12)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        pad = 6
+        width = metrics.horizontalAdvance(text) + pad * 2
+        box = QRectF(self.width() - width - 12, 12, width, metrics.height() + pad)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(60, 60, 60, 170))
+        painter.drawRoundedRect(box, 4, 4)
+        painter.setPen(QColor("#ffcc66"))
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
+
+    def _draw_failed(self, painter: QPainter, text: str) -> None:
+        """Gray out the whole canvas and draw a large red warning in its center."""
+        painter.save()
+        painter.fillRect(self.rect(), QColor(90, 90, 90, 185))
+        font = painter.font()
+        font.setBold(True)
+        font.setPixelSize(max(24, min(self.width() // 14, 72)))
+        painter.setFont(font)
+        painter.setPen(QColor("#ff3b30"))
+        painter.drawText(
+            self.rect().adjusted(24, 24, -24, -24),
+            Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+            text,
+        )
+        painter.restore()
 
     def _draw_warning(self, painter: QPainter, text: str) -> None:
         """Draw a bold translucent red banner in the top-left corner."""
@@ -248,15 +309,25 @@ class CropView(QWidget):
         painter.restore()
         self._draw_horizon_candidates(painter, image_rect)
         self._draw_ball_candidates(painter, image_rect)
-        frame_color = SNAPPED_CROP_COLOR if self._snap_ratio is not None else QColor("#f4f2ec")
-        frame_pen = QPen(frame_color, 2 if self._snap_ratio is not None else 1.5)
+        auto = self._crop_source == "auto"
+        if auto:
+            frame_color = AUTO_CROP_COLOR
+        elif self._snap_ratio is not None:
+            frame_color = SNAPPED_CROP_COLOR
+        else:
+            frame_color = QColor("#f4f2ec")
+        frame_pen = QPen(frame_color, 2 if auto or self._snap_ratio is not None else 1.5)
         if self._passive_crop:
             frame_pen.setStyle(Qt.PenStyle.DashLine)
-            frame_pen.setColor(QColor(244, 242, 236, 150))
+            passive_color = QColor(frame_color)
+            passive_color.setAlpha(150)
+            frame_pen.setColor(passive_color)
         painter.setPen(frame_pen)
         painter.drawRect(crop_rect)
         if self._snap_ratio is not None:
             self._draw_snap_label(painter, crop_rect, self._snap_ratio)
+        if self._crop_source is not None:
+            self._draw_source_label(painter, crop_rect, auto)
         if not self._show_grid:
             return
         painter.setPen(QPen(QColor(244, 242, 236, 110), 1))
@@ -787,6 +858,8 @@ class CropView(QWidget):
         self._crop = crop
         self._passive_crop = False
         self._snap_ratio = self._matching_snap_ratio(crop)
+        if self._crop_source == "auto":
+            self._crop_source = "manual"
         self.update()
         self.crop_changed.emit(crop)
 
@@ -818,6 +891,22 @@ class CropView(QWidget):
             self._snap_ratios,
             tolerance=self._snap_tolerance,
         )
+
+    def _draw_source_label(self, painter: QPainter, crop_rect: QRectF, auto: bool) -> None:
+        """Label the crop's bottom-left corner as automatic or a manual override."""
+        label = "Auto crop" if auto else "Manual crop"
+        metrics = painter.fontMetrics()
+        box = QRectF(
+            crop_rect.left(),
+            min(crop_rect.bottom() + 4, self.height() - metrics.height() - 6),
+            metrics.horizontalAdvance(label) + 12,
+            metrics.height() + 4,
+        )
+        box.moveLeft(min(box.left(), self.width() - box.width() - 2))
+        painter.fillRect(box, QColor(20, 30, 45, 225))
+        painter.setPen(QPen(AUTO_CROP_COLOR if auto else QColor("#f4f2ec"), 1))
+        painter.drawRect(box)
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, label)
 
     def _draw_snap_label(
         self,

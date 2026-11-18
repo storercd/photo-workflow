@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QEvent, QPointF, QSettings, Qt
 from PySide6.QtGui import QMouseEvent, QShortcut
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QScrollArea
 
 from photo_workflow.editor.app import CropWindow
 from photo_workflow.editor.preferences import (
@@ -19,6 +19,7 @@ from photo_workflow.editor.preferences import (
     save_preferences,
     validate_preferences,
 )
+from photo_workflow.live.settings import LiveSettings
 
 
 def make_settings(tmp_path: Path) -> QSettings:
@@ -179,3 +180,54 @@ def test_duplicate_hotkeys_are_invalid() -> None:
     """Two actions cannot share one binding."""
     with pytest.raises(ValueError, match="assigned to both"):
         validate_preferences(CropPreferences(hotkeys={"flag": "X", "toggle_snap": "X"}))
+
+
+def test_live_preferences_show_and_return_every_setting() -> None:
+    """Every Live field appears in the dialog and survives an edit."""
+    app = QApplication.instance() or QApplication([])
+    live = LiveSettings(
+        folder="/tmp/live",
+        ftp_port=2121,
+        ftp_username="cam",
+        ftp_password="pw",
+        r2_account_id="acct",
+        r2_access_key_id="key",
+        r2_secret_access_key="secret",
+        r2_bucket="bucket",
+        r2_min_rating=3,
+        autocrop_ratios=("1:1", "3:2"),
+        autocrop_ball=True,
+        autocrop_force=True,
+        auto_lighting=False,
+        color_temperature=5200.0,
+        idle_processing=True,
+        idle_delay_seconds=4.5,
+    )
+    dialog = PreferencesDialog(CropPreferences(), live=live)
+
+    assert dialog.live_settings() == live
+    dialog.color_temperature_spin.setValue(0)
+    dialog.auto_lighting_check.setChecked(True)
+    edited = dialog.live_settings()
+
+    assert edited is not None
+    assert edited.color_temperature is None
+    assert edited.auto_lighting is True
+    dialog.close()
+    del app
+
+
+def test_preferences_buttons_stay_visible_below_a_scrolling_form() -> None:
+    """The long Live form scrolls while OK/Cancel stay pinned outside the scroll area."""
+    QApplication.instance() or QApplication([])
+    dialog = PreferencesDialog(
+        CropPreferences(), None, live=LiveSettings(), default_live_folder="/tmp/live"
+    )
+    scroll = dialog.findChild(QScrollArea)
+    buttons = dialog.findChild(QDialogButtonBox)
+
+    assert scroll is not None
+    assert buttons is not None
+    assert not scroll.isAncestorOf(buttons)
+    assert scroll.isAncestorOf(dialog.ftp_user_edit)
+    dialog.close()
