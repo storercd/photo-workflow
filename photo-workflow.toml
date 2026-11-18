@@ -1,5 +1,7 @@
 [workflow]
 camera_root = "/Users/christopherstorer/working/camera"
+# Mounted path of smb://STORER-EC/photo-archive/... (Finder mounts it under /Volumes).
+archive_root = "/Volumes/photo-archive"
 
 [memory_card_copy]
 card_mount_root = "/Volumes"
@@ -13,6 +15,11 @@ ignored_extensions = [".ctg", ".log", ".tmp", ".fir", ".to3"]
 [video_notes]
 max_duration_seconds = 15.0
 transcription_model = "mlx-community/whisper-medium-mlx"
+
+[action_tags]
+# When several label records map to one sidecar (e.g. exports of a Lightroom
+# virtual copy), which record's tags are kept: "first" or "last".
+duplicate_record_winner = "first"
 
 [crop_tool]
 # Legacy: imported once into the crop tool's per-user preferences (Tools >
