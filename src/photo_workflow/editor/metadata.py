@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from pathlib import Path
 
-from photo_workflow.crop_tool.model import (
+from photo_workflow.editor.model import (
     CropRect,
     display_crop_to_lightroom,
     lightroom_crop_to_display,
@@ -241,6 +241,81 @@ def write_photo_label(xmp_path: Path, label: str | None) -> None:
     )
 
 
+NOTES_PREFIX = "Notes: "
+
+
+def read_photo_notes(xmp_path: Path) -> str:
+    """
+    Read the free-form note stored as a "Notes: ..." keyword.
+
+    Returns:
+        The note text, or an empty string when none is assigned.
+    """
+    if not xmp_path.is_file():
+        return ""
+    for keyword in _read_keywords(xmp_path):
+        if keyword.startswith(NOTES_PREFIX):
+            return keyword[len(NOTES_PREFIX) :]
+    return ""
+
+
+def write_photo_notes(xmp_path: Path, notes: str) -> None:
+    """Replace the "Notes: ..." keyword, or remove it when `notes` is blank."""
+    notes = " ".join(notes.split())
+    if not xmp_path.exists():
+        if not notes:
+            return
+        _create_label_sidecar(xmp_path)
+    keywords = [k for k in _read_keywords(xmp_path) if not k.startswith(NOTES_PREFIX)]
+    if notes:
+        keywords.append(f"{NOTES_PREFIX}{notes}")
+    exiftool = require_exiftool()
+    for arguments in (
+        ["-XMP-dc:Subject="],
+        [f"-XMP-dc:Subject+={keyword}" for keyword in keywords],
+    ):
+        if arguments:
+            subprocess.run(
+                [exiftool, "-overwrite_original", *arguments, str(xmp_path)],
+                capture_output=True,
+                check=True,
+                text=True,
+            )
+
+
+def read_photos_with_notes(raw_paths: list[Path]) -> set[Path]:
+    """
+    Find which RAW photos have a "Notes: ..." keyword in their sidecar.
+
+    Returns:
+        The subset of `raw_paths` whose sidecar carries a note.
+    """
+    sidecars = {path.with_suffix(".xmp").resolve(): path for path in raw_paths}
+    existing = [str(sidecar) for sidecar in sidecars if sidecar.is_file()]
+    if not existing:
+        return set()
+    result = subprocess.run(
+        [require_exiftool(), "-j", "-XMP-dc:Subject", *existing],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    found = set()
+    for record in json.loads(result.stdout):
+        subjects = record.get("Subject", [])
+        subjects = subjects if isinstance(subjects, list) else [subjects]
+        raw_path = sidecars.get(Path(record["SourceFile"]).resolve())
+        if raw_path is not None and any(str(s).startswith(NOTES_PREFIX) for s in subjects):
+            found.add(raw_path)
+    return found
+
+
+def _read_keywords(xmp_path: Path) -> list[str]:
+    record = _read_json(require_exiftool(), xmp_path, "-XMP-dc:Subject")
+    value = record.get("Subject", [])
+    return [str(v) for v in value] if isinstance(value, list) else [str(value)]
+
+
 def transform_crop(crop: CropRect, orientation: int) -> CropRect:
     """
     Transform normalized crop bounds according to an EXIF orientation.
@@ -299,6 +374,21 @@ def require_exiftool() -> str:
     if exiftool is None:
         raise RuntimeError("ExifTool is required and must be available on PATH.")
     return exiftool
+
+
+def read_as_shot_kelvin(raw_path: Path) -> float | None:
+    """
+    Read the camera's as-shot white-balance color temperature from a RAW file.
+
+    Returns:
+        The temperature in Kelvin, or `None` when the file does not record one.
+    """
+    record = _read_json(require_exiftool(), raw_path, "-n", "-ColorTempAsShot", "-ColorTemperature")
+    for tag in ("ColorTempAsShot", "ColorTemperature"):
+        value = record.get(tag)
+        if isinstance(value, int | float) and value > 0:
+            return float(value)
+    return None
 
 
 def _read_json(exiftool: str, path: Path, *tags: str) -> dict[str, object]:
@@ -368,8 +458,27 @@ def _create_sidecar(
         temporary_path.unlink(missing_ok=True)
 
 
-def _create_label_sidecar(xmp_path: Path, label: str) -> None:
-    """Create a minimal standalone XMP sidecar atomically holding only a color label."""
+def write_photo_rating(xmp_path: Path, rating: int) -> None:
+    """Write the Lightroom star rating (0-5) without touching crop fields."""
+    rating = min(max(rating, 0), 5)
+    exiftool = require_exiftool()
+    if not xmp_path.exists():
+        if rating == 0:
+            return
+        _create_label_sidecar(xmp_path, rating=rating)
+        return
+    subprocess.run(
+        [exiftool, f"-XMP-xmp:Rating={rating}", str(xmp_path)],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+
+def _create_label_sidecar(
+    xmp_path: Path, label: str | None = None, rating: int | None = None
+) -> None:
+    """Create a minimal standalone XMP sidecar atomically holding a color label or rating."""
     ElementTree.register_namespace("x", XMP_NS)
     ElementTree.register_namespace("rdf", RDF_NS)
     ElementTree.register_namespace("xmp", XAP_NS)
@@ -377,7 +486,10 @@ def _create_label_sidecar(xmp_path: Path, label: str) -> None:
     rdf = ElementTree.SubElement(root, f"{{{RDF_NS}}}RDF")
     description = ElementTree.SubElement(rdf, f"{{{RDF_NS}}}Description")
     description.set(f"{{{RDF_NS}}}about", "")
-    description.set(f"{{{XAP_NS}}}Label", label)
+    if label is not None:
+        description.set(f"{{{XAP_NS}}}Label", label)
+    if rating is not None:
+        description.set(f"{{{XAP_NS}}}Rating", str(rating))
 
     xmp_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=xmp_path.parent, suffix=".xmp", delete=False) as temp_file:

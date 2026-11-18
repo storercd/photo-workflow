@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from photo_workflow.crop_tool import metadata as crop_metadata
-from photo_workflow.crop_tool.model import CropRect, lightroom_crop_to_display
+from photo_workflow.editor import metadata as crop_metadata
+from photo_workflow.editor.model import CropRect, lightroom_crop_to_display
 
 
 def test_read_photo_metadata_loads_crop_and_angle(

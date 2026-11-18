@@ -28,13 +28,13 @@ uv run photo-workflow-dashboard
 
 The dashboard provides:
 
-- **Launch** icons that open FastRawViewer, Photo Workflow Crop, Lightroom Classic,
+- **Launch** icons that open FastRawViewer, Photo Workflow Editor, Lightroom Classic,
   Photoshop, and Aftershoot with a click. Non-crop apps are opened by name via macOS
   Launch Services (`open -a`), so exact install paths aren't required.
 - An **"Open last imported folder in supporting apps"** checkbox, enabled once an
   import has completed. When checked, launchers marked `supports_target_folder`
-  (FastRawViewer and Photo Workflow Crop by default) open directly into the just-
-  imported folder — FastRawViewer opens its first file, and the crop tool opens the
+  (FastRawViewer and Photo Workflow Editor by default) open directly into the just-
+  imported folder — FastRawViewer opens its first file, and the editor opens the
   folder itself. Uncheck it (or leave it off before any import) to open those apps
   normally. Other apps (Lightroom, Photoshop, Aftershoot) always open neutrally.
 - An **Import Memory Card** button that runs the same steps as `photo-workflow-run`
@@ -57,8 +57,8 @@ name = "Aftershoot"
 app_name = "Aftershoot"
 
 [[dashboard.apps]]
-name = "Photo Workflow Crop"
-command = ["photo-workflow-crop"]
+name = "Photo Workflow Editor"
+command = ["photo-workflow-editor"]
 supports_target_folder = true
 ```
 
@@ -186,7 +186,7 @@ This workflow requires `exiftool`, `ffmpeg`, and `ffprobe` to be available on `P
 Launch the folder-oriented crop editor with an optional starting folder or photo:
 
 ```bash
-uv run photo-workflow-crop /path/to/photo/folder
+uv run photo-workflow-editor /path/to/photo/folder
 ```
 
 When launched without arguments, the app remembers and reopens the folder and photo from

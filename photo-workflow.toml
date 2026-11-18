@@ -22,7 +22,7 @@ transcription_model = "mlx-community/whisper-medium-mlx"
 duplicate_record_winner = "first"
 
 [crop_tool]
-# Legacy: imported once into the crop tool's per-user preferences (Tools >
+# Legacy: imported once into the editor's per-user preferences (Tools >
 # Preferences…) on first launch, then ignored. Safe to delete after that.
 aspect_ratios = ["1:1", "4:5", "1.91:1"]
 snap_tolerance = 0.05
@@ -46,8 +46,8 @@ app_name = "FastRawViewer"
 supports_target_folder = true
 
 [[dashboard.apps]]
-name = "Photo Workflow Crop"
-command = ["photo-workflow-crop"]
+name = "Photo Workflow Editor"
+command = ["photo-workflow-editor"]
 supports_target_folder = true
 
 [[dashboard.apps]]

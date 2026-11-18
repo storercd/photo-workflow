@@ -20,8 +20,8 @@ from PySide6.QtGui import QCloseEvent, QDragEnterEvent, QDropEvent, QImage, QKey
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel
 
-from photo_workflow.crop_tool import app as crop_app
-from photo_workflow.crop_tool.app import (
+from photo_workflow.editor import app as crop_app
+from photo_workflow.editor.app import (
     PREFETCH_FORWARD_COUNT,
     PREFETCH_REVERSE_COUNT,
     PREVIEW_CACHE_SIZE,
@@ -33,9 +33,9 @@ from photo_workflow.crop_tool.app import (
     resolve_drop_path,
     update_saved_crop_cache,
 )
-from photo_workflow.crop_tool.horizon import HorizonCandidate
-from photo_workflow.crop_tool.metadata import PhotoMetadata
-from photo_workflow.crop_tool.model import CropRect
+from photo_workflow.editor.horizon import HorizonCandidate
+from photo_workflow.editor.metadata import PhotoMetadata
+from photo_workflow.editor.model import CropRect
 
 
 def test_resolve_drop_path_opens_folder_without_specific_selection(tmp_path: Path) -> None:
@@ -254,6 +254,30 @@ def test_open_folder_starts_on_selected_photo(
     app.quit()
 
 
+def test_dropping_photo_from_open_folder_switches_without_rescan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dropping a photo from the already-open folder just selects it."""
+    app = QApplication.instance() or QApplication([])
+    first_photo = tmp_path / "first.cr3"
+    second_photo = tmp_path / "second.cr3"
+    first_photo.touch()
+    second_photo.touch()
+    window = CropWindow()
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda index: None)
+    window.open_folder(tmp_path)
+    monkeypatch.setattr(
+        window, "open_folder", lambda *args: pytest.fail("folder should not be rescanned")
+    )
+
+    window._open_dropped_path((tmp_path, second_photo))
+
+    assert window._current_path == second_photo
+    window.close()
+    app.quit()
+
+
 def test_open_folder_lists_cr2_and_cr3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A mixed folder lists both Canon RAW formats without including other files."""
     app = QApplication.instance() or QApplication([])
@@ -403,7 +427,7 @@ def test_compact_navigation_and_filename_reveal_controls(
     assert window.next_button.text() == ""
     assert not window.previous_button.icon().isNull()
     assert not window.next_button.icon().isNull()
-    toolbar = window.rating_filter_panel.parentWidget().layout().itemAt(0).layout()
+    toolbar = window.toolbar_widget.layout()
     assert (
         toolbar.indexOf(window.previous_button.parentWidget())
         < toolbar.indexOf(window.rating_filter_panel)
@@ -664,6 +688,40 @@ def test_apply_flag_color_toggles_the_active_color_on_current_photo(
     app.quit()
 
 
+def test_review_mode_swaps_toolbar_and_number_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review mode hides crop controls, disables ratio keys, and maps 0-9 to stars/colors."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    raw_path = Path("photo.cr3")
+    window._photo_ratings = {raw_path: (0, None)}
+    window._current_path = raw_path
+    window._ratings_loaded = True
+    started_tasks = []
+    monkeypatch.setattr(window._label_pool, "start", started_tasks.append)
+
+    assert not window.aspect_group.isHidden()
+    window._toggle_review_mode()
+
+    assert not window.review_group.isHidden()
+    assert window.aspect_group.isHidden()
+    assert "Review" in window.mode_button.toolTip()
+    assert not any(shortcut.isEnabled() for shortcut in window._ratio_shortcuts)
+
+    window._review_key(4)
+    window._review_key(7)
+
+    assert started_tasks[0].rating == 4
+    assert started_tasks[1].label == "Yellow"
+    window._rating_save_finished(str(raw_path), 4, "")
+    window._label_save_finished(str(raw_path), "Yellow", "")
+    assert window._photo_ratings[raw_path] == (4, "Yellow")
+
+    window._review_key(5 + 1)
+    assert started_tasks[2].label == "Red"
+    window.close()
+    app.quit()
+
+
 def test_label_save_failure_reports_status_without_updating_ratings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -912,6 +970,35 @@ def test_auto_level_applies_best_candidate_and_clicking_alternate_updates_angle(
     window._save_timer.stop()
     assert window.rotation_slider.value() == -34
     assert window.view._selected_horizon_candidate == 0
+    window.close()
+    app.quit()
+
+
+def test_ball_shortcut_toggles_detection_button() -> None:
+    """B toggles ball detection through its button."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+    shortcuts = {shortcut.key().toString(): shortcut for shortcut in window.findChildren(QShortcut)}
+
+    assert "B" in window.ball_button.toolTip()
+    assert not window.ball_button.icon().isNull()
+    shortcuts["B"].activated.emit()
+    assert window.ball_button.isChecked()
+    shortcuts["B"].activated.emit()
+    assert not window.ball_button.isChecked()
+
+    window.close()
+    app.quit()
+
+
+def test_ball_ring_color_is_applied_to_view() -> None:
+    """Choosing a ring color updates the view."""
+    app = QApplication.instance() or QApplication([])
+    window = CropWindow()
+
+    window._set_ball_ring_color("#00ff00")
+
+    assert window.view._ball_ring_color.name() == "#00ff00"
     window.close()
     app.quit()
 
@@ -1345,3 +1432,73 @@ def test_parse_args_handles_debug_flag() -> None:
     args_folder_debug = crop_app.parse_args(["/path/to/photos", "--debug"])
     assert args_folder_debug.debug
     assert args_folder_debug.folder == Path("/path/to/photos")
+
+
+def test_ball_button_stays_visible_in_review_mode() -> None:
+    """The ball toggle is not hidden with the crop-only tools."""
+    window = CropWindow()
+    window.show()
+    window._toggle_review_mode()
+
+    assert not window.angle_group.isVisible()
+    assert window.ball_button.isVisible()
+
+
+def test_fixing_white_balance_turns_auto_light_back_on(monkeypatch) -> None:
+    """Pinning a color temperature must not leave the original showing."""
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+    path = Path("a.cr3")
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda *_: None)
+    window._photos = [path]
+    window._current_path = path
+    window._preview_cache[path] = QImage(40, 30, QImage.Format.Format_RGB888)
+    window._preview_cache[path].fill(0x808080)
+    window.auto_light_button.setChecked(False)
+
+    window.wb_fixed_button.click()
+
+    assert window.auto_light_button.isChecked()
+    assert window._wb_override == crop_app.REFERENCE_KELVIN
+
+
+def test_metadata_load_shows_auto_lit_image(monkeypatch) -> None:
+    """Applying metadata after a photo switch must keep showing the auto-lit preview."""
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+    path = Path("a.cr3")
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda *_: None)
+    window._photos = [path]
+    window._current_path = path
+    original = QImage(40, 30, QImage.Format.Format_RGB888)
+    original.fill(0x303030)
+    window._preview_cache[path] = original
+    shown = []
+    monkeypatch.setattr(window, "_set_preview_image", lambda image, *_: shown.append(image))
+
+    window._set_preview_image(window._display_image(original), 40, 30)
+
+    assert window.auto_light_button.isChecked()
+    assert shown[-1] is window._adjusted_cache[path]
+
+
+def test_typed_kelvin_value_fixes_white_balance(monkeypatch) -> None:
+    """Typing a Kelvin value and pressing Enter clamps it and pins it for all photos."""
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda *_: None)
+
+    window._begin_wb_edit()
+    window.wb_edit.setText("4200K")
+    window._finish_wb_edit()
+
+    assert window._wb_override == 4200.0
+    assert window.wb_slider.value() == 4200
+    assert window.wb_fixed_button.isChecked()
+    assert window.wb_edit.isHidden()
+
+    window._begin_wb_edit()
+    window.wb_edit.setText("99999")
+    window._finish_wb_edit()
+
+    assert window._wb_override == crop_app.MAX_KELVIN

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from photo_workflow.crop_tool import lightroom
-from photo_workflow.crop_tool.lightroom import xmp_is_dirty, xmp_lacks_catalog_edits
+from photo_workflow.editor import lightroom
+from photo_workflow.editor.lightroom import xmp_is_dirty, xmp_lacks_catalog_edits
 
 
 def _catalog(path: Path, root: Path, dirty: int) -> None:

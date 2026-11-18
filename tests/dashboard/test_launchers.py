@@ -13,8 +13,8 @@ from photo_workflow.dashboard import launchers
 
 
 def test_resolve_bundled_command_icon_returns_path_for_known_command() -> None:
-    """Verify the crop tool's own command resolves to its bundled icon file."""
-    icon_path = launchers.resolve_bundled_command_icon("photo-workflow-crop")
+    """Verify the editor's own command resolves to its bundled icon file."""
+    icon_path = launchers.resolve_bundled_command_icon("photo-workflow-editor")
 
     assert icon_path is not None
     assert icon_path.name == "icon.png"
@@ -143,34 +143,34 @@ def test_launch_app_raises_launch_error_on_failure(monkeypatch) -> None:
 
 
 def test_launch_app_runs_photo_workflow_crop_as_a_module(monkeypatch) -> None:
-    """Verify the crop tool is launched via -m so it uses this interpreter's venv."""
+    """Verify the editor is launched via -m so it uses this interpreter's venv."""
     popen_calls: list[list[str]] = []
     monkeypatch.setattr(launchers.subprocess, "Popen", lambda command: popen_calls.append(command))
 
     launchers.launch_app(
-        DashboardAppLauncher(name="Photo Workflow Crop", command=("photo-workflow-crop",))
+        DashboardAppLauncher(name="Photo Workflow Editor", command=("photo-workflow-editor",))
     )
 
-    assert popen_calls == [[sys.executable, "-m", "photo_workflow.crop_tool.app"]]
+    assert popen_calls == [[sys.executable, "-m", "photo_workflow.editor.app"]]
 
 
 def test_launch_app_passes_target_folder_to_photo_workflow_crop(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """Verify the crop tool receives the target folder as a positional argument."""
+    """Verify the editor receives the target folder as a positional argument."""
     popen_calls: list[list[str]] = []
     monkeypatch.setattr(launchers.subprocess, "Popen", lambda command: popen_calls.append(command))
 
     launchers.launch_app(
         DashboardAppLauncher(
-            name="Photo Workflow Crop",
-            command=("photo-workflow-crop",),
+            name="Photo Workflow Editor",
+            command=("photo-workflow-editor",),
             supports_target_folder=True,
         ),
         target_folder=tmp_path,
     )
 
-    assert popen_calls == [[sys.executable, "-m", "photo_workflow.crop_tool.app", str(tmp_path)]]
+    assert popen_calls == [[sys.executable, "-m", "photo_workflow.editor.app", str(tmp_path)]]
 
 
 def test_launch_app_runs_other_commands_directly(monkeypatch) -> None:

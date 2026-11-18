@@ -1,4 +1,4 @@
-"""Per-user crop tool preferences stored in `QSettings`."""
+"""Per-user editor preferences stored in `QSettings`."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from photo_workflow.config import DEFAULT_CONFIG_PATH
-from photo_workflow.crop_tool.model import DEFAULT_ASPECT_RATIOS, AspectRatio
+from photo_workflow.editor.model import DEFAULT_ASPECT_RATIOS, AspectRatio
 
 DEFAULT_SNAP_TOLERANCE = 0.05
 LEGACY_IMPORTED_KEY = "preferences/legacy_toml_imported"
@@ -49,7 +49,10 @@ HOTKEY_ACTIONS: dict[str, str] = {
     "toggle_snap": "Toggle snap",
     "live_preview": "Live Preview",
     "show_horizon": "Show horizon",
+    "ball_detection": "Detect ball",
+    "auto_light": "Auto lighting",
     "flag": "Flag photo",
+    "copy_previous_crop": "Copy previous crop",
 }
 
 
@@ -93,7 +96,7 @@ def normalize_hotkeys(hotkeys: dict[str, str]) -> dict[str, str]:
 
 @dataclass(frozen=True)
 class CropPreferences:
-    """User-adjustable crop tool behavior."""
+    """User-adjustable editor behavior."""
 
     aspect_ratios: tuple[str, ...] = tuple(ratio.label for ratio in DEFAULT_ASPECT_RATIOS)
     snap_tolerance: float = DEFAULT_SNAP_TOLERANCE

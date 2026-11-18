@@ -29,12 +29,12 @@ def test_parse_dashboard_apps_parses_app_name_entries() -> None:
 def test_parse_dashboard_apps_parses_command_entries() -> None:
     """Verify a command launcher entry is parsed correctly."""
     launchers = app_config.parse_dashboard_apps([
-        {"name": "Photo Workflow Crop", "command": ["photo-workflow-crop"]}
+        {"name": "Photo Workflow Editor", "command": ["photo-workflow-editor"]}
     ])
 
     assert launchers == (
         app_config.DashboardAppLauncher(
-            name="Photo Workflow Crop", command=("photo-workflow-crop",)
+            name="Photo Workflow Editor", command=("photo-workflow-editor",)
         ),
     )
 

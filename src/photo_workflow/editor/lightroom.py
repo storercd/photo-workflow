@@ -6,7 +6,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from photo_workflow.crop_tool.metadata import _read_json, require_exiftool
+from photo_workflow.editor.metadata import _read_json, require_exiftool
 
 JPEG_MAGIC = b"\xff\xd8\xff"
 

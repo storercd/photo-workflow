@@ -24,7 +24,8 @@ photo-workflow-import-action-tags = "photo_workflow.action_tags:main"
 photo-workflow-short-video-notes = "photo_workflow.video_notes:main"
 photo-workflow-benchmark-transcription = "photo_workflow.video_notes:benchmark_main"
 photo-workflow-install-font = "photo_workflow.video_notes:install_font_main"
-photo-workflow-crop = "photo_workflow.crop_tool.app:main"
+photo-workflow-editor = "photo_workflow.editor.app:main"
+photo-workflow-crop = "photo_workflow.editor.app:main"  # legacy alias
 photo-workflow-dashboard = "photo_workflow.dashboard.app:main"
 
 [project.optional-dependencies]
@@ -41,7 +42,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-"photo_workflow.crop_tool" = ["resources/*.png"]
+"photo_workflow.editor" = ["resources/*.png"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

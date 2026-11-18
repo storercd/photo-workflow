@@ -16,6 +16,7 @@ from PySide6.QtCore import (
     QEvent,
     QIODevice,
     QObject,
+    QPoint,
     QProcess,
     QRectF,
     QRunnable,
@@ -36,6 +37,7 @@ from PySide6.QtGui import (
     QImage,
     QImageIOHandler,
     QImageReader,
+    QKeyEvent,
     QKeySequence,
     QLinearGradient,
     QPainter,
@@ -45,14 +47,17 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QColorDialog,
     QComboBox,
     QDialog,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
+    QPlainTextEdit,
     QProgressBar,
     QSizePolicy,
     QSlider,
@@ -60,26 +65,47 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
-from photo_workflow.crop_tool.horizon import (
+from photo_workflow.editor.ball import (
+    DEFAULT_SENSITIVITY,
+    SENSITIVITY_HIGH,
+    SENSITIVITY_LOW,
+    SENSITIVITY_MEDIUM,
+    BallCandidate,
+    detect_ball_candidates,
+)
+from photo_workflow.editor.horizon import (
     HorizonCandidate,
     detect_horizon_candidates,
     qimage_to_rgb_array,
 )
-from photo_workflow.crop_tool.lightroom import (
+from photo_workflow.editor.lighting import (
+    MAX_KELVIN,
+    MIN_KELVIN,
+    REFERENCE_KELVIN,
+    LightingAdjustment,
+    auto_light_image,
+)
+from photo_workflow.editor.lightroom import (
     find_lightroom_preview,
     xmp_lacks_catalog_edits,
 )
-from photo_workflow.crop_tool.metadata import (
+from photo_workflow.editor.metadata import (
     PhotoMetadata,
     extract_preview,
+    read_as_shot_kelvin,
     read_photo_metadata,
+    read_photo_notes,
     read_photo_ratings,
+    read_photos_with_notes,
     write_photo_crop,
     write_photo_label,
+    write_photo_notes,
+    write_photo_rating,
 )
-from photo_workflow.crop_tool.model import (
+from photo_workflow.editor.model import (
     AspectRatio,
     CropRect,
     aspect_ratio_for_crop,
@@ -89,7 +115,7 @@ from photo_workflow.crop_tool.model import (
     rotated_image_size,
     transform_crop_for_rotation,
 )
-from photo_workflow.crop_tool.preferences import (
+from photo_workflow.editor.preferences import (
     CropPreferences,
     PreferencesDialog,
     is_mouse_binding,
@@ -97,7 +123,7 @@ from photo_workflow.crop_tool.preferences import (
     mouse_button_for_binding,
     save_preferences,
 )
-from photo_workflow.crop_tool.view import CroppedPreview, CropView
+from photo_workflow.editor.view import CroppedPreview, CropView
 
 PREVIEW_TAGS_BY_SUFFIX = {
     ".cr2": ("PreviewImage",),
@@ -114,11 +140,20 @@ PREVIEW_MAX_DIMENSION = 2560
 RATIO_MATCH_TOLERANCE = 0.005
 AUTO_LEVEL_KEY = Qt.Key.Key_A
 SHOW_HORIZON_KEY = Qt.Key.Key_H
+BALL_DETECTION_KEY = Qt.Key.Key_B
+AUTO_LIGHT_KEY = Qt.Key.Key_E
+WB_SLIDER_MIN_KELVIN = 3000
+WB_SLIDER_MAX_KELVIN = 5000
+DEFAULT_BALL_RING_COLOR = "#ff6b9d"
 TOGGLE_LIVE_PREVIEW_KEY = Qt.Key.Key_P
 XMP_DIRTY_WARNING = (
     "⚠ LIGHTROOM EDITS NOT SAVED TO XMP\nSave metadata in Lightroom (Cmd+S) first"
 )
-FLAG_COLOR_KEY = Qt.Key.Key_F
+FLAG_COLOR_KEY = Qt.Key.Key_G
+FULL_SCREEN_KEY = Qt.Key.Key_F
+TOGGLE_TOOLBARS_KEY = Qt.Key.Key_Tab
+COPY_PREVIOUS_CROP_KEY = Qt.Key.Key_C
+NOTES_KEY = Qt.Key.Key_N
 COLOR_LABELS = ("Red", "Yellow", "Green", "Blue", "Purple")
 COLOR_LABEL_HEX = {
     "Red": "#e45858",
@@ -128,6 +163,8 @@ COLOR_LABEL_HEX = {
     "Purple": "#aa70d6",
 }
 DEFAULT_FLAG_COLOR = "Red"
+# Lightroom / FastRawViewer: 6 red, 7 yellow, 8 green, 9 blue.
+REVIEW_COLOR_KEYS = {6: "Red", 7: "Yellow", 8: "Green", 9: "Blue"}
 
 
 def shortcut_modifier() -> str:
@@ -146,14 +183,19 @@ class WorkerSignals(QObject):
     metadata = Signal(str, object)
     preview = Signal(str, object, bool)
     preview_source = Signal(str, str)
+    preview_adjusted = Signal(str, object, object, object)
+    as_shot_kelvin = Signal(str, float)
     xmp_dirty = Signal(str, bool)
     error = Signal(str, str)
     finished = Signal(str)
     saved = Signal(str, int, object, float, str)
     horizon = Signal(str, object, str, bool)
+    ball = Signal(str, object, int, int)
     ratings = Signal(int, object, str)
     rating_progress = Signal(int, int, int)
     label_saved = Signal(str, object, str)
+    notes_scanned = Signal(int, object)
+    rating_saved = Signal(str, int, str)
 
 
 class ClickableLabel(QLabel):
@@ -364,11 +406,18 @@ class XmpStatusTask(QRunnable):
 class PhotoLoadTask(QRunnable):
     """Read metadata and progressively extract preview images off the UI thread."""
 
-    def __init__(self, raw_path: Path, lightroom_catalog: Path | None = None) -> None:
-        """Initialize a task for one RAW photo."""
+    def __init__(
+        self,
+        raw_path: Path,
+        lightroom_catalog: Path | None = None,
+        temperature: float | None = None,
+    ) -> None:
+        """Initialize a task for one RAW photo, optionally forcing the color temperature."""
         super().__init__()
         self.raw_path = raw_path
         self.lightroom_catalog = lightroom_catalog
+        self.temperature = temperature
+        self.reference_kelvin = REFERENCE_KELVIN
         self.signals = WorkerSignals()
 
     def run(self) -> None:
@@ -383,8 +432,19 @@ class PhotoLoadTask(QRunnable):
         except Exception as error:
             self.signals.error.emit(str(self.raw_path), str(error))
         self._emit_xmp_status()
+        self._emit_as_shot_kelvin()
         self._emit_previews(orientation, metadata)
         self.signals.finished.emit(str(self.raw_path))
+
+    def _emit_as_shot_kelvin(self) -> None:
+        """Report the camera's white balance so auto lighting can use it as the neutral point."""
+        try:
+            kelvin = read_as_shot_kelvin(self.raw_path)
+        except Exception:
+            return
+        if kelvin is not None:
+            self.reference_kelvin = min(max(kelvin, MIN_KELVIN), MAX_KELVIN)
+            self.signals.as_shot_kelvin.emit(str(self.raw_path), self.reference_kelvin)
 
     def _emit_xmp_status(self) -> None:
         """Report unsaved Lightroom edits; lookup failures are ignored."""
@@ -416,7 +476,19 @@ class PhotoLoadTask(QRunnable):
             if not image.isNull():
                 self.signals.preview_source.emit(str(self.raw_path), f"Embedded {tag}{reason}")
                 self.signals.preview.emit(str(self.raw_path), image, True)
+                self._emit_adjusted_preview(image)
                 break
+
+    def _emit_adjusted_preview(self, image: QImage) -> None:
+        """Emit an auto-lit copy of the embedded preview so the original stays untouched."""
+        try:
+            adjusted, adjustment = auto_light_image(image, self.temperature, self.reference_kelvin)
+        except Exception as error:
+            self.signals.error.emit(str(self.raw_path), f"Auto lighting failed: {error}")
+            return
+        self.signals.preview_adjusted.emit(
+            str(self.raw_path), adjusted, adjustment, self.temperature
+        )
 
     def _emit_lightroom_preview(self, metadata: PhotoMetadata | None) -> str | None:
         """
@@ -506,6 +578,28 @@ class HorizonAnalysisTask(QRunnable):
         self.signals.horizon.emit(str(self.raw_path), candidates, error, self.apply_best)
 
 
+class BallDetectionTask(QRunnable):
+    """Find ball candidates in a preview without blocking the interface."""
+
+    def __init__(self, raw_path: Path, image: QImage, sensitivity: int) -> None:
+        """Initialize a job with an immutable preview snapshot."""
+        super().__init__()
+        self.raw_path = raw_path
+        self.image = image.copy()
+        self.sensitivity = sensitivity
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        """Detect candidates, reporting none if analysis fails."""
+        try:
+            candidates = detect_ball_candidates(
+                qimage_to_rgb_array(self.image), sensitivity=self.sensitivity
+            )
+        except Exception:
+            candidates = []
+        self.signals.ball.emit(str(self.raw_path), candidates, self.image.width(), self.sensitivity)
+
+
 class PhotoLabelSaveTask(QRunnable):
     """Write one color-label update to a sidecar without touching crop fields."""
 
@@ -527,6 +621,86 @@ class PhotoLabelSaveTask(QRunnable):
         self.signals.label_saved.emit(str(self.raw_path), self.label, error)
 
 
+class NotesDialog(QDialog):
+    """Roughly square, word-wrapped note editor where Enter accepts."""
+
+    def __init__(self, parent: QWidget, text: str) -> None:
+        """Create the dialog with `text` preselected."""
+        super().__init__(parent)
+        self.setWindowTitle("Notes")
+        self.resize(420, 320)
+        self.editor = QPlainTextEdit(text)
+        self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.editor.installEventFilter(self)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Notes (Enter to save):"))
+        layout.addWidget(self.editor)
+        self.editor.selectAll()
+
+    def eventFilter(self, watched: object, event: object) -> bool:
+        """
+        Accept on Enter; Shift+Enter is ignored so notes stay one paragraph.
+
+        Returns:
+            Whether the event was consumed.
+        """
+        if (
+            watched is self.editor
+            and isinstance(event, QKeyEvent)
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+        ):
+            if not event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                self.accept()
+            return True
+        return super().eventFilter(watched, event)
+
+    def text(self) -> str:
+        """Return the entered note."""
+        return self.editor.toPlainText()
+
+
+class PhotoNotesSaveTask(QRunnable):
+    """Write one notes keyword update to a sidecar."""
+
+    def __init__(self, raw_path: Path, notes: str) -> None:
+        """Initialize a notes write for one RAW photo's XMP sidecar."""
+        super().__init__()
+        self.raw_path = raw_path
+        self.notes = notes
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        """Write the notes keyword and report success or failure."""
+        try:
+            write_photo_notes(self.raw_path.with_suffix(".xmp"), self.notes)
+            error = ""
+        except Exception as exception:
+            error = str(exception)
+        self.signals.label_saved.emit(str(self.raw_path), self.notes, error)
+
+
+class PhotoRatingSaveTask(QRunnable):
+    """Write one star-rating update to a sidecar without touching crop fields."""
+
+    def __init__(self, raw_path: Path, rating: int) -> None:
+        """Initialize a rating write for one RAW photo's XMP sidecar."""
+        super().__init__()
+        self.raw_path = raw_path
+        self.rating = rating
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        """Write the star rating and report success or failure."""
+        xmp_path = self.raw_path.with_suffix(".xmp")
+        try:
+            write_photo_rating(xmp_path, self.rating)
+            error = ""
+        except Exception as exception:
+            error = str(exception)
+        self.signals.rating_saved.emit(str(self.raw_path), self.rating, error)
+
+
 RATING_SCAN_BATCH_SIZE = 50
 
 
@@ -544,18 +718,21 @@ class RatingScanTask(QRunnable):
         """Read ratings and emit them without blocking the UI thread."""
         try:
             ratings = {}
+            noted: set[Path] = set()
             total = len(self.raw_paths)
             for start in range(0, total, RATING_SCAN_BATCH_SIZE):
-                ratings.update(
-                    read_photo_ratings(self.raw_paths[start : start + RATING_SCAN_BATCH_SIZE])
-                )
+                batch = self.raw_paths[start : start + RATING_SCAN_BATCH_SIZE]
+                ratings.update(read_photo_ratings(batch))
+                noted |= read_photos_with_notes(batch)
                 self.signals.rating_progress.emit(
                     self.generation, min(start + RATING_SCAN_BATCH_SIZE, total), total
                 )
             error = ""
         except Exception as exception:
             ratings = {}
+            noted = set()
             error = str(exception)
+        self.signals.notes_scanned.emit(self.generation, noted)
         self.signals.ratings.emit(self.generation, ratings, error)
 
 
@@ -572,7 +749,7 @@ class CropWindow(QMainWindow):
     ) -> None:
         """Create the window, controls, and background worker pools."""
         super().__init__()
-        self.setWindowTitle("Photo Workflow Crop")
+        self.setWindowTitle("Photo Workflow Editor")
         self.resize(1280, 820)
         self._settings = settings
         self._debug = debug
@@ -598,6 +775,7 @@ class CropWindow(QMainWindow):
         self._navigation_direction = 1
         self._current_metadata: PhotoMetadata | None = None
         self._current_crop: CropRect | None = None
+        self._previous_photo_crop: CropRect | None = None
         self._ratio_base_crop: CropRect | None = None
         self._current_rotation = 0.0
         self._crop_touched = False
@@ -623,29 +801,53 @@ class CropWindow(QMainWindow):
         self._label_pool = QThreadPool(self)
         self._label_pool.setMaxThreadCount(1)
         self._active_label_tasks: dict[Path, PhotoLabelSaveTask] = {}
+        self._notes_tasks: set[PhotoNotesSaveTask] = set()
+        self._active_rating_write_tasks: dict[Path, PhotoRatingSaveTask] = {}
+        self._review_mode = (
+            settings is not None and settings.value("review_mode", False, type=bool)
+        )
+        self._review_shortcuts: list[QShortcut] = []
         self._flag_color = DEFAULT_FLAG_COLOR
         if self._settings is not None:
             stored_flag_color = self._settings.value("flag_color", DEFAULT_FLAG_COLOR, type=str)
             if stored_flag_color in COLOR_LABELS:
                 self._flag_color = stored_flag_color
+        self._ball_sensitivity = DEFAULT_SENSITIVITY
+        self._ball_ring_color = DEFAULT_BALL_RING_COLOR
+        if self._settings is not None:
+            stored_sensitivity = self._settings.value(
+                "ball_sensitivity_value", DEFAULT_SENSITIVITY, type=int
+            )
+            if SENSITIVITY_LOW <= stored_sensitivity <= SENSITIVITY_HIGH:
+                self._ball_sensitivity = stored_sensitivity
+            stored_ring = self._settings.value("ball_ring_color", DEFAULT_BALL_RING_COLOR, type=str)
+            if QColor(stored_ring).isValid():
+                self._ball_ring_color = stored_ring
         self._load_failures: set[Path] = set()
         self._save_pool = QThreadPool(self)
         self._save_pool.setMaxThreadCount(1)
         self._active_load_tasks: dict[Path, PhotoLoadTask] = {}
         self._active_rating_tasks: dict[int, RatingScanTask] = {}
         self._active_horizon_tasks: dict[Path, HorizonAnalysisTask] = {}
+        self._active_ball_tasks: dict[Path, tuple[int, int]] = {}
+        self._ball_cache: dict[tuple[Path, int, int], tuple[BallCandidate, ...]] = {}
         self._active_save_tasks: dict[int, PhotoSaveTask] = {}
         self._loading: set[Path] = set()
         self._queued_loads: set[Path] = set()
         self._metadata_cache: dict[Path, PhotoMetadata] = {}
         self._preview_cache: OrderedDict[Path, QImage] = OrderedDict()
         self._preview_sources: dict[Path, str] = {}
+        self._adjusted_cache: dict[Path, QImage] = {}
+        self._lighting_adjustments: dict[Path, LightingAdjustment] = {}
+        self._wb_override: float | None = None
+        self._as_shot_kelvin: dict[Path, float] = {}
         self._xmp_dirty: dict[Path, bool] = {}
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(self._start_save)
         self._build_ui()
         self._build_shortcuts()
+        self._wheel_delta = 0
         QApplication.instance().installEventFilter(self)
         if initial_folder is not None:
             resolved = resolve_drop_path(initial_folder)
@@ -688,7 +890,9 @@ class CropWindow(QMainWindow):
         """Construct the compact navigation bar and crop canvas."""
         container = CropDropArea()
         layout = QVBoxLayout(container)
-        toolbar = QHBoxLayout()
+        self.toolbar_widget = QWidget()
+        toolbar = QHBoxLayout(self.toolbar_widget)
+        toolbar.setContentsMargins(0, 0, 0, 0)
         self.open_button = QToolButton()
         self.open_button.setText("Open")
         self.open_button.setIcon(qta.icon("fa5s.folder-open"))
@@ -709,6 +913,14 @@ class CropWindow(QMainWindow):
         self.label_indicator = QLabel()
         self.label_indicator.setFixedSize(10, 10)
         self.label_indicator.setVisible(False)
+        self.notes_indicator = ClickableLabel()
+        self.notes_indicator.setPixmap(qta.icon("fa5s.sticky-note", color="#4a4f55").pixmap(14, 14))
+        self.notes_indicator.setFixedSize(16, 16)
+        self.notes_indicator.setToolTip(f"Add notes ({key_hint(NOTES_KEY)})")
+        self.notes_indicator.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.notes_indicator.setVisible(False)
+        self.notes_indicator.clicked.connect(self._edit_notes)
+        self._noted_paths: set[Path] = set()
         self.position_count_label = QLabel("No folder open")
         self.position_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         navigation_panel = QWidget()
@@ -854,6 +1066,67 @@ class CropWindow(QMainWindow):
             self.show_horizon_button,
         ):
             angle_layout.addWidget(control)
+        self.ball_button = QToolButton()
+        self.ball_button.setIcon(qta.icon("fa5s.volleyball-ball", color="#f4f2ec"))
+        self.ball_button.setToolTip(
+            f"Detect ball ({key_hint(BALL_DETECTION_KEY)}); "
+            "right-click for ring color and sensitivity"
+        )
+        self.ball_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.ball_button.setAccessibleName("Detect ball")
+        self.ball_button.setCheckable(True)
+        self.ball_button.setFixedSize(28, 28)
+        self.ball_button.setAutoRaise(True)
+        self.auto_light_button = QToolButton()
+        self.auto_light_button.setIcon(qta.icon("fa5s.magic", color="#f4f2ec"))
+        self.auto_light_button.setToolTip(f"Show original ({key_hint(AUTO_LIGHT_KEY)})")
+        self.auto_light_button.setAccessibleName("Auto-adjust lighting")
+        self.auto_light_button.setCheckable(True)
+        self.auto_light_button.setChecked(True)
+        self.auto_light_button.setFixedSize(28, 28)
+        self.auto_light_button.setAutoRaise(True)
+        self.wb_slider = QSlider(Qt.Orientation.Horizontal)
+        self.wb_slider.setRange(WB_SLIDER_MIN_KELVIN, WB_SLIDER_MAX_KELVIN)
+        self.wb_slider.setSingleStep(100)
+        self.wb_slider.setPageStep(500)
+        self.wb_slider.setValue(round(REFERENCE_KELVIN))
+        self.wb_slider.setFixedWidth(110)
+        self.wb_slider.setToolTip(
+            "White balance in Kelvin (lower = cooler, higher = warmer). Shows the automatic value; "
+            "moving it fixes the value for all photos"
+        )
+        self.wb_value = ClickableLabel(f"{round(REFERENCE_KELVIN)}K")
+        value_width = self.wb_value.fontMetrics().horizontalAdvance("12000K") + 4
+        self.wb_value.setFixedWidth(value_width)
+        self.wb_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.wb_value.setCursor(Qt.CursorShape.IBeamCursor)
+        self.wb_value.setToolTip("Click to type a color temperature in Kelvin, then press Enter")
+        self.wb_edit = QLineEdit()
+        self.wb_edit.setFixedWidth(value_width + 12)
+        self.wb_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.wb_edit.hide()
+        self.wb_fixed_button = QToolButton()
+        self.wb_fixed_button.setIcon(qta.icon("fa5s.thermometer-half", color="#f4f2ec"))
+        self.wb_fixed_button.setToolTip("Use this white-balance value for all photos")
+        self.wb_fixed_button.setAccessibleName("Fix white balance for all photos")
+        self.wb_fixed_button.setCheckable(True)
+        self.wb_fixed_button.setFixedSize(28, 28)
+        self.wb_fixed_button.setAutoRaise(True)
+        self._wb_timer = QTimer(self)
+        self._wb_timer.setSingleShot(True)
+        self._wb_timer.setInterval(120)
+        self._wb_timer.timeout.connect(self._apply_wb_override)
+        self.wb_group = QGroupBox("WB")
+        wb_layout = QHBoxLayout(self.wb_group)
+        wb_layout.setContentsMargins(0, 0, 0, 0)
+        wb_layout.addWidget(self.wb_slider)
+        wb_layout.addWidget(self.wb_value)
+        wb_layout.addWidget(self.wb_edit)
+        wb_layout.addWidget(self.wb_fixed_button)
+        self.ball_group = QGroupBox("Ball")
+        ball_layout = QHBoxLayout(self.ball_group)
+        ball_layout.setContentsMargins(0, 0, 0, 0)
+        ball_layout.addWidget(self.ball_button)
         self.side_by_side_button = QToolButton()
         self.side_by_side_button.setIcon(qta.icon("fa5s.columns", color="#f4f2ec"))
         self.side_by_side_button.setToolTip(
@@ -893,12 +1166,56 @@ class CropWindow(QMainWindow):
         status_width = self.save_label.fontMetrics().horizontalAdvance("Saving...") + 8
         self.save_label.setFixedWidth(status_width)
         self.save_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.mode_button = QToolButton()
+        self.mode_button.setFixedSize(32, 28)
+        self.mode_button.setAutoRaise(True)
+        self.mode_button.setAccessibleName("Toggle Crop/Review mode")
+        self.review_group = QGroupBox("Review")
+        review_layout = QHBoxLayout(self.review_group)
+        review_layout.setContentsMargins(0, 0, 0, 0)
+        review_layout.setSpacing(2)
+        self.star_buttons: list[QToolButton] = []
+        for value in range(1, 6):
+            button = QToolButton()
+            button.setFixedSize(26, 28)
+            button.setAutoRaise(True)
+            button.setAccessibleName(f"Set {value} star rating")
+            button.clicked.connect(lambda checked=False, stars=value: self._set_rating(stars))
+            review_layout.addWidget(button)
+            self.star_buttons.append(button)
+        self.clear_rating_button = QToolButton()
+        self.clear_rating_button.setFixedSize(26, 28)
+        self.clear_rating_button.setAutoRaise(True)
+        self.clear_rating_button.setIcon(qta.icon("fa5s.ban", color="#8c9299"))
+        self.clear_rating_button.setToolTip("Clear star rating (0)")
+        self.clear_rating_button.setAccessibleName("Clear star rating")
+        self.clear_rating_button.clicked.connect(lambda: self._set_rating(0))
+        review_layout.addWidget(self.clear_rating_button)
+        self.color_buttons: dict[str, QToolButton] = {}
+        key_for_color = {color: key for key, color in REVIEW_COLOR_KEYS.items()}
+        for color in COLOR_LABELS:
+            button = QToolButton()
+            button.setFixedSize(26, 28)
+            button.setAutoRaise(True)
+            button.setAccessibleName(f"Toggle {color} color label")
+            hint = f" ({key_for_color[color]})" if color in key_for_color else ""
+            button.setToolTip(f"Toggle {color} label{hint}")
+            button.clicked.connect(lambda checked=False, value=color: self._toggle_color(value))
+            review_layout.addWidget(button)
+            self.color_buttons[color] = button
+        self.review_group.setVisible(False)
+        toolbar.addWidget(self.mode_button)
         toolbar.addWidget(self.open_button)
         toolbar.addWidget(navigation_panel)
         toolbar.addWidget(self.rating_filter_panel)
         toolbar.addWidget(self.label_indicator)
+        toolbar.addWidget(self.notes_indicator)
         toolbar.addWidget(self.position_label, 1)
+        toolbar.addWidget(self.review_group)
         toolbar.addWidget(self.angle_group)
+        toolbar.addWidget(self.auto_light_button)
+        toolbar.addWidget(self.wb_group)
+        toolbar.addWidget(self.ball_group)
         toolbar.addWidget(self.side_by_side_button)
         toolbar.addWidget(self.revert_button)
         toolbar.addWidget(self.aspect_group)
@@ -917,7 +1234,7 @@ class CropWindow(QMainWindow):
         preview_layout.addWidget(self.view, 1)
         preview_layout.addWidget(result_panel, 1)
         result_panel.setVisible(False)
-        layout.addLayout(toolbar)
+        layout.addWidget(self.toolbar_widget)
         layout.addWidget(self.preview_container, 1)
         self.setCentralWidget(container)
         self._build_menu()
@@ -932,6 +1249,14 @@ class CropWindow(QMainWindow):
         self.rotation_reset.clicked.connect(lambda: self.rotation_slider.setValue(0))
         self.auto_level_button.clicked.connect(self._auto_level_clicked)
         self.show_horizon_button.clicked.connect(self._toggle_horizon_visibility)
+        self.auto_light_button.toggled.connect(self._auto_light_toggled)
+        self.wb_slider.valueChanged.connect(self._wb_slider_changed)
+        self.wb_value.clicked.connect(self._begin_wb_edit)
+        self.wb_edit.editingFinished.connect(self._finish_wb_edit)
+        self.wb_fixed_button.toggled.connect(self._wb_fixed_toggled)
+        self.ball_button.toggled.connect(self._ball_toggled)
+        self.ball_button.customContextMenuRequested.connect(self._show_ball_menu)
+        self.view.set_ball_ring_color(QColor(self._ball_ring_color))
         self.side_by_side_button.toggled.connect(self._set_side_by_side_visible)
         self.revert_button.clicked.connect(self._revert_current_photo)
         self.view.horizon_candidate_selected.connect(self._horizon_guide_selected)
@@ -945,6 +1270,8 @@ class CropWindow(QMainWindow):
         self.view.crop_changed.connect(self._crop_edited)
         self._update_lock_icon(self.lock_checkbox.isChecked())
         self._update_crop_mode()
+        self.mode_button.clicked.connect(self._toggle_review_mode)
+        self._apply_review_mode()
 
     def _set_star_filter(self, minimum_stars: int | None) -> None:
         self._star_filter = minimum_stars
@@ -998,6 +1325,34 @@ class CropWindow(QMainWindow):
         task.signals.label_saved.connect(self._label_save_finished)
         self._active_label_tasks[self._current_path] = task
         self._label_pool.start(task)
+
+    def _edit_notes(self) -> None:
+        """Prompt for a note and save it as a "Notes: ..." keyword."""
+        if self._current_path is None:
+            return
+        raw_path = self._current_path
+        try:
+            existing = read_photo_notes(raw_path.with_suffix(".xmp"))
+        except Exception as exception:
+            self.save_label.setText(f"Notes failed: {exception}")
+            return
+        dialog = NotesDialog(self, existing)
+        if not dialog.exec():
+            return
+        task = PhotoNotesSaveTask(raw_path, dialog.text())
+        task.signals.label_saved.connect(self._notes_save_finished)
+        self._notes_tasks.add(task)
+        self._label_pool.start(task)
+
+    def _notes_save_finished(self, path_text: str, notes: str, error: str) -> None:
+        self._notes_tasks = {t for t in self._notes_tasks if t.raw_path != Path(path_text)}
+        if not error:
+            if notes.strip():
+                self._noted_paths.add(Path(path_text))
+            else:
+                self._noted_paths.discard(Path(path_text))
+            self._update_label_indicator()
+        self.save_label.setText(f"Notes failed: {error}" if error else "Notes saved")
 
     def _label_save_finished(self, path_text: str, label: str | None, error: str) -> None:
         """Update cached ratings and filters once a color-label write completes."""
@@ -1064,9 +1419,15 @@ class CropWindow(QMainWindow):
         self._update_status_bar()
         task = RatingScanTask(self._rating_scan_generation, raw_paths)
         task.signals.ratings.connect(self._rating_scan_finished)
+        task.signals.notes_scanned.connect(self._notes_scan_finished)
         task.signals.rating_progress.connect(self._rating_scan_progress)
         self._active_rating_tasks[self._rating_scan_generation] = task
         self._rating_pool.start(task)
+
+    def _notes_scan_finished(self, generation: int, noted: set[Path]) -> None:
+        if generation == self._rating_scan_generation:
+            self._noted_paths = set(noted)
+            self._update_label_indicator()
 
     def _rating_scan_progress(self, generation: int, done: int, total: int) -> None:
         if generation == self._rating_scan_generation:
@@ -1164,10 +1525,12 @@ class CropWindow(QMainWindow):
         self.position_count_label.setText("0 / 0 [Filtered]")
         self.position_label.setText("No photos match filters")
         self.label_indicator.setVisible(False)
+        self.notes_indicator.setVisible(False)
 
     def _update_position_label(self) -> None:
         if self._current_path is None or self._current_index < 0:
             self.label_indicator.setVisible(False)
+            self.notes_indicator.setVisible(False)
             return
         filtered_note = (
             " [Filtered]"
@@ -1183,9 +1546,18 @@ class CropWindow(QMainWindow):
         )
         self.position_label.setText(self._current_path.name)
         self._update_label_indicator()
+        self._update_review_buttons()
 
     def _update_label_indicator(self) -> None:
-        """Show a small color swatch when the current photo has a color label."""
+        """Show small indicators for the current photo's color label and notes."""
+        has_notes = self._current_path in self._noted_paths
+        self.notes_indicator.setPixmap(
+            qta.icon("fa5s.sticky-note", color="#e5bd48" if has_notes else "#4a4f55").pixmap(14, 14)
+        )
+        self.notes_indicator.setToolTip(
+            f"{'Edit' if has_notes else 'Add'} notes ({key_hint(NOTES_KEY)})"
+        )
+        self.notes_indicator.setVisible(True)
         _, label = self._photo_ratings.get(self._current_path, (0, None))
         if not label:
             self.label_indicator.setVisible(False)
@@ -1223,9 +1595,27 @@ class CropWindow(QMainWindow):
             f"DEBUG | Cache: {cache_count}/{PREVIEW_CACHE_SIZE} | "
             f"In-flight: {in_flight} | Queued: {queued} | "
             f"Ratings: {ratings_status} | "
-            f"Source: {self._preview_sources.get(self._current_path, '-')}"
+            f"Source: {self._preview_sources.get(self._current_path, '-')} | "
+            f"Auto-light: {self._auto_light_status()}"
         )
         self._status_label.setText(metrics)
+
+    def _auto_light_status(self) -> str:
+        """
+        Describe whether auto lighting is applied to the viewed photo.
+
+        Returns:
+            Debug-bar text with the on/off state and the chosen adjustments.
+        """
+        adjustment = self._lighting_adjustments.get(self._current_path)
+        if adjustment is None:
+            return "n/a (not computed)"
+        note = adjustment.describe()
+        if self._wb_override is not None:
+            note += " [WB fixed]"
+        if not self.auto_light_button.isChecked():
+            return f"OFF (available: {note})"
+        return f"ON ({note})"
 
     def _set_side_by_side_visible(self, visible: bool) -> None:
         """Show or hide the read-only crop result pane."""
@@ -1326,11 +1716,144 @@ class CropWindow(QMainWindow):
         self._add_shortcut(Qt.Key.Key_S, self._toggle_snap)
         self._add_shortcut(TOGGLE_LIVE_PREVIEW_KEY, self.side_by_side_button.click)
         self._add_shortcut(SHOW_HORIZON_KEY, self._show_horizon_clicked)
+        self._add_shortcut(BALL_DETECTION_KEY, self.ball_button.click)
+        self._add_shortcut(AUTO_LIGHT_KEY, self.auto_light_button.click)
         self._add_shortcut(FLAG_COLOR_KEY, self._apply_flag_color)
+        self._add_shortcut(COPY_PREVIOUS_CROP_KEY, self._copy_previous_crop)
+        self._add_shortcut(NOTES_KEY, self._edit_notes)
+        self._add_shortcut(FULL_SCREEN_KEY, self._toggle_full_screen)
+        self._add_shortcut(Qt.Key.Key_Escape, self._exit_full_screen)
+        self._add_shortcut(TOGGLE_TOOLBARS_KEY, self._toggle_toolbars)
         self._add_shortcut(QKeySequence.StandardKey.Open, self._choose_folder)
         self._add_shortcut(QKeySequence.StandardKey.Save, self._start_save)
         self._build_ratio_shortcuts()
+        self._build_review_shortcuts()
         self._build_alternate_hotkeys()
+
+    def _toggle_full_screen(self) -> None:
+        """Enter full screen, or leave it when already full screen."""
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def _exit_full_screen(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+
+    def _toggle_toolbars(self) -> None:
+        """Show or hide the toolbar and status bar."""
+        visible = not self.toolbar_widget.isVisible()
+        self.toolbar_widget.setVisible(visible)
+        self.statusBar().setVisible(visible and self._debug)
+
+    def _build_review_shortcuts(self) -> None:
+        """Install 0-5 (stars; ` also clears) and 6-9 (color label) hotkeys for Review mode."""
+        for digit in range(10):
+            shortcut = QShortcut(QKeySequence(Qt.Key(int(Qt.Key.Key_0) + digit)), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(lambda value=digit: self._review_key(value))
+            self._review_shortcuts.append(shortcut)
+        grave = QShortcut(QKeySequence(Qt.Key.Key_QuoteLeft), self)
+        grave.setContext(Qt.ShortcutContext.WindowShortcut)
+        grave.activated.connect(lambda: self._review_key(0))
+        self._review_shortcuts.append(grave)
+        self._apply_review_mode()
+
+    def _review_key(self, digit: int) -> None:
+        if digit <= 5:
+            self._set_rating(digit)
+        else:
+            self._toggle_color(REVIEW_COLOR_KEYS.get(digit))
+
+    def _toggle_review_mode(self) -> None:
+        self._review_mode = not self._review_mode
+        if self._settings is not None:
+            self._settings.setValue("review_mode", self._review_mode)
+        self._apply_review_mode()
+
+    def _apply_review_mode(self) -> None:
+        """Switch the toolbar, number keys, and mode icon between Crop and Review."""
+        review = self._review_mode
+        self.setWindowTitle(f"Photo Workflow Editor — {'Review' if review else 'Crop'} Mode")
+        for shortcut in self._review_shortcuts:
+            shortcut.setEnabled(review)
+        for shortcut in self._ratio_shortcuts:
+            shortcut.setEnabled(not review)
+        for widget in (
+            self.angle_group,
+            self.side_by_side_button,
+            self.revert_button,
+            self.aspect_group,
+            self.flag_button,
+        ):
+            widget.setVisible(not review)
+        self.review_group.setVisible(review)
+        self.view.set_grid_visible(not review)
+        if review:
+            self.mode_button.setIcon(qta.icon("fa5s.star", color="#e5bd48"))
+            self.mode_button.setToolTip(
+                "Review Mode: 0-5 set stars, 6-9 set colors (click for Crop Mode)"
+            )
+        else:
+            self.mode_button.setIcon(qta.icon("fa5s.crop-alt", color="#f4f2ec"))
+            self.mode_button.setToolTip(
+                "Crop Mode: number keys pick aspect ratios (click for Review Mode)"
+            )
+        self._update_review_buttons()
+
+    def _update_review_buttons(self) -> None:
+        """Reflect the current photo's rating and label on the Review toolbar."""
+        stars, label = self._photo_ratings.get(self._current_path, (0, None))
+        enabled = self._current_path is not None and self._ratings_loaded
+        for index, button in enumerate(self.star_buttons, start=1):
+            button.setIcon(
+                qta.icon("fa5s.star", color="#e5bd48" if index <= stars else "#4a4f55")
+            )
+            button.setToolTip(f"{index} star{'s' if index > 1 else ''} ({index})")
+            button.setEnabled(enabled)
+        self.clear_rating_button.setEnabled(enabled)
+        for color, button in self.color_buttons.items():
+            active = label == color
+            button.setIcon(
+                qta.icon(
+                    "fa5s.square" if active else "fa5.square",
+                    options=[{"color": COLOR_LABEL_HEX[color]}],
+                )
+            )
+            button.setEnabled(enabled)
+
+    def _set_rating(self, stars: int) -> None:
+        """Write a star rating to the current photo."""
+        if self._current_path is None or not self._ratings_loaded:
+            return
+        task = PhotoRatingSaveTask(self._current_path, stars)
+        task.signals.rating_saved.connect(self._rating_save_finished)
+        self._active_rating_write_tasks[self._current_path] = task
+        self._label_pool.start(task)
+
+    def _rating_save_finished(self, path_text: str, stars: int, error: str) -> None:
+        raw_path = Path(path_text)
+        self._active_rating_write_tasks.pop(raw_path, None)
+        if error:
+            self.save_label.setText(f"Rating failed: {error}")
+            return
+        _, label = self._photo_ratings.get(raw_path, (0, None))
+        self._photo_ratings[raw_path] = (stars, label)
+        if raw_path == self._current_path:
+            self._update_review_buttons()
+        self._refresh_rating_filter()
+
+    def _toggle_color(self, color: str | None) -> None:
+        """Toggle a specific color label on the current photo."""
+        if color is None or self._current_path is None or not self._ratings_loaded:
+            return
+        _, current_label = self._photo_ratings.get(self._current_path, (0, None))
+        new_label = None if current_label == color else color
+        task = PhotoLabelSaveTask(self._current_path, new_label)
+        task.signals.label_saved.connect(self._label_save_finished)
+        self._active_label_tasks[self._current_path] = task
+        self._label_pool.start(task)
 
     def _hotkey_callbacks(self) -> dict[str, Callable[[], object]]:
         """
@@ -1347,7 +1870,10 @@ class CropWindow(QMainWindow):
             "toggle_snap": self._toggle_snap,
             "live_preview": self.side_by_side_button.click,
             "show_horizon": self._show_horizon_clicked,
+            "ball_detection": self.ball_button.click,
+            "auto_light": self.auto_light_button.click,
             "flag": self._apply_flag_color,
+            "copy_previous_crop": self._copy_previous_crop,
         }
 
     def _build_alternate_hotkeys(self) -> None:
@@ -1389,6 +1915,18 @@ class CropWindow(QMainWindow):
             if callback is not None:
                 callback()
                 return True
+        if (
+            event.type() == QEvent.Type.Wheel
+            and self.isActiveWindow()
+            and QApplication.activeModalWidget() is None
+        ):
+            # 120 units is one physical wheel click; accumulate for smooth/trackpad devices.
+            self._wheel_delta += event.angleDelta().y()
+            steps = int(self._wheel_delta / 120)
+            if steps:
+                self._wheel_delta -= steps * 120
+                self.navigate(-steps)
+            return True
         return super().eventFilter(watched, event)
 
     def _build_ratio_shortcuts(self) -> None:
@@ -1431,6 +1969,8 @@ class CropWindow(QMainWindow):
             self.ratio_combo.blockSignals(False)
             self._ratio_selected(0)
             self._build_ratio_shortcuts()
+            for shortcut in self._ratio_shortcuts:
+                shortcut.setEnabled(not self._review_mode)
         self._build_alternate_hotkeys()
 
     def _apply_ratio_index(self, index: int) -> None:
@@ -1516,6 +2056,8 @@ class CropWindow(QMainWindow):
         self.next_button.setEnabled(
             self._ratings_loaded and self._current_index < len(self._photos) - 1
         )
+        if self._current_crop is not None:
+            self._previous_photo_crop = self._current_crop
         self._current_crop = None
         self._ratio_base_crop = None
         self._current_metadata = self._metadata_cache.get(self._current_path)
@@ -1601,10 +2143,12 @@ class CropWindow(QMainWindow):
 
     def _start_photo_load(self, raw_path: Path) -> None:
         """Submit one selected load task to the bounded thread pool."""
-        task = PhotoLoadTask(raw_path, self._lightroom_catalog)
+        task = PhotoLoadTask(raw_path, self._lightroom_catalog, self._wb_override)
         task.signals.metadata.connect(self._metadata_loaded)
         task.signals.preview.connect(self._preview_loaded)
         task.signals.preview_source.connect(self._preview_source_loaded)
+        task.signals.preview_adjusted.connect(self._preview_adjusted_loaded)
+        task.signals.as_shot_kelvin.connect(self._as_shot_kelvin_loaded)
         task.signals.xmp_dirty.connect(self._xmp_dirty_loaded)
         task.signals.error.connect(self._load_error)
         task.signals.finished.connect(self._load_finished)
@@ -1637,7 +2181,7 @@ class CropWindow(QMainWindow):
         display_width, display_height = displayed_image_size(metadata, self._current_rotation)
         image = self._preview_cache.get(path)
         if image is not None:
-            self._set_preview_image(image, display_width, display_height)
+            self._set_preview_image(self._display_image(image), display_width, display_height)
             metadata = self._set_loaded_crop(path, metadata)
             self._set_preview_loading(False)
             self.auto_level_button.setEnabled(True)
@@ -1679,6 +2223,119 @@ class CropWindow(QMainWindow):
         self._preview_sources[Path(path_text)] = source
         self._update_status_bar()
 
+    def _preview_adjusted_loaded(
+        self,
+        path_text: str,
+        image: QImage,
+        adjustment: LightingAdjustment,
+        temperature: float | None,
+    ) -> None:
+        """Cache an auto-lit preview and show it if it belongs to the selected photo."""
+        path = Path(path_text)
+        if path not in self._preview_cache or temperature != self._wb_override:
+            return
+        self._adjusted_cache[path] = image
+        self._lighting_adjustments[path] = adjustment
+        self._update_status_bar()
+        if path == self._current_path and self.auto_light_button.isChecked():
+            self._show_image(self._preview_cache[path])
+
+    def _as_shot_kelvin_loaded(self, path_text: str, kelvin: float) -> None:
+        """Remember a photo's camera white balance, the neutral point for its auto lighting."""
+        self._as_shot_kelvin[Path(path_text)] = kelvin
+
+    def _ensure_adjusted(self, path: Path, original: QImage) -> None:
+        """Compute a missing auto-lit copy now, once the photo's background load is done."""
+        if path in self._adjusted_cache or path in self._loading:
+            return
+        image, adjustment = auto_light_image(
+            original, self._wb_override, self._as_shot_kelvin.get(path, REFERENCE_KELVIN)
+        )
+        self._adjusted_cache[path] = image
+        self._lighting_adjustments[path] = adjustment
+
+    def _sync_wb_controls(self) -> None:
+        """Show the viewed photo's automatic color temperature unless a fixed one is set."""
+        adjustment = self._lighting_adjustments.get(self._current_path)
+        if self._wb_override is not None or adjustment is None:
+            return
+        self._set_wb_slider(adjustment.temperature)
+
+    def _set_wb_slider(self, value: float) -> None:
+        """Move the color-temperature slider without treating it as a user override."""
+        self.wb_slider.blockSignals(True)
+        self.wb_slider.setValue(round(value))
+        self.wb_slider.blockSignals(False)
+        self.wb_value.setText(f"{round(value)}K")
+
+    def _wb_slider_changed(self, value: int) -> None:
+        """Fix the color temperature for all photos as soon as the user moves the slider."""
+        self.wb_value.setText(f"{value}K")
+        if not self.wb_fixed_button.isChecked():
+            self.wb_fixed_button.blockSignals(True)
+            self.wb_fixed_button.setChecked(True)
+            self.wb_fixed_button.blockSignals(False)
+        self._wb_override = float(value)
+        self._enable_auto_light()
+        self._wb_timer.start()
+
+    def _begin_wb_edit(self) -> None:
+        """Swap the Kelvin label for a text box holding the current value."""
+        self.wb_edit.setText(str(self.wb_slider.value()))
+        self.wb_value.hide()
+        self.wb_edit.show()
+        self.wb_edit.setFocus()
+        self.wb_edit.selectAll()
+
+    def _finish_wb_edit(self) -> None:
+        """Apply a typed Kelvin value to all photos, then restore the label."""
+        if self.wb_edit.isHidden():
+            return
+        text = self.wb_edit.text().strip().lower().removesuffix("k").strip()
+        self.wb_edit.hide()
+        self.wb_value.show()
+        try:
+            kelvin = round(float(text))
+        except ValueError:
+            return
+        kelvin = min(max(kelvin, round(MIN_KELVIN)), round(MAX_KELVIN))
+        self.wb_slider.blockSignals(True)
+        self.wb_slider.setValue(kelvin)
+        self.wb_slider.blockSignals(False)
+        self._wb_slider_changed(kelvin)
+
+    def _wb_fixed_toggled(self, checked: bool) -> None:
+        """Pin the current color temperature for every photo, or return to automatic."""
+        self._wb_override = float(self.wb_value.text().removesuffix("K")) if checked else None
+        if checked:
+            self._enable_auto_light()
+        self._apply_wb_override()
+
+    def _enable_auto_light(self) -> None:
+        """Turn auto lighting on so a color-temperature change is visible, not hidden."""
+        if not self.auto_light_button.isChecked():
+            self.auto_light_button.setChecked(True)
+
+    def _apply_wb_override(self) -> None:
+        """Recompute auto lighting everywhere after the color-temperature override changed."""
+        self._adjusted_cache.clear()
+        self._lighting_adjustments.clear()
+        image = self._preview_cache.get(self._current_path)
+        if image is not None:
+            self._show_image(image)
+        self._update_status_bar()
+
+    def _auto_light_toggled(self, checked: bool) -> None:
+        """Switch the displayed preview between original and auto-lit versions."""
+        self.auto_light_button.setToolTip(
+            f"{'Show original' if checked else 'Auto-adjust lighting'} "
+            f"({key_hint(AUTO_LIGHT_KEY)})"
+        )
+        image = self._preview_cache.get(self._current_path)
+        if image is not None:
+            self._show_image(image)
+        self._update_status_bar()
+
     def _preview_loaded(self, path_text: str, image: QImage, high_quality: bool) -> None:
         """Cache previews and display progressive updates for the selected photo."""
         path = Path(path_text)
@@ -1707,6 +2364,15 @@ class CropWindow(QMainWindow):
                 self._preview_cache.move_to_end(oldest_key)
                 oldest_key = next(iter(self._preview_cache))
             self._preview_cache.pop(oldest_key, None)
+            self._adjusted_cache.pop(oldest_key, None)
+            self._lighting_adjustments.pop(oldest_key, None)
+
+    def _display_image(self, image: QImage) -> QImage:
+        """Return the auto-lit copy of the current photo when enabled, else the original."""
+        self._ensure_adjusted(self._current_path, image)
+        if self.auto_light_button.isChecked():
+            return self._adjusted_cache.get(self._current_path, image)
+        return image
 
     def _show_image(self, image: QImage) -> None:
         """Set the visible preview using current source dimensions when known."""
@@ -1714,7 +2380,102 @@ class CropWindow(QMainWindow):
             width, height = displayed_image_size(self._current_metadata, self._current_rotation)
         else:
             width, height = image.width(), image.height()
-        self._set_preview_image(image, width, height)
+        self._set_preview_image(self._display_image(image), width, height)
+        self._sync_wb_controls()
+        self._refresh_ball_detection(image)
+
+    def _refresh_ball_detection(self, image: QImage | None = None) -> None:
+        """Show cached ball circles for the current photo, or detect them if toggled on."""
+        path = self._current_path
+        if path is None or not self.ball_button.isChecked():
+            self.view.set_ball_candidates(())
+            return
+        image = image if image is not None else self._preview_cache.get(path)
+        if image is None or image.isNull():
+            self.view.set_ball_candidates(())
+            return
+        key = (path, image.width(), self._ball_sensitivity)
+        cached = self._ball_cache.get(key)
+        if cached is not None:
+            self.view.set_ball_candidates(cached)
+            return
+        self.view.set_ball_candidates(())
+        if self._active_ball_tasks.get(path) == key[1:]:
+            return
+        task = BallDetectionTask(path, image, self._ball_sensitivity)
+        task.signals.ball.connect(self._ball_detection_finished)
+        self._active_ball_tasks[path] = key[1:]
+        self._load_pool.start(task)
+
+    def _ball_detection_finished(
+        self, path_text: str, candidates: list[BallCandidate], width: int, sensitivity: int
+    ) -> None:
+        """Cache results and display them if still relevant."""
+        path = Path(path_text)
+        if self._active_ball_tasks.get(path) == (width, sensitivity):
+            self._active_ball_tasks.pop(path, None)
+        self._ball_cache[(path, width, sensitivity)] = tuple(candidates)
+        if len(self._ball_cache) > PREVIEW_CACHE_SIZE * 2:
+            self._ball_cache.pop(next(iter(self._ball_cache)))
+        if path == self._current_path:
+            self._refresh_ball_detection()
+
+    def _ball_toggled(self, checked: bool) -> None:
+        """Run or hide ball detection for the current and subsequent photos."""
+        self.ball_button.setToolTip(
+            f"{'Hide' if checked else 'Detect'} ball ({key_hint(BALL_DETECTION_KEY)}); "
+            "right-click for ring color and sensitivity"
+        )
+        self._refresh_ball_detection()
+
+    def _show_ball_menu(self, position: QPoint) -> None:
+        """Offer ring color, sensitivity presets, and a fine sensitivity slider."""
+        menu = QMenu(self)
+        menu.addAction("Ring color…", self._choose_ball_ring_color)
+        menu.addSeparator()
+        menu.addSection("Sensitivity")
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(SENSITIVITY_LOW, SENSITIVITY_HIGH)
+        slider.setSingleStep(5)
+        slider.setPageStep(10)
+        slider.setTracking(False)
+        slider.setValue(self._ball_sensitivity)
+        slider.setToolTip("Left: fewer false circles. Right: finds more balls.")
+        slider.valueChanged.connect(self._set_ball_sensitivity)
+        slider_action = QWidgetAction(menu)
+        slider_action.setDefaultWidget(slider)
+        menu.addAction(slider_action)
+        presets = (
+            ("Low (fewer false circles)", SENSITIVITY_LOW),
+            ("Medium", SENSITIVITY_MEDIUM),
+            ("High (finds more)", SENSITIVITY_HIGH),
+        )
+        for label, level in presets:
+            action = menu.addAction(label)
+            action.triggered.connect(lambda _checked=False, v=level: slider.setValue(v))
+        menu.exec(self.ball_button.mapToGlobal(position))
+
+    def _set_ball_sensitivity(self, level: int) -> None:
+        """Apply and persist the sensitivity, then redo detection for this photo."""
+        if level == self._ball_sensitivity:
+            return
+        self._ball_sensitivity = level
+        if self._settings is not None:
+            self._settings.setValue("ball_sensitivity_value", level)
+        self._refresh_ball_detection()
+
+    def _choose_ball_ring_color(self) -> None:
+        """Let the user pick and persist the ball ring color."""
+        color = QColorDialog.getColor(QColor(self._ball_ring_color), self, "Ball ring color")
+        if color.isValid():
+            self._set_ball_ring_color(color.name())
+
+    def _set_ball_ring_color(self, color: str) -> None:
+        """Apply and persist the ball ring color."""
+        self._ball_ring_color = color
+        self.view.set_ball_ring_color(QColor(color))
+        if self._settings is not None:
+            self._settings.setValue("ball_ring_color", color)
 
     def _load_error(self, path_text: str, message: str) -> None:
         """Show a load failure for the active photo without blocking navigation."""
@@ -1730,6 +2491,14 @@ class CropWindow(QMainWindow):
         self._active_load_tasks.pop(path, None)
         self._loading.discard(path)
         self._update_status_bar()
+        original = self._preview_cache.get(path)
+        if (
+            path == self._current_path
+            and original is not None
+            and self.auto_light_button.isChecked()
+            and path not in self._adjusted_cache
+        ):
+            self._show_image(original)
         if self._current_index >= 0:
             self._schedule_prefetch(self._current_index)
 
@@ -1745,6 +2514,11 @@ class CropWindow(QMainWindow):
         self._ratio_base_crop = None
         self._mark_dirty()
         self._select_crop_ratio(constrained_crop)
+
+    def _copy_previous_crop(self) -> None:
+        """Apply the crop of the photo last navigated away from to this photo."""
+        if self._previous_photo_crop is not None:
+            self._crop_edited(self._previous_photo_crop)
 
     def _revert_current_photo(self) -> None:
         """Restore this photo's starting crop and angle and queue them for saving."""
@@ -1875,6 +2649,7 @@ class CropWindow(QMainWindow):
         self._horizon_candidates = ()
         self._selected_horizon_candidate = -1
         self.view.set_horizon_candidates(())
+        self.view.set_ball_candidates(())
         self.show_horizon_button.setChecked(False)
         self._update_horizon_visibility_icon(False)
         self.auto_level_button.setToolTip(
@@ -1907,7 +2682,7 @@ class CropWindow(QMainWindow):
             image = self._preview_cache.get(self._current_path)
             if image is not None:
                 width, height = displayed_image_size(self._current_metadata, angle)
-                self._set_preview_image(image, width, height)
+                self._set_preview_image(self._display_image(image), width, height)
         if self._current_crop is not None:
             self._set_preview_crop(self._current_crop)
             self.view.set_crop_passive(not self._crop_touched)
@@ -2151,6 +2926,17 @@ class CropWindow(QMainWindow):
     def _open_dropped_path(self, resolved_path: DropTarget) -> None:
         """Open a dropped folder or its selected RAW photo."""
         folder, selected_photo = resolved_path
+        if (
+            selected_photo is not None
+            and self._current_index >= 0
+            and self._pending_folder is None
+            and selected_photo in self._photos
+        ):
+            target_index = self._photos.index(selected_photo)
+            if target_index == self._current_index:
+                return
+            self.navigate(target_index - self._current_index)
+            return
         self.open_folder(folder, selected_photo)
 
     def closeEvent(self, event: object) -> None:
@@ -2172,6 +2958,7 @@ class CropWindow(QMainWindow):
         self._active_horizon_tasks.clear()
         self._active_save_tasks.clear()
         self._active_label_tasks.clear()
+        self._active_rating_write_tasks.clear()
         if self._settings is not None:
             self._settings.sync()
         event.accept()
@@ -2279,7 +3066,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     Returns:
         The parsed command-line arguments.
     """
-    parser = argparse.ArgumentParser(prog="photo-workflow-crop")
+    parser = argparse.ArgumentParser(prog="photo-workflow-editor")
     parser.add_argument("folder", nargs="?", type=Path)
     parser.add_argument(
         "--debug",
