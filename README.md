@@ -145,6 +145,22 @@ The command reports the number of files and disk space recovered. Add
 `--dry-run` to report what would be removed without deleting files. When the
 root is omitted, it uses the configured `workflow.camera_root`.
 
+### Import action tags
+
+Import photo action label JSON files into the `.xmp` sidecars of the matching
+RAW files:
+
+```bash
+uv run photo-workflow-import-action-tags labels-evcc-edmonds-2026-11-04.json
+```
+
+Each record's `file` is mapped to its sidecar by dropping everything after the `CDS#####` frame number (hash, virtual-copy `-2` markers) and searching the date folders (`YYYY/MM/YYYYMMDD*`) under
+`workflow.camera_root`, then `workflow.archive_root`. Existing `Action`,
+`ActionNotes` (from `action_notes`), `PrimaryPlayer`, `InvolvedPlayer`, `Player` and `BallInFrame` tags are removed
+from `dc:subject`, `lr:weightedFlatSubject` and `lr:hierarchicalSubject`, then
+replaced with the incoming values. Sidecars with no `Project:` tag are reported
+as failures and left untouched. When two records map to the same sidecar (virtual copies), a warning is logged and `action_tags.duplicate_record_winner` (`"first"` by default, or `"last"`) decides which record's tags are kept. Any record field the importer does not know about aborts the run before anything is written. Use `--dry-run` to preview.
+
 Run the steps individually with:
 
 ```bash

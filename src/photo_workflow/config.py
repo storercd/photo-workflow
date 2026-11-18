@@ -9,6 +9,8 @@ from pathlib import Path
 
 DEFAULT_CONFIG_PATH = Path("photo-workflow.toml")
 DEFAULT_CAMERA_ROOT = Path("/Users/christopherstorer/working/camera")
+# Mount point of smb://STORER-EC/photo-archive/.../Volumes/photo-archive
+DEFAULT_ARCHIVE_ROOT = Path("/Volumes/photo-archive")
 DEFAULT_CARD_MOUNT_ROOT = Path("/Volumes")
 DEFAULT_LOW_DISK_WARNING_GB = 30.0
 DEFAULT_LOW_DISK_WARNING_PERCENT = 5.0
@@ -17,6 +19,8 @@ DEFAULT_HALT_ON_INSUFFICIENT_SPACE = True
 DEFAULT_IGNORED_CARD_EXTENSIONS = (".ctg", ".log", ".tmp", ".to3")
 DEFAULT_MAX_DURATION_SECONDS = 10.0
 DEFAULT_TRANSCRIPTION_MODEL = "mlx-community/whisper-tiny-mlx"
+DEFAULT_DUPLICATE_RECORD_WINNER = "first"
+VALID_DUPLICATE_RECORD_WINNERS = {"first", "last"}
 VALID_COPY_VERIFICATION_METHODS = {"basic", "crc32"}
 DEFAULT_DASHBOARD_APPS = (
     {"name": "FastRawViewer", "app_name": "FastRawViewer", "supports_target_folder": True},
@@ -36,6 +40,7 @@ class WorkflowConfig:
     """Shared workflow settings used across processes."""
 
     camera_root: Path = DEFAULT_CAMERA_ROOT
+    archive_root: Path = DEFAULT_ARCHIVE_ROOT
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,13 @@ class VideoNotesConfig:
 
     max_duration_seconds: float = DEFAULT_MAX_DURATION_SECONDS
     transcription_model: str = DEFAULT_TRANSCRIPTION_MODEL
+
+
+@dataclass(frozen=True)
+class ActionTagsConfig:
+    """Settings specific to action tag import."""
+
+    duplicate_record_winner: str = DEFAULT_DUPLICATE_RECORD_WINNER
 
 
 @dataclass(frozen=True)
@@ -92,6 +104,7 @@ class AppConfig:
     workflow: WorkflowConfig = field(default_factory=WorkflowConfig)
     memory_card_copy: MemoryCardCopyConfig = field(default_factory=MemoryCardCopyConfig)
     video_notes: VideoNotesConfig = field(default_factory=VideoNotesConfig)
+    action_tags: ActionTagsConfig = field(default_factory=ActionTagsConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
 
 
@@ -114,7 +127,16 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
     workflow_config = config_data.get("workflow", {})
     memory_card_copy_config = config_data.get("memory_card_copy", {})
     video_notes_config = config_data.get("video_notes", {})
+    action_tags_config = config_data.get("action_tags", {})
     dashboard_config = config_data.get("dashboard", {})
+    duplicate_record_winner = action_tags_config.get(
+        "duplicate_record_winner", DEFAULT_DUPLICATE_RECORD_WINNER
+    )
+    if duplicate_record_winner not in VALID_DUPLICATE_RECORD_WINNERS:
+        raise ValueError(
+            "action_tags.duplicate_record_winner must be one of "
+            f"{sorted(VALID_DUPLICATE_RECORD_WINNERS)}"
+        )
 
     copy_verification = memory_card_copy_config.get(
         "copy_verification",
@@ -141,7 +163,10 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
 
     return AppConfig(
         workflow=WorkflowConfig(
-            camera_root=Path(workflow_config.get("camera_root", DEFAULT_CAMERA_ROOT)).expanduser()
+            camera_root=Path(workflow_config.get("camera_root", DEFAULT_CAMERA_ROOT)).expanduser(),
+            archive_root=Path(
+                workflow_config.get("archive_root", DEFAULT_ARCHIVE_ROOT)
+            ).expanduser(),
         ),
         memory_card_copy=MemoryCardCopyConfig(
             card_mount_root=Path(
@@ -177,6 +202,7 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
                 )
             ),
         ),
+        action_tags=ActionTagsConfig(duplicate_record_winner=duplicate_record_winner),
         dashboard=DashboardConfig(apps=parse_dashboard_apps(dashboard_config.get("apps"))),
     )
 
@@ -232,6 +258,11 @@ def parse_dashboard_apps(apps_config: object) -> tuple[DashboardAppLauncher, ...
 def load_workflow_config(config_path: Path = DEFAULT_CONFIG_PATH) -> WorkflowConfig:
     """Return the shared workflow configuration."""
     return load_config(config_path).workflow
+
+
+def load_action_tags_config(config_path: Path = DEFAULT_CONFIG_PATH) -> ActionTagsConfig:
+    """Return the action tag import configuration."""
+    return load_config(config_path).action_tags
 
 
 def load_memory_card_copy_config(

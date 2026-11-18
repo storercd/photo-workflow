@@ -293,6 +293,81 @@ def write_photo_label(xmp_path: Path, label: str | None) -> None:
     )
 
 
+NOTES_PREFIX = "Notes: "
+
+
+def read_photo_notes(xmp_path: Path) -> str:
+    """
+    Read the free-form note stored as a "Notes: ..." keyword.
+
+    Returns:
+        The note text, or an empty string when none is assigned.
+    """
+    if not xmp_path.is_file():
+        return ""
+    for keyword in _read_keywords(xmp_path):
+        if keyword.startswith(NOTES_PREFIX):
+            return keyword[len(NOTES_PREFIX) :]
+    return ""
+
+
+def write_photo_notes(xmp_path: Path, notes: str) -> None:
+    """Replace the "Notes: ..." keyword, or remove it when `notes` is blank."""
+    notes = " ".join(notes.split())
+    if not xmp_path.exists():
+        if not notes:
+            return
+        _create_label_sidecar(xmp_path)
+    keywords = [k for k in _read_keywords(xmp_path) if not k.startswith(NOTES_PREFIX)]
+    if notes:
+        keywords.append(f"{NOTES_PREFIX}{notes}")
+    exiftool = require_exiftool()
+    for arguments in (
+        ["-XMP-dc:Subject="],
+        [f"-XMP-dc:Subject+={keyword}" for keyword in keywords],
+    ):
+        if arguments:
+            subprocess.run(
+                [exiftool, "-overwrite_original", *arguments, str(xmp_path)],
+                capture_output=True,
+                check=True,
+                text=True,
+            )
+
+
+def read_photos_with_notes(raw_paths: list[Path]) -> set[Path]:
+    """
+    Find which RAW photos have a "Notes: ..." keyword in their sidecar.
+
+    Returns:
+        The subset of `raw_paths` whose sidecar carries a note.
+    """
+    sidecars = {path.with_suffix(".xmp").resolve(): path for path in raw_paths}
+    existing = [str(sidecar) for sidecar in sidecars if sidecar.is_file()]
+    if not existing:
+        return set()
+    result = subprocess.run(
+        [require_exiftool(), "-j", "-XMP-dc:Subject", *existing],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    found = set()
+    for record in json.loads(result.stdout):
+        subjects = record.get("Subject", [])
+        subjects = subjects if isinstance(subjects, list) else [subjects]
+        raw_path = sidecars.get(Path(record["SourceFile"]).resolve())
+        if raw_path is not None and any(str(s).startswith(NOTES_PREFIX) for s in subjects):
+            found.add(raw_path)
+    return found
+
+
+def _read_keywords(xmp_path: Path) -> list[str]:
+    record = _read_json(require_exiftool(), xmp_path, "-XMP-dc:Subject")
+    value = record.get("Subject", [])
+    return [str(v) for v in value] if isinstance(value, list) else [str(value)]
+
+
 def transform_crop(crop: CropRect, orientation: int) -> CropRect:
     """
     Transform normalized crop bounds according to an EXIF orientation.

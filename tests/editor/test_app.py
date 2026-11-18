@@ -254,6 +254,30 @@ def test_open_folder_starts_on_selected_photo(
     app.quit()
 
 
+def test_dropping_photo_from_open_folder_switches_without_rescan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Dropping a photo from the already-open folder just selects it."""
+    app = QApplication.instance() or QApplication([])
+    first_photo = tmp_path / "first.cr3"
+    second_photo = tmp_path / "second.cr3"
+    first_photo.touch()
+    second_photo.touch()
+    window = CropWindow()
+    monkeypatch.setattr(window, "_schedule_prefetch", lambda index: None)
+    window.open_folder(tmp_path)
+    monkeypatch.setattr(
+        window, "open_folder", lambda *args: pytest.fail("folder should not be rescanned")
+    )
+
+    window._open_dropped_path((tmp_path, second_photo))
+
+    assert window._current_path == second_photo
+    window.close()
+    app.quit()
+
+
 def test_open_folder_lists_cr2_and_cr3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A mixed folder lists both Canon RAW formats without including other files."""
     app = QApplication.instance() or QApplication([])
