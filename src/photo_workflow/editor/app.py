@@ -2360,7 +2360,7 @@ class CropWindow(QMainWindow):
                 else []
             )
         self._photos = list(self._all_photos)
-        self._set_idle_link(self._live_mode and not self._all_photos)
+        self._set_idle_link(self._live_mode)
         self._photo_ratings = {path: (0, None) for path in self._all_photos}
         self._load_failures.clear()
         self._queued_loads.clear()
@@ -3289,7 +3289,7 @@ class CropWindow(QMainWindow):
         )
 
     def _set_idle_link(self, active: bool) -> None:
-        """Style the position label as a link while Live mode is idle and empty."""
+        """Style the position label as a link while Live mode is active."""
         label = self.position_count_label
         font = label.font()
         font.setUnderline(active)
@@ -3302,7 +3302,7 @@ class CropWindow(QMainWindow):
 
     def _open_live_folder(self) -> None:
         """Open the Live watch folder in the file manager, creating it first if needed."""
-        if not self._live_mode or self._live is None or self._all_photos:
+        if not self._live_mode or self._live is None:
             return
         folder = self._live.pipeline.layout.root
         folder.mkdir(parents=True, exist_ok=True)
