@@ -607,3 +607,29 @@ def test_changing_the_color_temperature_reruns_lighting(tmp_path: Path) -> None:
     executor.run_all()
 
     assert len(lighting.calls) == 2
+
+
+def test_invalidating_a_running_stage_cancels_it_at_its_next_progress_report(
+    tmp_path: Path,
+) -> None:
+    """A stale job stops at its next progress report instead of finishing, then reruns."""
+    photo = make_photo(tmp_path)
+    attempts: list[str] = []
+
+    class Slow(StageImplementation):
+        def process(self, job: StageJob) -> StageResult:
+            attempts.append("start")
+            if len(attempts) == 1:
+                pipeline.invalidate(StageId.LIGHTING, photo, include_self=True)
+            job.report_progress(0.5)
+            attempts.append("finish")
+            return StageResult.done()
+
+    registry = StageRegistry()
+    registry.register(StageId.LIGHTING, Slow())
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, {StageId.LIGHTING})
+    pipeline.scan()
+    executor.run_all()
+
+    assert attempts == ["start", "start", "finish"]
+    assert pipeline.status(photo, StageId.LIGHTING) is StageStatus.DONE

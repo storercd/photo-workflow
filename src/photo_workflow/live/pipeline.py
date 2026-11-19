@@ -14,6 +14,7 @@ from pathlib import Path
 from photo_workflow.live.api import (
     LiveWarning,
     PermanentStageError,
+    StageCancelled,
     StageJob,
     StageRegistry,
     StageResult,
@@ -42,7 +43,9 @@ DEFAULT_BACKOFF = (0.5, 1.5, 4.0)
 CLEAN_DRAIN_TIMEOUT_SECONDS = 60.0
 # Stages whose output can stand in for the original photo when viewing and cropping.
 VIEW_STAGES = tuple(
-    stage for stage in STAGE_ORDER if stage not in {StageId.FTP, *downstream_of(StageId.LIGHTING)}
+    stage
+    for stage in STAGE_ORDER
+    if stage not in {StageId.FTP, *downstream_of(StageId.LIGHTING_FULL)}
 )
 
 
@@ -506,12 +509,13 @@ class LivePipeline:
 
     def _settled(self, photo: Path, stage: StageId) -> bool:
         record = self._state.images[photo][stage]
-        if record.status in {StageStatus.DONE, StageStatus.SKIPPED}:
+        if record.status in {StageStatus.DONE, StageStatus.SKIPPED} or SPECS[stage].background:
             return True
         return not self.settings.is_enabled(stage) and not SPECS[stage].blocks_when_disabled
 
     def _build_job(self, photo: Path, stage: StageId) -> StageJob:
         source, source_stage = self._source(photo, stage)
+        generation = self._state.images[photo][stage].generation
         return StageJob(
             stage=stage,
             photo=photo,
@@ -520,8 +524,21 @@ class LivePipeline:
             layout=self.layout,
             settings=self.settings,
             warn=lambda message: self.add_warning(stage, message, photo),
-            report_progress=lambda fraction: self._set_fraction(photo, stage, fraction),
+            report_progress=lambda fraction: self._report(photo, stage, generation, fraction),
         )
+
+    def _report(self, photo: Path, stage: StageId, generation: int, fraction: float) -> None:
+        """
+        Record progress; abandon the job when it was invalidated since it started.
+
+        Raises:
+            StageCancelled: If the job's results would be discarded anyway.
+        """
+        with self._lock:
+            record = self._state.images.get(photo, {}).get(stage)
+            if self._closed or record is None or record.generation != generation:
+                raise StageCancelled
+        self._set_fraction(photo, stage, fraction)
 
     def _set_fraction(self, photo: Path, stage: StageId, fraction: float) -> None:
         with self._lock:
@@ -585,6 +602,9 @@ class LivePipeline:
         implementation = self._registry.get(job.stage)
         try:
             result = self._with_retries(lambda: implementation.process(job), job.stage)
+        except StageCancelled:
+            LOGGER.info("live %s %s: cancelled", job.stage.value, job.photo.name)
+            self._finish(job, generation, None, "")
         except Exception as error:
             self._finish(job, generation, None, f"{type(error).__name__}: {error}")
         else:
@@ -595,7 +615,7 @@ class LivePipeline:
         for attempt in range(attempts):
             try:
                 return work()
-            except PermanentStageError:
+            except (PermanentStageError, StageCancelled):
                 raise
             except Exception as error:
                 if attempt == attempts - 1:

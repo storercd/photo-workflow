@@ -25,6 +25,10 @@ class PermanentStageError(Exception):
     """Raised by a stage when retrying cannot help; the feature halts immediately."""
 
 
+class StageCancelled(Exception):  # noqa: N818
+    """Raised when a running job was invalidated, so its result would be thrown away."""
+
+
 @dataclass(frozen=True)
 class LiveWarning:
     """A non-fatal problem (for example an interrupted upload) the user can inspect."""

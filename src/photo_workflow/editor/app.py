@@ -2275,7 +2275,7 @@ class CropWindow(QMainWindow):
         source = self._live.pipeline.view_source(raw_path)
         if source.stage is None:
             return None, True
-        return source.path, source.stage is not StageId.LIGHTING
+        return source.path, source.stage not in {StageId.LIGHTING, StageId.LIGHTING_FULL}
 
     def _update_live_panel(self) -> None:
         if self._live is not None:

@@ -135,6 +135,18 @@ LibRaw via `rawpy`: camera white balance, no tone curve, cropped to the active a
 `live/detection.py` is the shared detection API: Mask publishes normalized subject (and ball)
 boxes per photo; Automatic Cropping calls `get_detection(photo)` or
 `detect_photo(photo, source)` (detects and caches when missing).
+## Quick and full lighting
+
+Lighting is two stages. **Lighting (quick)** tones the image in seconds and writes
+`lighting/output/`. **Lighting (full)** (off by default) neural-cleans that JPEG and overwrites
+it under the same name. Full is a `background` stage: later stages do not wait for it, and when it
+finishes they are invalidated and rerun from its output, so AutoCrop, Export and Cloud Sync run
+twice per photo.
+
+Running jobs are cancelled cooperatively: when a stage is invalidated (for example a new white
+balance), the old job raises `StageCancelled` at its next progress report instead of finishing,
+and the stage reruns with the new settings.
+
 ## AutoCrop
 
 `live/features/autocrop.py` computes a crop per photo and writes it to the XMP sidecar via
