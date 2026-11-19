@@ -88,6 +88,7 @@ class LiveSettings:
     autocrop_force: bool = False
     autocrop_ball: bool = False
     idle_processing: bool = False
+    follow_latest: bool = False
     idle_delay_seconds: float = DEFAULT_IDLE_DELAY_SECONDS
 
     def folder_path(self, camera_root: Path) -> Path:
@@ -186,6 +187,7 @@ def load_live_settings(
         autocrop_force=settings.value("live/autocrop_force", False, type=bool),
         autocrop_ball=settings.value("live/autocrop_ball", False, type=bool),
         idle_processing=settings.value("live/idle_processing", False, type=bool),
+        follow_latest=settings.value("live/follow_latest", False, type=bool),
         idle_delay_seconds=settings.value(
             "live/idle_delay_seconds", defaults.idle_delay_seconds, type=float
         ),
@@ -229,6 +231,7 @@ def save_live_settings(
     settings.setValue("live/autocrop_force", live.autocrop_force)
     settings.setValue("live/autocrop_ball", live.autocrop_ball)
     settings.setValue("live/idle_processing", live.idle_processing)
+    settings.setValue("live/follow_latest", live.follow_latest)
     settings.setValue("live/idle_delay_seconds", live.idle_delay_seconds)
     store.set(SECRET_FTP_PASSWORD, live.ftp_password)
     store.set(SECRET_R2_SECRET_KEY, live.r2_secret_access_key)

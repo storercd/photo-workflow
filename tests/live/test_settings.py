@@ -182,3 +182,14 @@ def test_idle_processing_is_off_by_default_round_trips_and_is_validated(tmp_path
     assert loaded.idle_delay_seconds == 5.5
     with pytest.raises(ValueError, match="delay"):
         validate_live_settings(LiveSettings(idle_delay_seconds=0.0))
+
+
+def test_bypass_and_follow_latest_round_trip(tmp_path: Path) -> None:
+    """The bypass threshold and Follow latest photo are persisted."""
+    store = make_settings(tmp_path)
+    save_live_settings(
+        store, LiveSettings(bypass_min_rating=4, follow_latest=True), MemorySecrets()
+    )
+
+    loaded = load_live_settings(store, MemorySecrets())
+    assert (loaded.bypass_min_rating, loaded.follow_latest) == (4, True)

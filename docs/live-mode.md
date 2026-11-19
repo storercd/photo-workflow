@@ -226,6 +226,12 @@ Starred frames can skip the automatic result and go out as your own edit
 - **UI:** the status panel shows `↓ waiting in bypass-input  ↑ sent through bypass-output`
   with **In** and **Out** buttons that open the folders.
 
+## Follow latest photo
+
+The status panel's "Follow latest photo" checkbox (persisted as
+`live/follow_latest`, off by default) jumps the viewer to the newest arrival.
+It is skipped while there are unsaved edits.
+
 ## Investigation notes
 
 ### Rating and metadata propagation

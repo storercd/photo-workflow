@@ -1380,6 +1380,7 @@ class CropWindow(QMainWindow):
         self.live_button.clicked.connect(self._toggle_live_mode)
         self.live_dock.panel.stage_toggled.connect(self._live_stage_toggled)
         self.live_dock.panel.idle_toggled.connect(self._live_idle_toggled)
+        self.live_dock.panel.follow_toggled.connect(self._live_follow_toggled)
         self.live_dock.panel.warning_selected.connect(self._live_warning_selected)
         self.live_dock.panel.warnings_cleared.connect(self._live_warnings_cleared)
         self.live_dock.panel.clean_requested.connect(self._live_clean_requested)
@@ -2203,6 +2204,10 @@ class CropWindow(QMainWindow):
         """Switch Idle Processing from the status panel button and remember the choice."""
         self._apply_live_settings(replace(self._live_settings, idle_processing=checked))
 
+    def _live_follow_toggled(self, checked: bool) -> None:
+        """Remember the Follow latest photo choice from the status panel."""
+        self._apply_live_settings(replace(self._live_settings, follow_latest=checked))
+
     def _live_warning_selected(self, warning_id: int, photo_text: str) -> None:
         """Jump to a warning's photo and dismiss the warning."""
         if self._live is None:
@@ -2295,6 +2300,13 @@ class CropWindow(QMainWindow):
                 self.open_folder(self._live.pipeline.layout.root)
             return
         self._refresh_rating_filter()
+        if added and self._live_settings.follow_latest and not self._dirty:
+            self._show_latest_photo(added[-1])
+
+    def _show_latest_photo(self, photo: Path) -> None:
+        """Navigate to a newly arrived photo when it passes the current filters."""
+        if photo in self._photos and photo != self._current_path:
+            self.navigate(self._photos.index(photo) - self._current_index)
 
     def _live_reload_regenerated(self) -> None:
         """Reload the current preview when its pipeline output appeared or was rewritten."""

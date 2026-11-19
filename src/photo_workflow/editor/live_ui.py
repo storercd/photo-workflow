@@ -219,6 +219,7 @@ class LiveStatusPanel(QFrame):
 
     stage_toggled = Signal(object, bool)
     idle_toggled = Signal(bool)
+    follow_toggled = Signal(bool)
     warning_selected = Signal(int, str)
     warnings_cleared = Signal()
     clean_requested = Signal()
@@ -311,6 +312,9 @@ class LiveStatusPanel(QFrame):
             "Only process while the mouse and keyboard are idle (delay is in Preferences → Live)"
         )
         self.idle_button.toggled.connect(self.idle_toggled.emit)
+        self.follow_check = QCheckBox("Follow latest photo")
+        self.follow_check.setToolTip("Jump to each new photo as it arrives")
+        self.follow_check.toggled.connect(self.follow_toggled.emit)
         self.completed_label = QLabel("Completed: 0")
         self.held_label = QLabel("Waiting for idle")
         self.held_label.setStyleSheet(HELD_STYLE)
@@ -323,6 +327,7 @@ class LiveStatusPanel(QFrame):
         layout.addLayout(grid)
         layout.addLayout(bypass_row)
         layout.addWidget(self.idle_button)
+        layout.addWidget(self.follow_check)
         layout.addWidget(self.completed_label)
         layout.addWidget(self.held_label)
         layout.addStretch(1)
@@ -332,6 +337,9 @@ class LiveStatusPanel(QFrame):
         self.idle_button.blockSignals(True)
         self.idle_button.setChecked(settings.idle_processing)
         self.idle_button.blockSignals(False)
+        self.follow_check.blockSignals(True)
+        self.follow_check.setChecked(settings.follow_latest)
+        self.follow_check.blockSignals(False)
         for stage, toggle in self.toggles.items():
             toggle.blockSignals(True)
             toggle.setChecked(settings.is_enabled(stage))
