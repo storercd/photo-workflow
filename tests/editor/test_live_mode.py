@@ -201,9 +201,9 @@ def test_idle_message_opens_and_creates_the_live_folder(
     make_live_photo(root)
     window._live.pipeline.scan()
     window.open_folder(root)
-    assert label.cursor().shape() != Qt.CursorShape.PointingHandCursor
+    assert label.cursor().shape() == Qt.CursorShape.PointingHandCursor
     window._open_live_folder()
-    assert opened == [str(root)]
+    assert opened == [str(root), str(root)]
     window.close()
 
 
