@@ -94,6 +94,8 @@ def write_jpeg(path: Path, rgb: NDArray[np.uint8]) -> None:
 class Lighting(StageImplementation):
     """Writes the final preview JPEG to `output/<name>.jpg`."""
 
+    revision = 2
+
     def process(self, job: StageJob) -> StageResult:
         """
         Apply auto lighting and the color temperature override to the best source.
