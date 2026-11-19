@@ -2313,7 +2313,8 @@ class CropWindow(QMainWindow):
             return
         message = self._live.pipeline.failure(self._current_path)
         self.view.set_failed(f"⚠ PROCESSING FAILED\n{message}" if message else None)
-        self.view.set_badge(self._live_mask_badge(self._current_path))
+        fraction = self._live.pipeline.progress_fraction(self._current_path)
+        self.view.set_badge(self._live_mask_badge(self._current_path), fraction)
 
     def _refresh_crop_source(self) -> None:
         """In Live mode, color and label the crop frame as automatic or a manual override."""
@@ -2324,9 +2325,15 @@ class CropWindow(QMainWindow):
         self.view.set_crop_source("auto" if metadata.auto_crop else "manual")
 
     def _live_mask_badge(self, photo: Path) -> str | None:
-        """Return a small note when Mask is on but found no subject in this photo."""
+        """Return a small note on a photo's live progress, or when Mask found no subject."""
         pipeline = self._live.pipeline if self._live is not None else None
-        if pipeline is None or not pipeline.settings.is_enabled(StageId.MASK):
+        if pipeline is None:
+            return None
+        progress = pipeline.progress(photo)
+        if progress:
+            fraction = pipeline.progress_fraction(photo)
+            return progress if fraction is None else f"{progress} {round(fraction * 100)}%"
+        if not pipeline.settings.is_enabled(StageId.MASK):
             return None
         if pipeline.skip_message(photo, StageId.MASK) != NO_SUBJECT_MESSAGE:
             return None

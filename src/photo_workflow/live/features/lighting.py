@@ -107,7 +107,7 @@ class Lighting(StageImplementation):
         reference = as_shot_reference(job.photo)
         adjustment = choose_adjustment(rgb, job.settings, reference)
         output = job.output_path(OUTPUT_SUBFOLDER, ".jpg")
-        write_jpeg(output, neural.clean(apply_adjustment(rgb, adjustment)))
+        write_jpeg(output, neural.clean(apply_adjustment(rgb, adjustment), job.report_progress))
         return StageResult.done(output, message=adjustment.describe())
 
 

@@ -18,7 +18,7 @@ from photo_workflow.live.api import (
 from photo_workflow.live.layout import LiveLayout
 from photo_workflow.live.pipeline import LivePipeline
 from photo_workflow.live.settings import LiveSettings
-from photo_workflow.live.stages import StageId, StageStatus
+from photo_workflow.live.stages import SPECS, StageId, StageStatus
 
 PHOTO_NAME = "20251031_101500_00_IMG_0001.CR3"
 
@@ -274,6 +274,21 @@ def test_result_of_invalidated_job_is_discarded(tmp_path: Path) -> None:
 
     assert len(mask.calls) == 2
     assert pipeline.status(photo, StageId.MASK) is StageStatus.DONE
+
+
+def test_progress_names_the_stage_working_on_a_photo(tmp_path: Path) -> None:
+    """A photo reports its running stage, then nothing once every enabled stage is done."""
+    photo = make_photo(tmp_path)
+    registry = StageRegistry()
+    registry.register(StageId.MASK, Recorder(".mask"))
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, {StageId.MASK})
+    pipeline.scan()
+
+    assert pipeline.progress(photo) == f"Processing: {SPECS[StageId.MASK].label}"
+
+    executor.run_all()
+
+    assert pipeline.progress(photo) == ""
 
 
 def test_failure_retries_then_halts_feature_and_toggle_clears_and_retries(

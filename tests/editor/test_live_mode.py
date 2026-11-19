@@ -157,6 +157,7 @@ def test_no_subject_badge_shows_only_for_a_mask_skipped_photo(
     window._current_path = photo
     skipped = {"message": NO_SUBJECT_MESSAGE}
     monkeypatch.setattr(pipeline, "skip_message", lambda *_: skipped["message"])
+    monkeypatch.setattr(pipeline, "progress", lambda _photo: "")
 
     window._refresh_live_failure()
     assert window.view._badge is None  # Mask is off

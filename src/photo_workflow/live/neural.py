@@ -13,6 +13,7 @@ Apple GPU (MPS) when available.
 from __future__ import annotations
 
 import urllib.request
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 
@@ -59,7 +60,9 @@ def _model() -> ImageModelDescriptor:
     return ModelLoader().load_from_file(ensure_model()).to(_device()).eval()
 
 
-def _run_tiles(rgb: NDArray[np.uint8]) -> NDArray[np.uint8]:
+def _run_tiles(
+    rgb: NDArray[np.uint8], report: Callable[[float], None] = lambda _fraction: None
+) -> NDArray[np.uint8]:
     """
     Run the network over overlapping tiles, keeping only each tile's interior.
 
@@ -70,6 +73,8 @@ def _run_tiles(rgb: NDArray[np.uint8]) -> NDArray[np.uint8]:
     device = _device()
     height, width = rgb.shape[:2]
     output = np.empty_like(rgb)
+    total = -(-height // TILE) * -(-width // TILE)
+    done = 0
     for top in range(0, height, TILE):
         for left in range(0, width, TILE):
             bottom, right = min(top + TILE, height), min(left + TILE, width)
@@ -82,6 +87,8 @@ def _run_tiles(rgb: NDArray[np.uint8]) -> NDArray[np.uint8]:
             output[top:bottom, left:right] = cleaned.numpy()[
                 top - y0 : bottom - y0, left - x0 : right - x0
             ]
+            done += 1
+            report(done / total)
     return output
 
 
@@ -102,11 +109,13 @@ def blend_detail(original: NDArray[np.uint8], cleaned: NDArray[np.uint8]) -> NDA
     return cv2.cvtColor(network, cv2.COLOR_LAB2RGB)
 
 
-def clean(rgb: NDArray[np.uint8]) -> NDArray[np.uint8]:
+def clean(
+    rgb: NDArray[np.uint8], report: Callable[[float], None] = lambda _fraction: None
+) -> NDArray[np.uint8]:
     """
     Remove colored speckle from an sRGB image while keeping its detail.
 
     Returns:
         A new RGB array of the same shape.
     """
-    return blend_detail(rgb, _run_tiles(rgb))
+    return blend_detail(rgb, _run_tiles(rgb, report))
