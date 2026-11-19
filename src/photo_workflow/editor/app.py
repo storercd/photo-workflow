@@ -2758,6 +2758,11 @@ class CropWindow(QMainWindow):
         if image is not None:
             self._show_image(image)
         self._update_status_bar()
+        if self._live is not None and self._live_settings.color_temperature != self._wb_override:
+            # The Live Lighting stage reads this setting, so changing it reprocesses every photo.
+            self._apply_live_settings(
+                replace(self._live_settings, color_temperature=self._wb_override)
+            )
 
     def _auto_light_toggled(self, checked: bool) -> None:
         """Switch the displayed preview between original and auto-lit versions."""
