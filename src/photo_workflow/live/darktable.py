@@ -137,7 +137,7 @@ def denoise_raw(raw: Path) -> NDArray[np.uint16]:
         output = folder / "out.tif"
         command = [
             str(cli),
-            str(raw),
+            str(raw.absolute()),
             str(sidecar),
             str(output),
             "--core",
@@ -154,7 +154,12 @@ def denoise_raw(raw: Path) -> NDArray[np.uint16]:
         ]
         try:
             subprocess.run(
-                command, check=True, capture_output=True, text=True, timeout=TIMEOUT_SECONDS
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT_SECONDS,
+                cwd=folder,
             )
         except (OSError, subprocess.SubprocessError) as error:
             detail = getattr(error, "stderr", "") or str(error)
