@@ -70,6 +70,11 @@ class BypassLedger:
             partial.write_text(json.dumps(data))
             os.replace(partial, self._path)
 
+    def stems(self) -> list[str]:
+        """Return the stems of all frames sent through the bypass."""
+        with _LEDGER_LOCK:
+            return list(self._read())
+
     def count(self) -> int:
         """Return how many frames went out through the bypass."""
         with _LEDGER_LOCK:
@@ -156,8 +161,19 @@ class BypassRouter:
         return sum(1 for path in folder.iterdir() if path.suffix.lower() in RAW_SUFFIXES)
 
     def sent(self) -> int:
-        """Return how many frames went out through `bypass-output`."""
-        return self.ledger.count()
+        """Return how many frames reached `bypass-output`, uploaded or still waiting to upload."""
+        folder = self.layout.bypass_output
+        ledger = self.ledger
+        stems = set(ledger.stems())
+        if folder.is_dir():
+            stems.update(
+                path.stem
+                for path in folder.iterdir()
+                if path.is_file()
+                and path.suffix.lower() in OUTPUT_SUFFIXES
+                and not path.name.startswith(".")
+            )
+        return len(stems)
 
     def ready_outputs(self) -> list[Path]:
         """
