@@ -350,3 +350,20 @@ def test_saving_a_crop_reruns_export_and_cloud_sync(
     assert pipeline.status(photo, StageId.EXPORT) is StageStatus.PENDING
     assert pipeline.status(photo, StageId.CLOUD_SYNC) is StageStatus.PENDING
     window.close()
+
+
+def test_white_balance_override_reaches_the_live_lighting_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fixing the color temperature in the editor changes the Live setting, then clears it."""
+    window = make_window(tmp_path, monkeypatch)
+    window._open_live()
+    window._wb_override = 4300.0
+
+    window._apply_wb_override()
+    assert window._live is not None
+    assert window._live.pipeline.settings.color_temperature == 4300.0
+
+    window._wb_override = None
+    window._apply_wb_override()
+    assert window._live.pipeline.settings.color_temperature is None

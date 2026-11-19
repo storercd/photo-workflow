@@ -13,6 +13,7 @@ class StageId(StrEnum):
     DENOISE = "denoise"
     MASK = "mask"
     LIGHTING = "lighting"
+    LIGHTING_FULL = "lighting_full"
     AUTOCROP = "autocrop"
     EXPORT = "export"
     CLOUD_SYNC = "cloud_sync"
@@ -41,6 +42,8 @@ class StageSpec:
             off. When false, a disabled stage is passed through and later stages fall
             back to the most advanced earlier source.
         concurrency: Maximum images processed at once by this stage.
+        background: When true, later stages do not wait for this stage. They proceed from the
+            earlier output, and are redone when this stage finishes with a better one.
     """
 
     id: StageId
@@ -48,13 +51,15 @@ class StageSpec:
     subfolders: tuple[str, ...] = ()
     blocks_when_disabled: bool = False
     concurrency: int = 1
+    background: bool = False
 
 
 STAGES: tuple[StageSpec, ...] = (
     StageSpec(StageId.FTP, "FTP", subfolders=("input",)),
     StageSpec(StageId.DENOISE, "Denoise", subfolders=("denoise",)),
     StageSpec(StageId.MASK, "Mask", subfolders=("mask",)),
-    StageSpec(StageId.LIGHTING, "Lighting/Color", subfolders=("lighting", "output")),
+    StageSpec(StageId.LIGHTING, "Lighting (quick)", subfolders=("lighting", "output")),
+    StageSpec(StageId.LIGHTING_FULL, "Lighting (full)", background=True),
     StageSpec(StageId.AUTOCROP, "AutoCrop"),
     StageSpec(StageId.EXPORT, "Export", subfolders=("export",), blocks_when_disabled=True),
     StageSpec(StageId.CLOUD_SYNC, "Cloud Sync", blocks_when_disabled=True),

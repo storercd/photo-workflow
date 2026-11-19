@@ -10,9 +10,10 @@ import pytest
 from PIL import Image
 
 from photo_workflow.live.api import PermanentStageError, StageJob, StageRegistry
+from photo_workflow.live.bypass import BypassLedger, BypassRouter
 from photo_workflow.live.features import cloud_sync
 from photo_workflow.live.layout import LiveLayout
-from photo_workflow.live.settings import LiveSettings
+from photo_workflow.live.settings import LiveSettings, validate_live_settings
 from photo_workflow.live.stages import StageId, StageStatus
 
 STEM = "20251031_101500_00_IMG_0001"
@@ -293,3 +294,110 @@ def test_register_provides_the_cloud_sync_stage() -> None:
     cloud_sync.register(registry)
 
     assert registry.is_registered(StageId.CLOUD_SYNC)
+
+
+SETTINGS = LiveSettings(
+    r2_account_id="acct", r2_access_key_id="key", r2_secret_access_key="s", r2_bucket="b"
+)
+
+
+def test_stages_starred_photo_and_withdraws_when_rating_drops(photo: Path) -> None:
+    """A photo at the threshold is copied with its sidecar; dropping below withdraws it."""
+    layout = LiveLayout(photo.parents[4])
+    router = BypassRouter(layout)
+
+    router.stage_inputs([photo], threshold=4)
+    staged = layout.bypass_input / photo.name
+    assert staged.is_file()
+    assert staged.with_suffix(".xmp").is_file()
+    assert router.waiting() == 1
+
+    photo.with_suffix(".xmp").write_text(XMP_TEMPLATE.format(rating=2))
+    photo.with_suffix(".xmp").touch()
+    router.stage_inputs([photo], threshold=4)
+    assert router.waiting() == 0
+
+
+def test_threshold_zero_is_off(photo: Path) -> None:
+    """With the bypass off nothing is staged."""
+    layout = LiveLayout(photo.parents[4])
+    BypassRouter(layout).stage_inputs([photo], threshold=0)
+    assert not layout.bypass_input.exists()
+
+
+def test_outputs_ready_only_when_stable_and_unsent(photo: Path) -> None:
+    """An export is picked up on the second poll and not again once sent."""
+    layout = LiveLayout(photo.parents[4])
+    layout.bypass_output.mkdir()
+    export = layout.bypass_output / f"{STEM}.jpg"
+    write_export(export, "blue")
+    (layout.bypass_output / "notes.txt").write_text("x")
+    router = BypassRouter(layout)
+
+    assert router.ready_outputs() == []
+    assert router.ready_outputs() == [export]
+    router.ledger.mark_sent(export)
+    assert router.ready_outputs() == []
+    assert router.sent() == 1
+
+    export.unlink()
+    assert router.sent() == 0
+    assert router.withdrawn() == [STEM]
+    assert not router.ledger.is_sent(STEM)
+    assert router.withdrawn() == []
+
+
+def test_bypass_version_replaces_auto_and_blocks_later_auto_sync(
+    photo: Path, r2: FakeR2
+) -> None:
+    """The bypass export replaces the auto keys, and Cloud Sync then leaves it alone."""
+    stage = cloud_sync.CloudSync(lambda account, key, secret: r2)
+    layout = LiveLayout(photo.parents[4])
+    stage.process(make_job(photo))
+    auto_keys = set(r2.objects)
+
+    layout.bypass_output.mkdir()
+    export = layout.bypass_output / f"{STEM}.jpg"
+    write_export(export, "green")
+    stage.send_direct(SETTINGS, export)
+    BypassLedger(layout).mark_sent(export)
+
+    assert len(r2.objects) == 4
+    assert not auto_keys & set(r2.objects)
+    bypass_keys = set(r2.objects)
+    assert stage.process(make_job(photo)).status is StageStatus.SKIPPED
+    assert set(r2.objects) == bypass_keys
+
+
+def test_unstarred_bypass_never_deletes_for_rating_filter(photo: Path, r2: FakeR2) -> None:
+    """A bypassed frame survives even if it is below the Cloud Sync star filter."""
+    stage = cloud_sync.CloudSync(lambda account, key, secret: r2)
+    layout = LiveLayout(photo.parents[4])
+    export = layout.bypass_output / f"{STEM}.jpg"
+    layout.bypass_output.mkdir()
+    write_export(export, "green")
+    stage.send_direct(SETTINGS, export)
+    BypassLedger(layout).mark_sent(export)
+
+    stage.process(make_job(photo, min_rating=5))
+
+    assert len(r2.objects) == 4
+
+
+def test_ledger_roundtrip(tmp_path: Path) -> None:
+    """The ledger survives re-opening."""
+    layout = LiveLayout(tmp_path)
+    file = tmp_path / "a.jpg"
+    file.write_bytes(b"x")
+    BypassLedger(layout).mark_sent(file)
+    assert BypassLedger(layout).is_sent("a")
+    assert BypassLedger(layout).is_current(file)
+    file.write_bytes(b"xy")
+    assert not BypassLedger(layout).is_current(file)
+
+
+@pytest.mark.parametrize("bad", [6, -1])
+def test_settings_validate_bypass_rating(bad: int) -> None:
+    """Out of range thresholds are rejected."""
+    with pytest.raises(ValueError, match="Bypass"):
+        validate_live_settings(LiveSettings(bypass_min_rating=bad))

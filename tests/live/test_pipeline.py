@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import Executor, Future
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -590,3 +591,45 @@ def test_holding_blocks_new_work_but_not_ingest_and_release_resumes(tmp_path: Pa
 
     assert len(denoise.calls) == 1
     assert not pipeline.snapshot().held
+
+
+def test_changing_the_color_temperature_reruns_lighting(tmp_path: Path) -> None:
+    """A new white balance reprocesses every photo from Lighting onward."""
+    make_photo(tmp_path)
+    lighting = Calls()
+    registry = StageRegistry()
+    registry.register(StageId.LIGHTING, lighting)
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, {StageId.LIGHTING})
+    pipeline.scan()
+    executor.run_all()
+
+    pipeline.set_settings(replace(pipeline.settings, color_temperature=4200.0))
+    executor.run_all()
+
+    assert len(lighting.calls) == 2
+
+
+def test_invalidating_a_running_stage_cancels_it_at_its_next_progress_report(
+    tmp_path: Path,
+) -> None:
+    """A stale job stops at its next progress report instead of finishing, then reruns."""
+    photo = make_photo(tmp_path)
+    attempts: list[str] = []
+
+    class Slow(StageImplementation):
+        def process(self, job: StageJob) -> StageResult:
+            attempts.append("start")
+            if len(attempts) == 1:
+                pipeline.invalidate(StageId.LIGHTING, photo, include_self=True)
+            job.report_progress(0.5)
+            attempts.append("finish")
+            return StageResult.done()
+
+    registry = StageRegistry()
+    registry.register(StageId.LIGHTING, Slow())
+    pipeline, executor, _ = make_pipeline(tmp_path, registry, {StageId.LIGHTING})
+    pipeline.scan()
+    executor.run_all()
+
+    assert attempts == ["start", "start", "finish"]
+    assert pipeline.status(photo, StageId.LIGHTING) is StageStatus.DONE

@@ -219,9 +219,11 @@ class LiveStatusPanel(QFrame):
 
     stage_toggled = Signal(object, bool)
     idle_toggled = Signal(bool)
+    follow_toggled = Signal(bool)
     warning_selected = Signal(int, str)
     warnings_cleared = Signal()
     clean_requested = Signal()
+    bypass_folder_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Build one row per stage."""
@@ -280,12 +282,39 @@ class LiveStatusPanel(QFrame):
             self.toggles[stage] = toggle
             self.error_labels[stage] = error
             self.count_labels[stage] = count
+        self.bypass_label = QLabel("Bypass")
+        self.bypass_label.setStyleSheet("font-weight: bold;")
+        self.bypass_counts = QLabel("↓ 0  ↑ 0")
+        self.bypass_counts.setToolTip(
+            "↓ photos waiting in bypass-input   ↑ photos sent through bypass-output"
+        )
+        self.bypass_input_button = QToolButton()
+        self.bypass_input_button.setText("In")
+        self.bypass_input_button.setToolTip("Open bypass-input (select these files in Lightroom)")
+        self.bypass_input_button.clicked.connect(
+            lambda: self.bypass_folder_requested.emit("input")
+        )
+        self.bypass_output_button = QToolButton()
+        self.bypass_output_button.setText("Out")
+        self.bypass_output_button.setToolTip("Open bypass-output (inspect or clean exports)")
+        self.bypass_output_button.clicked.connect(
+            lambda: self.bypass_folder_requested.emit("output")
+        )
+        bypass_row = QHBoxLayout()
+        bypass_row.addWidget(self.bypass_label)
+        bypass_row.addWidget(self.bypass_counts)
+        bypass_row.addStretch(1)
+        bypass_row.addWidget(self.bypass_input_button)
+        bypass_row.addWidget(self.bypass_output_button)
         self.idle_button = QPushButton(IDLE_PROCESSING_LABEL)
         self.idle_button.setCheckable(True)
         self.idle_button.setToolTip(
             "Only process while the mouse and keyboard are idle (delay is in Preferences → Live)"
         )
         self.idle_button.toggled.connect(self.idle_toggled.emit)
+        self.follow_check = QCheckBox("Follow latest photo")
+        self.follow_check.setToolTip("Jump to each new photo as it arrives")
+        self.follow_check.toggled.connect(self.follow_toggled.emit)
         self.completed_label = QLabel("Completed: 0")
         self.held_label = QLabel("Waiting for idle")
         self.held_label.setStyleSheet(HELD_STYLE)
@@ -296,7 +325,9 @@ class LiveStatusPanel(QFrame):
         layout = QVBoxLayout(self)
         layout.addLayout(header)
         layout.addLayout(grid)
+        layout.addLayout(bypass_row)
         layout.addWidget(self.idle_button)
+        layout.addWidget(self.follow_check)
         layout.addWidget(self.completed_label)
         layout.addWidget(self.held_label)
         layout.addStretch(1)
@@ -306,6 +337,9 @@ class LiveStatusPanel(QFrame):
         self.idle_button.blockSignals(True)
         self.idle_button.setChecked(settings.idle_processing)
         self.idle_button.blockSignals(False)
+        self.follow_check.blockSignals(True)
+        self.follow_check.setChecked(settings.follow_latest)
+        self.follow_check.blockSignals(False)
         for stage, toggle in self.toggles.items():
             toggle.blockSignals(True)
             toggle.setChecked(settings.is_enabled(stage))
@@ -334,6 +368,9 @@ class LiveStatusPanel(QFrame):
             label.setText(text)
             label.setVisible(bool(text))
         self.completed_label.setText(f"Completed: {snapshot.completed}")
+        self.bypass_counts.setText(f"↓ {snapshot.bypass_waiting}  ↑ {snapshot.bypass_sent}")
+        self.bypass_label.setEnabled(snapshot.bypass_enabled)
+        self.bypass_counts.setEnabled(snapshot.bypass_enabled or bool(snapshot.bypass_sent))
         self.held_label.setVisible(snapshot.held)
         self._set_warnings(warnings)
 

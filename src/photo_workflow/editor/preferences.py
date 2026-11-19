@@ -431,6 +431,14 @@ class PreferencesDialog(QDialog):
         self.r2_min_rating_spin.setToolTip(
             "Cloud Sync uploads images rated at least this many stars and removes the rest"
         )
+        self.bypass_min_rating_spin = QSpinBox()
+        self.bypass_min_rating_spin.setRange(0, 5)
+        self.bypass_min_rating_spin.setSpecialValueText("Off")
+        self.bypass_min_rating_spin.setValue(live.bypass_min_rating)
+        self.bypass_min_rating_spin.setToolTip(
+            "Photos rated at least this many stars are copied to bypass-input; anything "
+            "exported to bypass-output goes straight to the cloud (3 or 4 suggested)"
+        )
         self.autocrop_ratios_edit = QLineEdit(", ".join(live.autocrop_ratios))
         self.autocrop_ratios_edit.setToolTip("Aspect ratios automatic crop may choose from")
         self.autocrop_ball_check = QCheckBox("Let the ball influence automatic crop")
@@ -474,6 +482,7 @@ class PreferencesDialog(QDialog):
         form.addRow("R2 secret access key", self.r2_secret_edit)
         form.addRow("R2 bucket", self.r2_bucket_edit)
         form.addRow("Cloud Sync minimum stars", self.r2_min_rating_spin)
+        form.addRow("Bypass minimum stars", self.bypass_min_rating_spin)
         form.addRow("", self.auto_lighting_check)
         form.addRow("Color temperature", self.color_temperature_spin)
         form.addRow("Auto-crop aspect ratios", self.autocrop_ratios_edit)
@@ -512,6 +521,7 @@ class PreferencesDialog(QDialog):
             r2_secret_access_key=self.r2_secret_edit.text(),
             r2_bucket=self.r2_bucket_edit.text().strip(),
             r2_min_rating=self.r2_min_rating_spin.value(),
+            bypass_min_rating=self.bypass_min_rating_spin.value(),
             auto_lighting=self.auto_lighting_check.isChecked(),
             color_temperature=self.color_temperature_spin.value() or None,
             autocrop_ratios=tuple(split_ratio_text(self.autocrop_ratios_edit.text())),

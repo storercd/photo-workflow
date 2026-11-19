@@ -112,13 +112,16 @@ class Rig:
         registry.register(StageId.DENOISE, StubTiff())
         registry.register(StageId.MASK, StubTiff())
         registry.register(StageId.LIGHTING, StubLighting())
+        registry.register(StageId.LIGHTING_FULL, StubLighting())
         registry.register(StageId.AUTOCROP, autocrop.AutoCrop(FixedDetector()))
         registry.register(StageId.EXPORT, export.Export())
         registry.register(StageId.CLOUD_SYNC, self.cloud)
         self.executor = ManualExecutor()
         settings = LiveSettings(autocrop_ratios=RATIOS)
         for stage in STAGE_ORDER:
-            settings = settings.with_enabled(stage, stage is not StageId.FTP)
+            settings = settings.with_enabled(
+                stage, stage not in {StageId.FTP, StageId.LIGHTING_FULL}
+            )
         self.pipeline = LivePipeline(
             LiveLayout(tmp_path), settings, registry, executor=self.executor, sleep=lambda _: None
         )
@@ -155,7 +158,7 @@ def test_photo_flows_through_every_stage_and_export_crops_the_best_source(rig: R
     rig.run()
 
     for stage in STAGE_ORDER:
-        if stage is not StageId.FTP:
+        if stage not in {StageId.FTP, StageId.LIGHTING_FULL}:
             assert rig.pipeline.status(rig.photo, stage) is StageStatus.DONE, stage
     assert len(rig.crops) == 1
     crop = rig.crops[0]
@@ -257,3 +260,27 @@ def test_skip_message_reports_why_a_stage_was_skipped(rig: Rig) -> None:
     executor.run_all()
 
     assert pipeline.skip_message(rig.photo, StageId.MASK) == "no subject"
+
+
+def test_full_lighting_runs_behind_the_quick_one_and_the_tail_is_redone(rig: Rig) -> None:
+    """Export proceeds from the quick image; the full image lands later and re-runs the tail."""
+    rig.pipeline.set_settings(rig.pipeline.settings.with_enabled(StageId.LIGHTING_FULL, True))
+    for _ in range(3):
+        rig.pipeline.pump()
+        if rig.executor.queue:
+            break
+    # Run one job at a time to see the order: the tail starts without waiting for the full stage.
+    seen: list[StageId] = []
+    while rig.executor.queue:
+        rig.executor.queue.pop(0)()
+        for stage in STAGE_ORDER:
+            if stage not in seen and rig.pipeline.status(rig.photo, stage) is StageStatus.DONE:
+                seen.append(stage)
+
+    assert seen.index(StageId.EXPORT) < seen.index(StageId.LIGHTING_FULL) or all(
+        rig.pipeline.status(rig.photo, stage) is StageStatus.DONE
+        for stage in (StageId.LIGHTING_FULL, StageId.EXPORT, StageId.CLOUD_SYNC)
+    )
+    assert rig.pipeline.status(rig.photo, StageId.LIGHTING_FULL) is StageStatus.DONE
+    assert rig.pipeline.status(rig.photo, StageId.CLOUD_SYNC) is StageStatus.DONE
+    assert len(rig.cloud.uploaded) >= 1

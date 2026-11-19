@@ -135,6 +135,18 @@ LibRaw via `rawpy`: camera white balance, no tone curve, cropped to the active a
 `live/detection.py` is the shared detection API: Mask publishes normalized subject (and ball)
 boxes per photo; Automatic Cropping calls `get_detection(photo)` or
 `detect_photo(photo, source)` (detects and caches when missing).
+## Quick and full lighting
+
+Lighting is two stages. **Lighting (quick)** tones the image in seconds and writes
+`lighting/output/`. **Lighting (full)** (off by default) neural-cleans that JPEG and overwrites
+it under the same name. Full is a `background` stage: later stages do not wait for it, and when it
+finishes they are invalidated and rerun from its output, so AutoCrop, Export and Cloud Sync run
+twice per photo.
+
+Running jobs are cancelled cooperatively: when a stage is invalidated (for example a new white
+balance), the old job raises `StageCancelled` at its next progress report instead of finishing,
+and the stage reruns with the new settings.
+
 ## AutoCrop
 
 `live/features/autocrop.py` computes a crop per photo and writes it to the XMP sidecar via
@@ -203,3 +215,53 @@ settings, skipping keys that already exist and deleting keys of older exports. T
 filter is *Cloud Sync minimum stars* (`r2_min_rating`, read from the sidecar's
 `xmp:Rating`): photos below it are deleted from the bucket. Saving a rating in the editor
 re-runs Cloud Sync for that photo. Incomplete R2 settings halt the feature immediately.
+
+## Bypass
+
+Starred frames can skip the automatic result and go out as your own edit
+(`live/bypass.py`; spec: Preferences → Live → *Bypass minimum stars*, **Off** by default,
+3 or 4 suggested).
+
+- **bypass-input/** (in the Live folder): every photo whose sidecar rating is at or above the
+  threshold is hard-linked (copied across volumes) here with a copy of its sidecar, checked on
+  each poll. Editing is optional. Dropping the rating below the threshold withdraws an
+  untouched copy; a photo already sent is never staged again. Deleting a staged file keeps it
+  out until the next restart.
+- **bypass-output/**: point the Lightroom export preset here (JPEG, file name = original
+  name). Files whose size and time stopped changing are sent straight to R2 by
+  `CloudSync.send_direct` (needs Cloud Sync on and not halted; it waits while Idle Processing
+  holds the pipeline). Failed uploads raise a warning and retry only once the file changes.
+- **One canonical copy:** the upload uses the same `<stem>-<hash>` keys as the auto version and
+  deletes the older keys of that stem, so the bypass replaces the auto version. The sent files
+  are recorded in `.bypass-sent.json`; Cloud Sync skips any photo recorded there (even below the
+  star filter), so a later auto export or re-run never overwrites it.
+- **UI:** the status panel shows `↓ waiting in bypass-input  ↑ sent through bypass-output`
+  with **In** and **Out** buttons that open the folders.
+
+## Follow latest photo
+
+The status panel's "Follow latest photo" checkbox (persisted as
+`live/follow_latest`, off by default) jumps the viewer to the newest arrival.
+It is skipped while there are unsaved edits.
+
+## Investigation notes
+
+### Rating and metadata propagation
+
+- The rating lives only in the original's XMP sidecar (`input/<name>.xmp`, `xmp:Rating`); the
+  editor writes it with `write_photo_rating`. No stage copies the sidecar: Denoise, Mask and
+  Lighting write beside the original and AutoCrop writes the crop into the same sidecar, and
+  Export and Cloud Sync read the sidecar when they run. So changing a rating never needs
+  writing to staged copies or reprocessing; saving it just re-runs Cloud Sync for that photo
+  (already wired in `_rating_save_finished`), which re-reads the sidecar.
+- Gaps: the rating is **not** written into the exported JPEG (Export carries only the
+  preview's EXIF), so the `full` tier in the bucket has no rating, and a rating changed after
+  an export is only reflected through the filter. The bypass copy gets a *snapshot* of the
+  sidecar at staging time, so ratings changed afterwards are not synced to it; Lightroom's
+  export carries whatever rating it holds.
+- Leaning (one small metadata file holding rating and crop, denoise excluded) matches how it
+  already works: the sidecar *is* that file. If a rating in the exports is wanted, write
+  `XMP:Rating` in `Export.save_jpeg`'s output (exiftool is already used elsewhere), with the
+  crop already baked in.
+
+Auto lighting speed was set aside for now.

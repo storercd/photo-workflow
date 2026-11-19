@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 import sys
 from collections import OrderedDict
 from collections.abc import Callable
@@ -53,6 +55,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -126,6 +129,7 @@ from photo_workflow.editor.preferences import (
     save_preferences,
 )
 from photo_workflow.editor.view import CroppedPreview, CropView
+from photo_workflow.live.darktable import terminate_active
 from photo_workflow.live.features.mask import NO_SUBJECT_MESSAGE
 from photo_workflow.live.layout import IMAGE_SUFFIXES
 from photo_workflow.live.logs import configure_live_logging
@@ -959,6 +963,10 @@ class CropWindow(QMainWindow):
         field.setProperty("role", "value")
         field.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         field.setFixedWidth(field.fontMetrics().horizontalAdvance(widest) + 24)
+        # Display only: a click opens a prompt (`_edit_value_field`); focus stays on the photo.
+        field.setReadOnly(True)
+        field.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        field.setCursor(Qt.CursorShape.PointingHandCursor)
         return field
 
     def _toolbar_group(
@@ -1355,10 +1363,6 @@ class CropWindow(QMainWindow):
         self.show_horizon_button.clicked.connect(self._toggle_horizon_visibility)
         self.auto_light_button.toggled.connect(self._auto_light_toggled)
         self.wb_slider.valueChanged.connect(self._wb_slider_changed)
-        self.wb_value.returnPressed.connect(self._finish_wb_edit)
-        self.wb_value.editingFinished.connect(self._restore_wb_text)
-        self.rotation_value.returnPressed.connect(self._finish_rotation_edit)
-        self.rotation_value.editingFinished.connect(self._restore_rotation_text)
         self.wb_fixed_button.toggled.connect(self._wb_fixed_toggled)
         self.ball_button.toggled.connect(self._ball_toggled)
         self.ball_button.customContextMenuRequested.connect(self._show_ball_menu)
@@ -1380,9 +1384,11 @@ class CropWindow(QMainWindow):
         self.live_button.clicked.connect(self._toggle_live_mode)
         self.live_dock.panel.stage_toggled.connect(self._live_stage_toggled)
         self.live_dock.panel.idle_toggled.connect(self._live_idle_toggled)
+        self.live_dock.panel.follow_toggled.connect(self._live_follow_toggled)
         self.live_dock.panel.warning_selected.connect(self._live_warning_selected)
         self.live_dock.panel.warnings_cleared.connect(self._live_warnings_cleared)
         self.live_dock.panel.clean_requested.connect(self._live_clean_requested)
+        self.live_dock.panel.bypass_folder_requested.connect(self._open_bypass_folder)
         self._apply_review_mode()
 
     def _set_star_filter(self, minimum_stars: int | None) -> None:
@@ -2024,6 +2030,13 @@ class CropWindow(QMainWindow):
             Whether the event was consumed.
         """
         if (
+            watched in (self.wb_value, self.rotation_value)
+            and event.type() == QEvent.Type.MouseButtonPress
+            and watched.isEnabled()
+        ):
+            self._edit_value_field(watched)
+            return True
+        if (
             event.type() == QEvent.Type.MouseButtonPress
             and self._mouse_bindings
             and self.isActiveWindow()
@@ -2202,6 +2215,10 @@ class CropWindow(QMainWindow):
         """Switch Idle Processing from the status panel button and remember the choice."""
         self._apply_live_settings(replace(self._live_settings, idle_processing=checked))
 
+    def _live_follow_toggled(self, checked: bool) -> None:
+        """Remember the Follow latest photo choice from the status panel."""
+        self._apply_live_settings(replace(self._live_settings, follow_latest=checked))
+
     def _live_warning_selected(self, warning_id: int, photo_text: str) -> None:
         """Jump to a warning's photo and dismiss the warning."""
         if self._live is None:
@@ -2210,6 +2227,15 @@ class CropWindow(QMainWindow):
         photo = Path(photo_text) if photo_text else None
         if photo is not None and photo in self._photos:
             self.navigate(self._photos.index(photo) - self._current_index)
+
+    def _open_bypass_folder(self, which: str) -> None:
+        """Open `bypass-input` or `bypass-output` in the file manager, creating it if needed."""
+        if self._live is None:
+            return
+        layout = self._live.pipeline.layout
+        folder = layout.bypass_input if which == "input" else layout.bypass_output
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _live_warnings_cleared(self) -> None:
         if self._live is not None:
@@ -2249,7 +2275,7 @@ class CropWindow(QMainWindow):
         source = self._live.pipeline.view_source(raw_path)
         if source.stage is None:
             return None, True
-        return source.path, source.stage is not StageId.LIGHTING
+        return source.path, source.stage not in {StageId.LIGHTING, StageId.LIGHTING_FULL}
 
     def _update_live_panel(self) -> None:
         if self._live is not None:
@@ -2285,6 +2311,13 @@ class CropWindow(QMainWindow):
                 self.open_folder(self._live.pipeline.layout.root)
             return
         self._refresh_rating_filter()
+        if added and self._live_settings.follow_latest and not self._dirty:
+            self._show_latest_photo(added[-1])
+
+    def _show_latest_photo(self, photo: Path) -> None:
+        """Navigate to a newly arrived photo when it passes the current filters."""
+        if photo in self._photos and photo != self._current_path:
+            self.navigate(self._photos.index(photo) - self._current_index)
 
     def _live_reload_regenerated(self) -> None:
         """Reload the current preview when its pipeline output appeared or was rewritten."""
@@ -2652,6 +2685,25 @@ class CropWindow(QMainWindow):
         self._enable_auto_light()
         self._wb_timer.start()
 
+    def _edit_value_field(self, field: QLineEdit) -> None:
+        """Prompt for a new value (preselected); Enter applies it and Escape keeps the old one."""
+        is_wb = field is self.wb_value
+        current = field.text().removesuffix("K" if is_wb else "°")
+        text, accepted = QInputDialog.getText(
+            self,
+            "Color temperature" if is_wb else "Angle",
+            "Kelvin:" if is_wb else "Degrees:",
+            text=current,
+        )
+        if not accepted:
+            return
+        field.setText(text)
+        if is_wb:
+            self._finish_wb_edit()
+        else:
+            self._finish_rotation_edit()
+        self.view.setFocus()
+
     def _finish_wb_edit(self) -> None:
         """Apply a typed Kelvin value (Enter) to all photos."""
         text = self.wb_value.text().strip().lower().removesuffix("k").strip()
@@ -2706,6 +2758,11 @@ class CropWindow(QMainWindow):
         if image is not None:
             self._show_image(image)
         self._update_status_bar()
+        if self._live is not None and self._live_settings.color_temperature != self._wb_override:
+            # The Live Lighting stage reads this setting, so changing it reprocesses every photo.
+            self._apply_live_settings(
+                replace(self._live_settings, color_temperature=self._wb_override)
+            )
 
     def _auto_light_toggled(self, checked: bool) -> None:
         """Switch the displayed preview between original and auto-lit versions."""
@@ -3342,6 +3399,11 @@ class CropWindow(QMainWindow):
             return
         self.open_folder(folder, selected_photo)
 
+    def showEvent(self, event: object) -> None:  # noqa: N802
+        """Start with focus in the photo area rather than a value field."""
+        super().showEvent(event)
+        self.view.setFocus()
+
     def closeEvent(self, event: object) -> None:
         """Wait for dirty crop data to be written before closing the window."""
         if self._dirty or self._save_busy:
@@ -3503,7 +3565,17 @@ def main(argv: list[str] | None = None) -> int:
         debug=args.debug,
     )
     window.show()
-    return app.exec()
+    code = app.exec()
+    live = getattr(window, "_live", None)
+    if live is not None and live.pipeline.has_running_work():
+        # Worker threads cannot be interrupted and Python joins them at exit; every write
+        # is atomic, so abandoning a long job (such as auto lighting) is safe.
+        terminate_active()
+        if settings is not None:
+            settings.sync()
+        logging.shutdown()
+        os._exit(code)
+    return code
 
 
 if __name__ == "__main__":

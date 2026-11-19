@@ -16,9 +16,7 @@ import hashlib
 import io
 import logging
 import re
-import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,6 +32,8 @@ from photo_workflow.live.api import (
     StageRegistry,
     StageResult,
 )
+from photo_workflow.live.bypass import BypassLedger
+from photo_workflow.live.rating import read_rating
 from photo_workflow.live.settings import LiveSettings
 from photo_workflow.live.stages import StageId
 
@@ -46,9 +46,6 @@ JPEG_QUALITY = 85
 CACHE_CONTROL = "public, max-age=31536000, immutable"
 DELETE_BATCH_SIZE = 1000
 DIGEST_LENGTH = 16
-RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-XMP_NS = "http://ns.adobe.com/xap/1.0/"
-XMP_PACKET = re.compile(rb"<x:xmpmeta.*?</x:xmpmeta>", re.DOTALL)
 ClientFactory = Callable[[str, str, str], Any]
 
 
@@ -100,36 +97,6 @@ def create_r2_client(account_id: str, access_key_id: str, secret_access_key: str
         region_name="auto",
         config=Config(retries={"max_attempts": 3, "mode": "standard"}),
     )
-
-
-def read_rating(xmp_path: Path) -> int:
-    """
-    Read the star rating from a sidecar; a missing or unreadable sidecar counts as 0.
-
-    Returns:
-        The rating from 0 to 5 (a rejected photo, -1, counts as 0).
-    """
-    try:
-        data = xmp_path.read_bytes()
-    except OSError:
-        return 0
-    packet = XMP_PACKET.search(data)
-    if packet is None:
-        return 0
-    try:
-        root = ElementTree.fromstring(packet.group(0))
-    except ElementTree.ParseError:
-        return 0
-    rating = 0
-    for description in root.iter(f"{{{RDF_NS}}}Description"):
-        value = description.get(f"{{{XMP_NS}}}Rating")
-        if value is None:
-            element = description.find(f"{{{XMP_NS}}}Rating")
-            value = element.text if element is not None else None
-        if value:
-            with suppress(ValueError):
-                rating = max(rating, int(float(value)))
-    return min(max(rating, 0), 5)
 
 
 def file_digest(path: Path) -> str:
@@ -190,6 +157,8 @@ class CloudSync(StageImplementation):
         config = R2Config.from_settings(job.settings)
         client = self._client(config)
         stem = job.photo.stem
+        if BypassLedger(job.layout).is_sent(stem):
+            return StageResult.skipped("a bypass version is already in the cloud")
         existing = self._list_keys(client, config.bucket, stem)
         rating = read_rating(job.photo.with_suffix(".xmp"))
         if rating < job.settings.r2_min_rating:
@@ -199,15 +168,38 @@ class CloudSync(StageImplementation):
             )
         if job.source_stage is not StageId.EXPORT:
             raise PermanentStageError(f"No exported image to sync for {job.photo.name}")
-        digest = file_digest(job.source)
+        uploaded, removed = self._sync_file(client, config.bucket, stem, job.source, existing)
+        return StageResult.done(message=f"uploaded {uploaded} files, removed {removed} outdated")
+
+    def send_direct(self, settings: LiveSettings, path: Path) -> str:
+        """
+        Upload a bypass export under its own name, replacing the auto version of the frame.
+
+        Returns:
+            A short description of what was uploaded.
+        """
+        config = R2Config.from_settings(settings)
+        client = self._client(config)
+        existing = self._list_keys(client, config.bucket, path.stem)
+        uploaded, removed = self._sync_file(client, config.bucket, path.stem, path, existing)
+        return f"uploaded {uploaded} files, removed {removed} outdated"
+
+    def _sync_file(
+        self, client: Any, bucket: str, stem: str, source: Path, existing: set[str]  # noqa: ANN401
+    ) -> tuple[int, int]:
+        """
+        Upload the missing tiers of `source` under `stem` and delete tiers of older versions.
+
+        Returns:
+            The number of files uploaded and the number removed.
+        """
+        digest = file_digest(source)
         wanted = {tier: tier_key(tier, stem, digest) for tier in TIERS}
         missing = {tier: key for tier, key in wanted.items() if key not in existing}
-        self._upload(client, config.bucket, job.source, missing)
+        self._upload(client, bucket, source, missing)
         stale = existing - set(wanted.values())
-        self._delete(client, config.bucket, stale)
-        return StageResult.done(
-            message=f"uploaded {len(missing)} files, removed {len(stale)} outdated"
-        )
+        self._delete(client, bucket, stale)
+        return len(missing), len(stale)
 
     def _client(self, config: R2Config) -> Any:  # noqa: ANN401
         """Return a cached client for the credentials."""

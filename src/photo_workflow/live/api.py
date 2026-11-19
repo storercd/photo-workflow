@@ -25,6 +25,10 @@ class PermanentStageError(Exception):
     """Raised by a stage when retrying cannot help; the feature halts immediately."""
 
 
+class StageCancelled(Exception):  # noqa: N818
+    """Raised when a running job was invalidated, so its result would be thrown away."""
+
+
 @dataclass(frozen=True)
 class LiveWarning:
     """A non-fatal problem (for example an interrupted upload) the user can inspect."""
@@ -153,6 +157,17 @@ class StageImplementation:
             The result describing the files written.
         """
         return StageResult.skipped("not implemented")
+
+    def send_direct(self, settings: LiveSettings, path: Path) -> str:  # noqa: DOC201
+        """
+        Send a finished file straight to the destination, replacing the auto version.
+
+        Used by the bypass; only Cloud Sync supports it.
+
+        Raises:
+            PermanentStageError: If the stage cannot send files.
+        """
+        raise PermanentStageError("this stage cannot send files directly")
 
     def start(self, host: StageHost) -> None:
         """Start the feature's service when it is switched on."""

@@ -4,9 +4,11 @@ Lighting/Color stage: automatic lighting plus the optional color temperature ove
 Both come from the editor's Review mode (`photo_workflow.editor.lighting`): the same
 estimator picks exposure, white balance, levels, shadows/highlights, contrast and
 vibrance, and an explicit Kelvin value replaces the estimated white balance exactly as the
-editor's white-balance slider does. A neural cleanup (`photo_workflow.live.neural`) then
-removes colored speckle from the toned image. The result is the final high-quality JPEG in
-`output/`, which becomes the preview image across modes.
+editor's white-balance slider does. The quick stage writes that toned image as a high-quality
+JPEG in `output/`, which becomes the preview image across modes within seconds. The full stage
+then runs a neural cleanup (`photo_workflow.live.neural`) that removes colored speckle, and
+swaps its result in
+under the same name; later stages do not wait for it and are redone once it lands.
 """
 
 from __future__ import annotations
@@ -92,25 +94,49 @@ def write_jpeg(path: Path, rgb: NDArray[np.uint8]) -> None:
 
 
 class Lighting(StageImplementation):
-    """Writes the final preview JPEG to `output/<name>.jpg`."""
+    """Writes the quick preview JPEG to `output/<name>.jpg`, without the slow neural cleanup."""
 
-    revision = 2
+    revision = 3
 
     def process(self, job: StageJob) -> StageResult:
         """
         Apply auto lighting and the color temperature override to the best source.
 
         Returns:
-            The result listing the final JPEG.
+            The result listing the quick JPEG.
         """
         rgb = load_srgb8(job.source, camera_reference=job.photo)
         reference = as_shot_reference(job.photo)
         adjustment = choose_adjustment(rgb, job.settings, reference)
         output = job.output_path(OUTPUT_SUBFOLDER, ".jpg")
-        write_jpeg(output, neural.clean(apply_adjustment(rgb, adjustment), job.report_progress))
+        write_jpeg(output, apply_adjustment(rgb, adjustment))
         return StageResult.done(output, message=adjustment.describe())
+
+
+class LightingFull(StageImplementation):
+    """Cleans colored speckle from the lit image and replaces `output/<name>.jpg` with it."""
+
+    revision = 1
+
+    def process(self, job: StageJob) -> StageResult:
+        """
+        Run the neural cleanup on the quick JPEG, or light the source first if there is none.
+
+        Returns:
+            The result listing the final JPEG.
+        """
+        output = job.output_path(OUTPUT_SUBFOLDER, ".jpg")
+        message = ""
+        rgb = load_srgb8(job.source, camera_reference=job.photo)
+        if job.source_stage is not StageId.LIGHTING:
+            adjustment = choose_adjustment(rgb, job.settings, as_shot_reference(job.photo))
+            rgb = apply_adjustment(rgb, adjustment)
+            message = adjustment.describe()
+        write_jpeg(output, neural.clean(rgb, job.report_progress))
+        return StageResult.done(output, message=message)
 
 
 def register(registry: StageRegistry) -> None:
     """Register the Lighting/Color stage."""
     registry.register(StageId.LIGHTING, Lighting())
+    registry.register(StageId.LIGHTING_FULL, LightingFull())

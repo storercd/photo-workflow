@@ -14,10 +14,12 @@ from pathlib import Path
 from photo_workflow.live.api import (
     LiveWarning,
     PermanentStageError,
+    StageCancelled,
     StageJob,
     StageRegistry,
     StageResult,
 )
+from photo_workflow.live.bypass import BypassRouter, Signature, file_signature
 from photo_workflow.live.ingest import rename_arrival
 from photo_workflow.live.layout import IMAGE_SUFFIXES, RAW_SUFFIXES, LiveLayout
 from photo_workflow.live.persistence import (
@@ -41,7 +43,9 @@ DEFAULT_BACKOFF = (0.5, 1.5, 4.0)
 CLEAN_DRAIN_TIMEOUT_SECONDS = 60.0
 # Stages whose output can stand in for the original photo when viewing and cropping.
 VIEW_STAGES = tuple(
-    stage for stage in STAGE_ORDER if stage not in {StageId.FTP, *downstream_of(StageId.LIGHTING)}
+    stage
+    for stage in STAGE_ORDER
+    if stage not in {StageId.FTP, *downstream_of(StageId.LIGHTING_FULL)}
 )
 
 
@@ -76,6 +80,9 @@ class PipelineSnapshot:
     stages: tuple[StageSummary, ...]
     completed: int = 0
     held: bool = False
+    bypass_enabled: bool = False
+    bypass_waiting: int = 0
+    bypass_sent: int = 0
 
 
 @dataclass(frozen=True)
@@ -160,6 +167,9 @@ class LivePipeline:
         self._closed = False
         self._saved_state: dict | None = None
         self._written_state = ""
+        self._bypass = BypassRouter(layout)
+        self._bypass_sending: set[Path] = set()
+        self._bypass_failed: dict[Path, Signature] = {}
 
     def add_listener(self, listener: Callable[[], None]) -> None:
         """Call `listener` after every state change."""
@@ -269,7 +279,60 @@ class LivePipeline:
             self.ingest(path)
         if not self._paused:
             self.scan()
+            self._poll_bypass()
         self._emit()
+
+    # ----- bypass -------------------------------------------------------------------
+
+    def _poll_bypass(self) -> None:
+        """Stage starred photos in `bypass-input` and send finished `bypass-output` files."""
+        if self._closed:
+            return
+        self._bypass.stage_inputs(self.photos(), self.settings.bypass_min_rating)
+        ready = self._bypass.ready_outputs()
+        with self._lock:
+            withdrawn = set(self._bypass.withdrawn()) - {path.stem for path in self._bypass_sending}
+            for photo in self._state.images:
+                if photo.stem in withdrawn:
+                    self._invalidate(photo, StageId.CLOUD_SYNC, include_self=True)
+            if (
+                self._held
+                or StageId.CLOUD_SYNC in self._state.halted
+                or not self.settings.is_enabled(StageId.CLOUD_SYNC)
+            ):
+                return
+            todo = [
+                path
+                for path in ready
+                if path not in self._bypass_sending
+                and self._bypass_failed.get(path) != file_signature(path)
+            ]
+            self._bypass_sending.update(todo)
+        for path in todo:
+            self._executor.submit(self._send_bypass, path)
+
+    def _send_bypass(self, path: Path) -> None:
+        signature = file_signature(path)
+        implementation = self._registry.get(StageId.CLOUD_SYNC)
+        try:
+            message = self._with_retries(
+                lambda: implementation.send_direct(self.settings, path), StageId.CLOUD_SYNC
+            )
+            self._bypass.ledger.mark_sent(path, signature)
+        except Exception as error:
+            LOGGER.exception("bypass upload of %s failed", path.name)
+            with self._lock:
+                self._bypass_failed[path] = signature
+            self.add_warning(StageId.CLOUD_SYNC, f"Bypass upload of {path.name} failed: {error}")
+        else:
+            LOGGER.info("bypass %s: %s", path.name, message)
+            photo = next((p for p in self.photos() if p.stem == path.stem), None)
+            if photo is not None:
+                self.invalidate(StageId.CLOUD_SYNC, photo, include_self=True)
+        finally:
+            with self._lock:
+                self._bypass_sending.discard(path)
+            self._emit()
 
     def _ingest_one(self, path: Path) -> None:
         try:
@@ -311,6 +374,9 @@ class LivePipeline:
             ]
             for stage in changed:
                 self._apply_toggle(stage, settings.is_enabled(stage))
+            if _lighting_options(previous) != _lighting_options(settings):
+                for photo in self._state.images:
+                    self._invalidate(photo, StageId.LIGHTING, include_self=True)
             if _autocrop_options(previous) != _autocrop_options(settings):
                 for photo in self._state.images:
                     self._invalidate(photo, StageId.AUTOCROP, include_self=True)
@@ -447,12 +513,13 @@ class LivePipeline:
 
     def _settled(self, photo: Path, stage: StageId) -> bool:
         record = self._state.images[photo][stage]
-        if record.status in {StageStatus.DONE, StageStatus.SKIPPED}:
+        if record.status in {StageStatus.DONE, StageStatus.SKIPPED} or SPECS[stage].background:
             return True
         return not self.settings.is_enabled(stage) and not SPECS[stage].blocks_when_disabled
 
     def _build_job(self, photo: Path, stage: StageId) -> StageJob:
         source, source_stage = self._source(photo, stage)
+        generation = self._state.images[photo][stage].generation
         return StageJob(
             stage=stage,
             photo=photo,
@@ -461,8 +528,21 @@ class LivePipeline:
             layout=self.layout,
             settings=self.settings,
             warn=lambda message: self.add_warning(stage, message, photo),
-            report_progress=lambda fraction: self._set_fraction(photo, stage, fraction),
+            report_progress=lambda fraction: self._report(photo, stage, generation, fraction),
         )
+
+    def _report(self, photo: Path, stage: StageId, generation: int, fraction: float) -> None:
+        """
+        Record progress; abandon the job when it was invalidated since it started.
+
+        Raises:
+            StageCancelled: If the job's results would be discarded anyway.
+        """
+        with self._lock:
+            record = self._state.images.get(photo, {}).get(stage)
+            if self._closed or record is None or record.generation != generation:
+                raise StageCancelled
+        self._set_fraction(photo, stage, fraction)
 
     def _set_fraction(self, photo: Path, stage: StageId, fraction: float) -> None:
         with self._lock:
@@ -526,6 +606,9 @@ class LivePipeline:
         implementation = self._registry.get(job.stage)
         try:
             result = self._with_retries(lambda: implementation.process(job), job.stage)
+        except StageCancelled:
+            LOGGER.info("live %s %s: cancelled", job.stage.value, job.photo.name)
+            self._finish(job, generation, None, "")
         except Exception as error:
             self._finish(job, generation, None, f"{type(error).__name__}: {error}")
         else:
@@ -536,7 +619,7 @@ class LivePipeline:
         for attempt in range(attempts):
             try:
                 return work()
-            except PermanentStageError:
+            except (PermanentStageError, StageCancelled):
                 raise
             except Exception as error:
                 if attempt == attempts - 1:
@@ -711,7 +794,14 @@ class LivePipeline:
             summaries = tuple(
                 self._summarize(stage, counts[stage], failed[stage]) for stage in STAGE_ORDER
             )
-        return PipelineSnapshot(summaries, completed, self._held)
+        return PipelineSnapshot(
+            summaries,
+            completed,
+            self._held,
+            bypass_enabled=self.settings.bypass_min_rating > 0,
+            bypass_waiting=self._bypass.waiting(),
+            bypass_sent=self._bypass.sent(),
+        )
 
     def _is_waiting_on_disabled(self, photo: Path, stage: StageId) -> bool:
         spec = SPECS[stage]
@@ -752,9 +842,20 @@ class LivePipeline:
             self._saved_state = {}
             self._written_state = ""
             self.layout.clean()
+            self._bypass = BypassRouter(self.layout)
+            self._bypass_failed.clear()
             self._paused = False
         LOGGER.info("cleaned live folder %s", self.layout.root)
         self.pump()
+
+    def has_running_work(self) -> bool:
+        """Return whether any stage job or bypass upload is still running."""
+        with self._lock:
+            return bool(self._bypass_sending) or any(
+                record.status is StageStatus.RUNNING
+                for stages in self._state.images.values()
+                for record in stages.values()
+            )
 
     def shutdown(self) -> None:
         """Stop starting work, stop feature services, and release the worker threads."""
@@ -775,6 +876,10 @@ def _signature(path: Path) -> tuple[int, float]:
     except OSError:
         return (-1, 0.0)
     return (stat.st_size, stat.st_mtime)
+
+
+def _lighting_options(settings: LiveSettings) -> tuple[float | None, bool]:
+    return (settings.color_temperature, settings.auto_lighting)
 
 
 def _autocrop_options(settings: LiveSettings) -> tuple[tuple[str, ...], bool, bool]:
