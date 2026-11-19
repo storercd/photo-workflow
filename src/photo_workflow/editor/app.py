@@ -2029,6 +2029,13 @@ class CropWindow(QMainWindow):
         """
         if (
             watched in (self.wb_value, self.rotation_value)
+            and event.type() == QEvent.Type.FocusIn
+            and event.reason() == Qt.FocusReason.MouseFocusReason
+        ):
+            # Deferred so the click that gave focus does not collapse the selection.
+            QTimer.singleShot(0, watched.selectAll)
+        if (
+            watched in (self.wb_value, self.rotation_value)
             and event.type() in (QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride)
             and event.key() == Qt.Key.Key_Escape
         ):

@@ -1607,3 +1607,20 @@ def test_value_fields_give_focus_back_to_the_photo_on_enter_and_escape() -> None
         QTest.keyClick(field, key)
         assert window.view.hasFocus()
     window.close()
+
+
+def test_clicking_a_value_field_selects_its_whole_text() -> None:
+    """A click into the angle box selects everything so typing replaces the value."""
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+    window.show()
+    QTest.qWaitForWindowActive(window)
+    field = window.rotation_value
+    field.setEnabled(True)
+    field.setText("12.3°")
+
+    QTest.mouseClick(field, Qt.MouseButton.LeftButton)
+    QTest.qWait(50)
+
+    assert field.selectedText() == "12.3°"
+    window.close()
