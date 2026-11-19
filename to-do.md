@@ -19,7 +19,7 @@ Things deliberately deferred during the Live mode proof of concept. All Live fea
 
 ## Image processing
 
-- [ ] Tune Denoise strength (tested on a single sample).
+- [ ] Verify darktable profiled denoise on more images and ISOs (tested on a single sample).
 - [ ] Denoise writes a linear TIFF, not a re-mosaiced RAW; decide whether that is acceptable.
 - [ ] Verify Apple Vision subject masking on a range of real images.
 - [ ] Non-macOS detection fallback (Vision is macOS-only; Mask and detection skip elsewhere).
