@@ -75,6 +75,16 @@ class BypassLedger:
         with _LEDGER_LOCK:
             return list(self._read())
 
+    def forget(self, stem: str) -> None:
+        """Drop a frame from the record, so its auto version is sent again."""
+        with _LEDGER_LOCK:
+            data = self._read()
+            if data.pop(stem, None) is None:
+                return
+            partial = self._path.with_name(self._path.name + ".part")
+            partial.write_text(json.dumps(data))
+            os.replace(partial, self._path)
+
     def count(self) -> int:
         """Return how many frames went out through the bypass."""
         with _LEDGER_LOCK:
@@ -160,20 +170,36 @@ class BypassRouter:
             return 0
         return sum(1 for path in folder.iterdir() if path.suffix.lower() in RAW_SUFFIXES)
 
-    def sent(self) -> int:
-        """Return how many frames reached `bypass-output`, uploaded or still waiting to upload."""
+    def _present(self) -> dict[str, Path]:
         folder = self.layout.bypass_output
-        ledger = self.ledger
-        stems = set(ledger.stems())
-        if folder.is_dir():
-            stems.update(
-                path.stem
-                for path in folder.iterdir()
-                if path.is_file()
-                and path.suffix.lower() in OUTPUT_SUFFIXES
-                and not path.name.startswith(".")
-            )
-        return len(stems)
+        if not folder.is_dir():
+            return {}
+        return {
+            path.stem: path
+            for path in folder.iterdir()
+            if path.is_file()
+            and path.suffix.lower() in OUTPUT_SUFFIXES
+            and not path.name.startswith(".")
+        }
+
+    def sent(self) -> int:
+        """Return how many frames are in `bypass-output`, uploaded or still waiting to upload."""
+        return len(self._present())
+
+    def withdrawn(self) -> list[str]:
+        """
+        Forget sent frames whose file was removed from `bypass-output`.
+
+        Returns:
+            The stems whose auto version should be sent again.
+        """
+        if not self.layout.bypass_output.is_dir():
+            return []
+        present = self._present()
+        gone = [stem for stem in self.ledger.stems() if stem not in present]
+        for stem in gone:
+            self.ledger.forget(stem)
+        return gone
 
     def ready_outputs(self) -> list[Path]:
         """

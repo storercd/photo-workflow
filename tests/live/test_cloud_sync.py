@@ -340,6 +340,12 @@ def test_outputs_ready_only_when_stable_and_unsent(photo: Path) -> None:
     assert router.ready_outputs() == []
     assert router.sent() == 1
 
+    export.unlink()
+    assert router.sent() == 0
+    assert router.withdrawn() == [STEM]
+    assert not router.ledger.is_sent(STEM)
+    assert router.withdrawn() == []
+
 
 def test_bypass_version_replaces_auto_and_blocks_later_auto_sync(
     photo: Path, r2: FakeR2

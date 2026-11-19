@@ -291,6 +291,10 @@ class LivePipeline:
         self._bypass.stage_inputs(self.photos(), self.settings.bypass_min_rating)
         ready = self._bypass.ready_outputs()
         with self._lock:
+            withdrawn = set(self._bypass.withdrawn()) - {path.stem for path in self._bypass_sending}
+            for photo in self._state.images:
+                if photo.stem in withdrawn:
+                    self._invalidate(photo, StageId.CLOUD_SYNC, include_self=True)
             if (
                 self._held
                 or StageId.CLOUD_SYNC in self._state.halted
