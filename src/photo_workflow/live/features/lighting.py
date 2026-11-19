@@ -4,9 +4,10 @@ Lighting/Color stage: automatic lighting plus the optional color temperature ove
 Both come from the editor's Review mode (`photo_workflow.editor.lighting`): the same
 estimator picks exposure, white balance, levels, shadows/highlights, contrast and
 vibrance, and an explicit Kelvin value replaces the estimated white balance exactly as the
-editor's white-balance slider does. The quick stage writes that toned image as a high-quality JPEG in
-`output/`, which becomes the preview image across modes within seconds. The full stage then runs a neural
-cleanup (`photo_workflow.live.neural`) that removes colored speckle, and swaps its result in
+editor's white-balance slider does. The quick stage writes that toned image as a high-quality
+JPEG in `output/`, which becomes the preview image across modes within seconds. The full stage
+then runs a neural cleanup (`photo_workflow.live.neural`) that removes colored speckle, and
+swaps its result in
 under the same name; later stages do not wait for it and are redone once it lands.
 """
 
