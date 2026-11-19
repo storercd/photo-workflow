@@ -18,6 +18,7 @@ from photo_workflow.live.api import (
     StageRegistry,
     StageResult,
 )
+from photo_workflow.live.bypass import BypassRouter, Signature, file_signature
 from photo_workflow.live.ingest import rename_arrival
 from photo_workflow.live.layout import IMAGE_SUFFIXES, RAW_SUFFIXES, LiveLayout
 from photo_workflow.live.persistence import (
@@ -76,6 +77,9 @@ class PipelineSnapshot:
     stages: tuple[StageSummary, ...]
     completed: int = 0
     held: bool = False
+    bypass_enabled: bool = False
+    bypass_waiting: int = 0
+    bypass_sent: int = 0
 
 
 @dataclass(frozen=True)
@@ -160,6 +164,9 @@ class LivePipeline:
         self._closed = False
         self._saved_state: dict | None = None
         self._written_state = ""
+        self._bypass = BypassRouter(layout)
+        self._bypass_sending: set[Path] = set()
+        self._bypass_failed: dict[Path, Signature] = {}
 
     def add_listener(self, listener: Callable[[], None]) -> None:
         """Call `listener` after every state change."""
@@ -269,7 +276,56 @@ class LivePipeline:
             self.ingest(path)
         if not self._paused:
             self.scan()
+            self._poll_bypass()
         self._emit()
+
+    # ----- bypass -------------------------------------------------------------------
+
+    def _poll_bypass(self) -> None:
+        """Stage starred photos in `bypass-input` and send finished `bypass-output` files."""
+        if self._closed:
+            return
+        self._bypass.stage_inputs(self.photos(), self.settings.bypass_min_rating)
+        ready = self._bypass.ready_outputs()
+        with self._lock:
+            if (
+                self._held
+                or StageId.CLOUD_SYNC in self._state.halted
+                or not self.settings.is_enabled(StageId.CLOUD_SYNC)
+            ):
+                return
+            todo = [
+                path
+                for path in ready
+                if path not in self._bypass_sending
+                and self._bypass_failed.get(path) != file_signature(path)
+            ]
+            self._bypass_sending.update(todo)
+        for path in todo:
+            self._executor.submit(self._send_bypass, path)
+
+    def _send_bypass(self, path: Path) -> None:
+        signature = file_signature(path)
+        implementation = self._registry.get(StageId.CLOUD_SYNC)
+        try:
+            message = self._with_retries(
+                lambda: implementation.send_direct(self.settings, path), StageId.CLOUD_SYNC
+            )
+            self._bypass.ledger.mark_sent(path, signature)
+        except Exception as error:
+            LOGGER.exception("bypass upload of %s failed", path.name)
+            with self._lock:
+                self._bypass_failed[path] = signature
+            self.add_warning(StageId.CLOUD_SYNC, f"Bypass upload of {path.name} failed: {error}")
+        else:
+            LOGGER.info("bypass %s: %s", path.name, message)
+            photo = next((p for p in self.photos() if p.stem == path.stem), None)
+            if photo is not None:
+                self.invalidate(StageId.CLOUD_SYNC, photo, include_self=True)
+        finally:
+            with self._lock:
+                self._bypass_sending.discard(path)
+            self._emit()
 
     def _ingest_one(self, path: Path) -> None:
         try:
@@ -711,7 +767,14 @@ class LivePipeline:
             summaries = tuple(
                 self._summarize(stage, counts[stage], failed[stage]) for stage in STAGE_ORDER
             )
-        return PipelineSnapshot(summaries, completed, self._held)
+        return PipelineSnapshot(
+            summaries,
+            completed,
+            self._held,
+            bypass_enabled=self.settings.bypass_min_rating > 0,
+            bypass_waiting=self._bypass.waiting(),
+            bypass_sent=self._bypass.sent(),
+        )
 
     def _is_waiting_on_disabled(self, photo: Path, stage: StageId) -> bool:
         spec = SPECS[stage]
@@ -752,6 +815,8 @@ class LivePipeline:
             self._saved_state = {}
             self._written_state = ""
             self.layout.clean()
+            self._bypass = BypassRouter(self.layout)
+            self._bypass_failed.clear()
             self._paused = False
         LOGGER.info("cleaned live folder %s", self.layout.root)
         self.pump()

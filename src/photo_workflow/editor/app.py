@@ -1383,6 +1383,7 @@ class CropWindow(QMainWindow):
         self.live_dock.panel.warning_selected.connect(self._live_warning_selected)
         self.live_dock.panel.warnings_cleared.connect(self._live_warnings_cleared)
         self.live_dock.panel.clean_requested.connect(self._live_clean_requested)
+        self.live_dock.panel.bypass_folder_requested.connect(self._open_bypass_folder)
         self._apply_review_mode()
 
     def _set_star_filter(self, minimum_stars: int | None) -> None:
@@ -2210,6 +2211,15 @@ class CropWindow(QMainWindow):
         photo = Path(photo_text) if photo_text else None
         if photo is not None and photo in self._photos:
             self.navigate(self._photos.index(photo) - self._current_index)
+
+    def _open_bypass_folder(self, which: str) -> None:
+        """Open `bypass-input` or `bypass-output` in the file manager, creating it if needed."""
+        if self._live is None:
+            return
+        layout = self._live.pipeline.layout
+        folder = layout.bypass_input if which == "input" else layout.bypass_output
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _live_warnings_cleared(self) -> None:
         if self._live is not None:

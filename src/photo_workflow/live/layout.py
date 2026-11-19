@@ -10,6 +10,8 @@ from photo_workflow.live.stages import INPUT_SUBFOLDER
 
 LIVE_FOLDER_NAME = "live"
 INCOMING_FOLDER_NAME = "incoming"
+BYPASS_INPUT_FOLDER_NAME = "bypass-input"
+BYPASS_OUTPUT_FOLDER_NAME = "bypass-output"
 RAW_SUFFIXES = frozenset({".cr2", ".cr3"})
 IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff"})
 PARTIAL_SUFFIXES = frozenset({".part", ".tmp", ".filepart", ".xmp"})
@@ -46,6 +48,16 @@ class LiveLayout:
     def incoming(self) -> Path:
         """Folder where uploads land before they are renamed."""
         return self.root / INCOMING_FOLDER_NAME
+
+    @property
+    def bypass_input(self) -> Path:
+        """Folder where starred photos (and their sidecars) are staged for optional editing."""
+        return self.root / BYPASS_INPUT_FOLDER_NAME
+
+    @property
+    def bypass_output(self) -> Path:
+        """Folder watched for finished edits, which go straight to the cloud."""
+        return self.root / BYPASS_OUTPUT_FOLDER_NAME
 
     def date_dir(self, photo: Path) -> Path:
         """Return the date folder holding a photo's `input` subfolder."""

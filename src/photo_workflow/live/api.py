@@ -154,6 +154,17 @@ class StageImplementation:
         """
         return StageResult.skipped("not implemented")
 
+    def send_direct(self, settings: LiveSettings, path: Path) -> str:  # noqa: DOC201
+        """
+        Send a finished file straight to the destination, replacing the auto version.
+
+        Used by the bypass; only Cloud Sync supports it.
+
+        Raises:
+            PermanentStageError: If the stage cannot send files.
+        """
+        raise PermanentStageError("this stage cannot send files directly")
+
     def start(self, host: StageHost) -> None:
         """Start the feature's service when it is switched on."""
 
