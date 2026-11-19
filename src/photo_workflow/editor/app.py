@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -962,6 +963,10 @@ class CropWindow(QMainWindow):
         field.setProperty("role", "value")
         field.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         field.setFixedWidth(field.fontMetrics().horizontalAdvance(widest) + 24)
+        # Display only: a click opens a prompt (`_edit_value_field`); focus stays on the photo.
+        field.setReadOnly(True)
+        field.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        field.setCursor(Qt.CursorShape.PointingHandCursor)
         return field
 
     def _toolbar_group(
@@ -1358,12 +1363,6 @@ class CropWindow(QMainWindow):
         self.show_horizon_button.clicked.connect(self._toggle_horizon_visibility)
         self.auto_light_button.toggled.connect(self._auto_light_toggled)
         self.wb_slider.valueChanged.connect(self._wb_slider_changed)
-        self.wb_value.returnPressed.connect(self._finish_wb_edit)
-        self.wb_value.returnPressed.connect(self.view.setFocus)
-        self.wb_value.editingFinished.connect(self._restore_wb_text)
-        self.rotation_value.returnPressed.connect(self._finish_rotation_edit)
-        self.rotation_value.returnPressed.connect(self.view.setFocus)
-        self.rotation_value.editingFinished.connect(self._restore_rotation_text)
         self.wb_fixed_button.toggled.connect(self._wb_fixed_toggled)
         self.ball_button.toggled.connect(self._ball_toggled)
         self.ball_button.customContextMenuRequested.connect(self._show_ball_menu)
@@ -2032,21 +2031,10 @@ class CropWindow(QMainWindow):
         """
         if (
             watched in (self.wb_value, self.rotation_value)
-            and event.type() == QEvent.Type.FocusIn
-            and event.reason() == Qt.FocusReason.MouseFocusReason
+            and event.type() == QEvent.Type.MouseButtonPress
+            and watched.isEnabled()
         ):
-            # Deferred so the click that gave focus does not collapse the selection.
-            QTimer.singleShot(0, watched.selectAll)
-        if (
-            watched in (self.wb_value, self.rotation_value)
-            and event.type() in (QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride)
-            and event.key() == Qt.Key.Key_Escape
-        ):
-            if event.type() == QEvent.Type.KeyPress:
-                self._restore_wb_text()
-                self._restore_rotation_text()
-                self.view.setFocus()
-            event.accept()
+            self._edit_value_field(watched)
             return True
         if (
             event.type() == QEvent.Type.MouseButtonPress
@@ -2696,6 +2684,25 @@ class CropWindow(QMainWindow):
         self._wb_override = float(value)
         self._enable_auto_light()
         self._wb_timer.start()
+
+    def _edit_value_field(self, field: QLineEdit) -> None:
+        """Prompt for a new value (preselected); Enter applies it and Escape keeps the old one."""
+        is_wb = field is self.wb_value
+        current = field.text().removesuffix("K" if is_wb else "°")
+        text, accepted = QInputDialog.getText(
+            self,
+            "Color temperature" if is_wb else "Angle",
+            "Kelvin:" if is_wb else "Degrees:",
+            text=current,
+        )
+        if not accepted:
+            return
+        field.setText(text)
+        if is_wb:
+            self._finish_wb_edit()
+        else:
+            self._finish_rotation_edit()
+        self.view.setFocus()
 
     def _finish_wb_edit(self) -> None:
         """Apply a typed Kelvin value (Enter) to all photos."""

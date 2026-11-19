@@ -1489,7 +1489,7 @@ def test_typed_kelvin_value_fixes_white_balance(monkeypatch) -> None:
     monkeypatch.setattr(window, "_schedule_prefetch", lambda *_: None)
 
     window.wb_value.setText("4200K")
-    window.wb_value.returnPressed.emit()
+    window._finish_wb_edit()
 
     assert window._wb_override == 4200.0
     assert window.wb_slider.value() == 4200
@@ -1497,12 +1497,12 @@ def test_typed_kelvin_value_fixes_white_balance(monkeypatch) -> None:
     assert window.wb_value.text() == "4200K"
 
     window.wb_value.setText("99999")
-    window.wb_value.returnPressed.emit()
+    window._finish_wb_edit()
 
     assert window._wb_override == crop_app.MAX_KELVIN
 
     window.wb_value.setText("not a number")
-    window.wb_value.returnPressed.emit()
+    window._finish_wb_edit()
 
     assert window._wb_override == crop_app.MAX_KELVIN
     assert window.wb_value.text() == f"{window.wb_slider.value()}K"
@@ -1529,16 +1529,16 @@ def test_typed_angle_value_moves_the_slider_and_is_clamped() -> None:
     window.rotation_slider.setEnabled(True)
 
     window.rotation_value.setText("12.5°")
-    window.rotation_value.returnPressed.emit()
+    window._finish_rotation_edit()
     assert window.rotation_slider.value() == 125
     assert window.rotation_value.text() == "12.5°"
 
     window.rotation_value.setText("99")
-    window.rotation_value.returnPressed.emit()
+    window._finish_rotation_edit()
     assert window.rotation_slider.value() == window.rotation_slider.maximum()
 
     window.rotation_value.setText("oops")
-    window.rotation_value.editingFinished.emit()
+    window._finish_rotation_edit()
     assert window.rotation_value.text() == f"{window.rotation_slider.maximum() / 10:.1f}°"
     window.close()
 
@@ -1592,35 +1592,30 @@ def test_toolbar_is_two_rows_with_uniform_buttons_and_no_visible_status_bar() ->
     window.close()
 
 
-def test_value_fields_give_focus_back_to_the_photo_on_enter_and_escape() -> None:
-    """Typing in the angle box ends with Enter or Escape, and focus returns to the photo."""
+def test_clicking_a_value_field_prompts_and_enter_applies_the_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A click opens a prompt; accepting applies the value and Cancel keeps the old one."""
     QApplication.instance() or QApplication([])
     window = CropWindow()
     window.show()
     QTest.qWaitForWindowActive(window)
     assert window.view.hasFocus()
-    field = window.rotation_value
-    field.setEnabled(True)
-    for key in (Qt.Key.Key_Return, Qt.Key.Key_Escape):
-        field.setFocus()
-        assert field.hasFocus()
-        QTest.keyClick(field, key)
-        assert window.view.hasFocus()
-    window.close()
+    window.rotation_value.setEnabled(True)
+    answers = iter([("12.5", True), ("30", False)])
+    shown: list[str] = []
 
+    def fake_prompt(*args: object, text: str = "", **kwargs: object) -> tuple[str, bool]:
+        shown.append(text)
+        return next(answers)
 
-def test_clicking_a_value_field_selects_its_whole_text() -> None:
-    """A click into the angle box selects everything so typing replaces the value."""
-    QApplication.instance() or QApplication([])
-    window = CropWindow()
-    window.show()
-    QTest.qWaitForWindowActive(window)
-    field = window.rotation_value
-    field.setEnabled(True)
-    field.setText("12.3°")
+    monkeypatch.setattr(crop_app.QInputDialog, "getText", fake_prompt)
 
-    QTest.mouseClick(field, Qt.MouseButton.LeftButton)
-    QTest.qWait(50)
+    QTest.mouseClick(window.rotation_value, Qt.MouseButton.LeftButton)
+    assert window.rotation_slider.value() == 125
+    QTest.mouseClick(window.rotation_value, Qt.MouseButton.LeftButton)
 
-    assert field.selectedText() == "12.3°"
+    assert shown == ["0.0", "12.5"]
+    assert window.rotation_slider.value() == 125
+    assert window.view.hasFocus()
     window.close()
