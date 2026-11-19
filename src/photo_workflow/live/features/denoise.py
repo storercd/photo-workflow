@@ -1,8 +1,13 @@
 """
 Denoise stage: produce a denoised, full-resolution intermediate from the camera RAW.
 
-Tool choice: LibRaw (through `rawpy`) is the practical, pip-installable decoder for Canon
-CR2 and CR3 on macOS, and OpenCV's non-local-means is already a dependency, so no
+Preferred tool: darktable's profiled denoise through `darktable-cli`
+(`live/darktable.py`), which uses the camera's measured noise profile and is far better on
+high-ISO frames. When darktable is not installed or fails, the built-in filter below is used
+instead and a warning says so.
+
+Built-in fallback tool choice: LibRaw (through `rawpy`) is the practical, pip-installable
+decoder for Canon CR2 and CR3 on macOS, and OpenCV's non-local-means is already a dependency, so no
 paid or GUI-only tool (DxO PureRAW, Adobe DNG Converter) is needed. No open library can
 write a re-encoded *mosaiced* RAW, so the "raw-format" intermediate is the scene-linear
 16-bit TIFF that follows RAW development (camera white balance, no tone curve): it keeps
@@ -21,7 +26,9 @@ import numpy as np
 from numpy.typing import NDArray
 
 from photo_workflow.live.api import StageImplementation, StageJob, StageRegistry, StageResult
+from photo_workflow.live.darktable import DarktableError, denoise_raw, find_cli
 from photo_workflow.live.imaging import MAX_16, load_linear_rgb, save_linear_rgb
+from photo_workflow.live.layout import RAW_SUFFIXES
 from photo_workflow.live.stages import StageId
 
 LUMA_STRENGTH_PER_SIGMA = 1.5
@@ -105,7 +112,7 @@ def _smooth(plane: NDArray[np.float32], strength: float) -> NDArray[np.float32]:
 class Denoise(StageImplementation):
     """Writes `denoise/<name>.tif`, the denoised linear intermediate."""
 
-    revision = 2
+    revision = 3
 
     def process(self, job: StageJob) -> StageResult:
         """
@@ -115,8 +122,18 @@ class Denoise(StageImplementation):
             The result listing the denoised intermediate.
         """
         output = job.output_path(suffix=".tif")
+        if job.source.suffix.lower() in RAW_SUFFIXES:
+            if find_cli() is None:
+                job.warn("darktable is not installed; using the built-in denoise (lower quality)")
+            else:
+                try:
+                    save_linear_rgb(output, denoise_raw(job.source))
+                except DarktableError as error:
+                    job.warn(f"{error}; using the built-in denoise")
+                else:
+                    return StageResult.done(output, message="darktable profiled denoise")
         save_linear_rgb(output, denoise_linear(load_linear_rgb(job.source)))
-        return StageResult.done(output)
+        return StageResult.done(output, message="built-in denoise")
 
 
 def register(registry: StageRegistry) -> None:

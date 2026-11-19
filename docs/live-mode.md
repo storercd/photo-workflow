@@ -106,8 +106,12 @@ Three stage modules live in `live/features/`: `denoise.py`, `mask.py`, `lighting
 Intermediates are 16-bit scene-linear sRGB TIFFs (`live/imaging.py`; RAW is developed with
 LibRaw via `rawpy`: camera white balance, no tone curve, cropped to the active area).
 
-- **Denoise** → `denoise/<name>.tif`: non-local-means on a luma/chroma split in a
-  square-root domain, with the filter strength scaled to the noise measured in each image
+- **Denoise** → `denoise/<name>.tif`: darktable's profiled denoise (automatic
+  non-local means with the camera's noise profile) through `darktable-cli`
+  (`live/darktable.py`; found via `DARKTABLE_CLI`, `PATH`, or `/Applications` or
+  `~/Applications`). It is exported as a 16-bit sRGB TIFF with no tone mapping and decoded to
+  linear. Without darktable (or if it fails) a warning is raised and the built-in filter is
+  used: non-local-means on a luma/chroma split in a square-root domain, with the filter strength scaled to the noise measured in each image
   (so high-ISO frames are cleaned properly and clean frames are left nearly untouched).
   Chroma is smoothed at quarter resolution because colour noise is blotchy, not grainy.
   There is no library that re-encodes a mosaiced CR2/CR3, so the "raw-format" intermediate
