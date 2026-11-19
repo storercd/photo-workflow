@@ -79,6 +79,7 @@ class StageJob:
         layout: Paths inside the Live folder.
         settings: A snapshot of the Live settings taken when the job started.
         warn: Reports a non-fatal warning for this photo.
+        report_progress: Reports how far this job is, from 0 to 1, for stages that can tell.
     """
 
     stage: StageId
@@ -88,6 +89,7 @@ class StageJob:
     layout: LiveLayout
     settings: LiveSettings
     warn: Callable[[str], None]
+    report_progress: Callable[[float], None] = lambda _fraction: None
 
     def output_path(self, subfolder: str | None = None, suffix: str | None = None) -> Path:
         """

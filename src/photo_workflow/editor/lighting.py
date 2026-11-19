@@ -20,12 +20,12 @@ from PySide6.QtGui import QImage
 GAMMA = 2.2
 ANALYSIS_LONG_EDGE = 256
 BYTES_PER_PIXEL = 3
-TARGET_MEDIAN = 0.42
+TARGET_MEDIAN = 0.38
 MIN_EV = -1.0
 MAX_EV = 2.0
 MIN_EV_CORRECTION = 0.15
 WB_NORM_POWER = 6
-WB_STRENGTH = 0.6
+WB_STRENGTH = 0.35
 WB_MAX_GAIN = 1.2
 WB_MIN_SHIFT = 0.02
 BLACK_PERCENTILE = 0.5
@@ -35,14 +35,18 @@ MIN_WHITE_POINT = 0.9
 TARGET_WHITE = 0.98
 SHADOW_PERCENTILE = 10
 HIGHLIGHT_PERCENTILE = 95
-SHADOW_TARGET = 0.2
+SHADOW_TARGET = 0.3
 HIGHLIGHT_TARGET = 0.85
 MAX_SHADOW_LIFT = 0.6
 MAX_HIGHLIGHT_RECOVERY = 0.5
-BASE_CONTRAST = 0.2
+BASE_CONTRAST = 0.0
 TARGET_SATURATION = 0.4
 MAX_VIBRANCE = 0.3
 MIN_VIBRANCE = 0.03
+SKIN_CHROMA_BOOST = 0.35
+SKIN_HUE_SHIFT = -8.0
+SKIN_LIGHTNESS = -0.04
+SKIN_CHUNK_ROWS = 512
 NEUTRAL_GAINS = (1.0, 1.0, 1.0)
 REFERENCE_KELVIN = 6500.0
 MIN_KELVIN = 3000.0
@@ -61,6 +65,7 @@ class LightingAdjustment:
     highlights: float = 0.0
     contrast: float = 0.0
     vibrance: float = 0.0
+    skin_tone: float = 0.0
     reference_kelvin: float = field(default=REFERENCE_KELVIN, compare=False)
 
     @property
@@ -92,6 +97,7 @@ class LightingAdjustment:
             f"highlights {-self.highlights:+.2f}",
             f"contrast {self.contrast:+.2f}",
             f"vibrance {self.vibrance:+.2f}",
+            f"skin {self.skin_tone:.2f}",
         ]
         return ", ".join(parts)
 
@@ -203,6 +209,7 @@ def estimate_adjustment(
     adjustment = replace(
         adjustment,
         vibrance=float(np.clip((TARGET_SATURATION - saturation) * 1.5, 0, MAX_VIBRANCE)),
+        skin_tone=1.0,
     )
     if (
         abs(adjustment.exposure_ev) < MIN_EV_CORRECTION
@@ -229,13 +236,60 @@ def apply_adjustment(rgb: NDArray[np.uint8], adjustment: LightingAdjustment) -> 
     ramp = np.repeat((np.arange(256, dtype=np.float32) / 255)[:, None], 3, axis=1)
     curve = np.round(np.clip(_apply_tone(ramp, adjustment), 0, 1) * 255).astype(np.uint8)
     adjusted = cv2.LUT(rgb, curve.reshape(256, 1, 3))
-    if adjustment.vibrance <= 0:
-        return adjusted
-    hsv = cv2.cvtColor(adjusted, cv2.COLOR_RGB2HSV)
-    saturation = np.arange(256, dtype=np.float32) / 255
-    boost = saturation + adjustment.vibrance * saturation * (1 - saturation) * 2
-    hsv[..., 1] = cv2.LUT(hsv[..., 1], np.round(np.clip(boost, 0, 1) * 255).astype(np.uint8))
-    return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+    if adjustment.vibrance > 0:
+        hsv = cv2.cvtColor(adjusted, cv2.COLOR_RGB2HSV)
+        saturation = np.arange(256, dtype=np.float32) / 255
+        boost = saturation + adjustment.vibrance * saturation * (1 - saturation) * 2
+        hsv[..., 1] = cv2.LUT(hsv[..., 1], np.round(np.clip(boost, 0, 1) * 255).astype(np.uint8))
+        adjusted = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
+    if adjustment.skin_tone > 0:
+        adjusted = _apply_skin_tone(adjusted, adjustment.skin_tone)
+    return adjusted
+
+
+def _smoothstep(value: NDArray[np.float32], low: float, high: float) -> NDArray[np.float32]:
+    t = np.clip((value - low) / (high - low), 0, 1)
+    return t * t * (3 - 2 * t)
+
+
+def _apply_skin_tone(rgb: NDArray[np.uint8], strength: float) -> NDArray[np.uint8]:
+    """
+    Warm and enrich skin-colored pixels, the way Lightroom's color profile renders skin.
+
+    Pixels are weighted by how close their hue, chroma and lightness are to skin in Lab; those
+    get more chroma, a slight shift toward red and a touch less lightness. Other colors are
+    left alone. Rows are processed in chunks to bound the float memory of large images.
+
+    Returns:
+        A new array of the same shape.
+    """
+    result = np.empty_like(rgb)
+    for start in range(0, rgb.shape[0], SKIN_CHUNK_ROWS):
+        chunk = rgb[start : start + SKIN_CHUNK_ROWS]
+        lab = cv2.cvtColor(chunk.astype(np.float32) / 255, cv2.COLOR_RGB2LAB)
+        lightness, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
+        chroma = np.hypot(a, b)
+        hue = np.degrees(np.arctan2(b, a))
+        weight = (
+            _smoothstep(hue, 25, 40)
+            * (1 - _smoothstep(hue, 75, 95))
+            * _smoothstep(chroma, 6, 16)
+            * (1 - _smoothstep(chroma, 50, 70))
+            * _smoothstep(lightness, 25, 40)
+            * strength
+        )
+        new_chroma = chroma * (1 + SKIN_CHROMA_BOOST * weight)
+        angle = np.radians(hue + SKIN_HUE_SHIFT * weight)
+        lab = np.dstack(
+            [
+                lightness * (1 + SKIN_LIGHTNESS * weight),
+                new_chroma * np.cos(angle),
+                new_chroma * np.sin(angle),
+            ]
+        )
+        encoded = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+        result[start : start + SKIN_CHUNK_ROWS] = np.round(np.clip(encoded, 0, 1) * 255)
+    return result
 
 
 def auto_light_image(

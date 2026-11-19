@@ -4,8 +4,9 @@ Lighting/Color stage: automatic lighting plus the optional color temperature ove
 Both come from the editor's Review mode (`photo_workflow.editor.lighting`): the same
 estimator picks exposure, white balance, levels, shadows/highlights, contrast and
 vibrance, and an explicit Kelvin value replaces the estimated white balance exactly as the
-editor's white-balance slider does. The result is the final high-quality JPEG in `output/`,
-which becomes the preview image across modes.
+editor's white-balance slider does. A neural cleanup (`photo_workflow.live.neural`) then
+removes colored speckle from the toned image. The result is the final high-quality JPEG in
+`output/`, which becomes the preview image across modes.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from photo_workflow.editor.lighting import (
     gains_from_kelvin,
 )
 from photo_workflow.editor.metadata import read_as_shot_kelvin
+from photo_workflow.live import neural
 from photo_workflow.live.api import StageImplementation, StageJob, StageRegistry, StageResult
 from photo_workflow.live.imaging import load_srgb8
 from photo_workflow.live.settings import LiveSettings
@@ -92,6 +94,8 @@ def write_jpeg(path: Path, rgb: NDArray[np.uint8]) -> None:
 class Lighting(StageImplementation):
     """Writes the final preview JPEG to `output/<name>.jpg`."""
 
+    revision = 2
+
     def process(self, job: StageJob) -> StageResult:
         """
         Apply auto lighting and the color temperature override to the best source.
@@ -103,7 +107,7 @@ class Lighting(StageImplementation):
         reference = as_shot_reference(job.photo)
         adjustment = choose_adjustment(rgb, job.settings, reference)
         output = job.output_path(OUTPUT_SUBFOLDER, ".jpg")
-        write_jpeg(output, apply_adjustment(rgb, adjustment))
+        write_jpeg(output, neural.clean(apply_adjustment(rgb, adjustment), job.report_progress))
         return StageResult.done(output, message=adjustment.describe())
 
 

@@ -10,9 +10,10 @@ import numpy as np
 import pytest
 
 from photo_workflow.editor.lighting import REFERENCE_KELVIN, estimate_adjustment
-from photo_workflow.live import detection, imaging
+from photo_workflow.live import darktable, detection, imaging
 from photo_workflow.live.api import StageJob, StageRegistry
 from photo_workflow.live.detection import clear_detections, get_detection
+from photo_workflow.live.features import denoise as denoise_stage
 from photo_workflow.live.features import lighting as lighting_stage
 from photo_workflow.live.features import load_features
 from photo_workflow.live.features.denoise import MIN_STRENGTH, _strength, denoise_linear
@@ -128,6 +129,59 @@ def test_denoise_strength_follows_the_noise_level() -> None:
 
     assert _strength(quiet, 0.9) == MIN_STRENGTH
     assert 0.9 * 0.03 * 65535 * 0.8 < _strength(noisy, 0.9) < 0.9 * 0.03 * 65535 * 1.2
+
+
+def test_darktable_sidecar_enables_profiled_denoise_with_valid_params() -> None:
+    """The sidecar carries a full-size `denoiseprofile` parameter block in automatic mode."""
+    assert len(darktable.denoise_params()) == 416
+    sidecar = darktable.denoise_sidecar()
+    assert 'darktable:operation="denoiseprofile"' in sidecar
+    assert darktable.denoise_params().hex() in sidecar
+
+
+def test_srgb_decoding_inverts_the_encoding() -> None:
+    """Decoding darktable's sRGB export recovers the linear values."""
+    linear = linear_gradient()
+
+    decoded = darktable.srgb_to_linear(
+        np.round(imaging._encode_srgb(linear) * 65535).astype(np.uint16)
+    )
+
+    assert np.abs(decoded.astype(int) - linear.astype(int)).max() <= 4
+
+
+def test_denoise_stage_requires_darktable_for_raw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A RAW goes through darktable; a missing darktable fails the stage."""
+    raw = tmp_path / PHOTO_NAME
+    raw.write_bytes(b"raw")
+    linear = linear_gradient()
+    monkeypatch.setattr(darktable, "find_cli", lambda: Path("/x/darktable-cli"))
+    monkeypatch.setattr(denoise_stage, "denoise_raw", lambda _raw: linear)
+    registry = StageRegistry()
+    load_features(registry)
+    warnings: list[str] = []
+
+    result = registry.get(StageId.DENOISE).process(
+        make_job(tmp_path, StageId.DENOISE, raw, warnings)
+    )
+
+    assert result.message == "darktable profiled denoise"
+    assert np.array_equal(load_linear_rgb(result.outputs[-1]), linear)
+    assert not warnings
+
+    monkeypatch.setattr(imaging, "_develop_raw", lambda _path: linear)
+    monkeypatch.setattr(
+        denoise_stage,
+        "denoise_raw",
+        lambda _raw: (_ for _ in ()).throw(
+            darktable.DarktableError("darktable-cli is not installed")
+        ),
+    )
+
+    with pytest.raises(darktable.DarktableError):
+        registry.get(StageId.DENOISE).process(make_job(tmp_path, StageId.DENOISE, raw, warnings))
 
 
 def test_camera_look_follows_the_embedded_jpeg_tone_curve(

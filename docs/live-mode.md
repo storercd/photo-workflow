@@ -106,12 +106,16 @@ Three stage modules live in `live/features/`: `denoise.py`, `mask.py`, `lighting
 Intermediates are 16-bit scene-linear sRGB TIFFs (`live/imaging.py`; RAW is developed with
 LibRaw via `rawpy`: camera white balance, no tone curve, cropped to the active area).
 
-- **Denoise** → `denoise/<name>.tif`: non-local-means on a luma/chroma split in a
-  square-root domain, with the filter strength scaled to the noise measured in each image
-  (so high-ISO frames are cleaned properly and clean frames are left nearly untouched).
-  Chroma is smoothed at quarter resolution because colour noise is blotchy, not grainy.
-  There is no library that re-encodes a mosaiced CR2/CR3, so the "raw-format" intermediate
-  is the linear developed image.
+- **Denoise** → `denoise/<name>.tif`: darktable's profiled denoise (automatic
+  non-local means with the camera's noise profile) through `darktable-cli`
+  (`live/darktable.py`; found via `DARKTABLE_CLI`, `PATH`, or `/Applications` or
+  `~/Applications`). It is exported as a 16-bit sRGB TIFF with no tone mapping and decoded to
+  linear. darktable is required for RAW files (a missing or failing install fails the stage).
+  Non-RAW sources use a built-in non-local-means filter on a luma/chroma split.
+- **Lighting/Color** ends with a neural cleanup (`live/neural.py`): SCUNet (torch + spandrel,
+  Apple MPS when available, weights downloaded once to `~/.cache/photo-workflow/models`)
+  removes colour speckle; its chroma is used with a 50/50 luma mix and a light unsharp mask.
+  Takes roughly a minute per 24 MP photo. The auto lighting also applies a skin-tone adjustment.
 - **Mask** → `mask/<name>.tif`: Apple Vision (`VNGenerateForegroundInstanceMaskRequest`,
   macOS only, `pyobjc-framework-Vision`) finds the main subject; everything outside it is
   scaled by -0.25 stop in linear light. No subject is an expected case, not a

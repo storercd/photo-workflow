@@ -152,6 +152,7 @@ class LivePipeline:
         self._idle = threading.Condition(self._lock)
         self._state = _State(running=dict.fromkeys(STAGE_ORDER, 0))
         self._listeners: list[Callable[[], None]] = []
+        self._fractions: dict[tuple[Path, StageId], float] = {}
         self._warning_ids = count(1)
         self._paused = False
         self._held = False
@@ -434,6 +435,7 @@ class LivePipeline:
                 continue
             record = self._state.images[photo][stage]
             record.status = StageStatus.RUNNING
+            self._fractions.pop((photo, stage), None)
             self._state.running[stage] += 1
             claimed.append((self._build_job(photo, stage), record.generation))
         return claimed
@@ -459,7 +461,13 @@ class LivePipeline:
             layout=self.layout,
             settings=self.settings,
             warn=lambda message: self.add_warning(stage, message, photo),
+            report_progress=lambda fraction: self._set_fraction(photo, stage, fraction),
         )
+
+    def _set_fraction(self, photo: Path, stage: StageId, fraction: float) -> None:
+        with self._lock:
+            self._fractions[(photo, stage)] = min(max(fraction, 0.0), 1.0)
+        self._emit()
 
     def _source(self, photo: Path, stage: StageId) -> tuple[Path, StageId | None]:
         for upstream in upstream_of(stage):
@@ -594,6 +602,44 @@ class LivePipeline:
                 if record.status is StageStatus.FAILED:
                     return record.error
         return ""
+
+    def progress(self, photo: Path) -> str:
+        """
+        Describe what the pipeline is doing with a photo right now.
+
+        Returns:
+            "Processing: <stage>" for a running stage, "Waiting: <stage>" for the next
+            enabled stage that has not started, or an empty string when nothing is pending.
+        """
+        with self._lock:
+            stages = self._state.images.get(photo)
+            if stages is None:
+                return ""
+            for stage in STAGE_ORDER:
+                if stages[stage].status is StageStatus.RUNNING:
+                    return f"Processing: {SPECS[stage].label}"
+            if any(record.status is StageStatus.FAILED for record in stages.values()):
+                return ""
+            for stage in STAGE_ORDER:
+                if stage is StageId.FTP:
+                    continue
+                if stages[stage].status is StageStatus.PENDING and self.settings.is_enabled(stage):
+                    return f"Waiting: {SPECS[stage].label}"
+        return ""
+
+    def progress_fraction(self, photo: Path) -> float | None:
+        """
+        Return how far the running stage of a photo is, from 0 to 1.
+
+        Returns:
+            The fraction, or `None` when nothing is running or the stage cannot tell.
+        """
+        with self._lock:
+            for stage in STAGE_ORDER:
+                record = self._state.images.get(photo, {}).get(stage)
+                if record is not None and record.status is StageStatus.RUNNING:
+                    return self._fractions.get((photo, stage))
+        return None
 
     def skip_message(self, photo: Path, stage: StageId) -> str:
         """Return why a photo's stage was skipped, or an empty string when it was not."""

@@ -62,6 +62,7 @@ class CropView(QWidget):
         self._warning: str | None = None
         self._failed: str | None = None
         self._badge: str | None = None
+        self._badge_fraction: float | None = None
         self._crop_source: str | None = None
 
     def set_crop_source(self, source: str | None) -> None:
@@ -175,9 +176,10 @@ class CropView(QWidget):
         self._failed = text
         self.update()
 
-    def set_badge(self, text: str | None) -> None:
-        """Show a small, unobtrusive note in the top-right corner, or clear it with `None`."""
+    def set_badge(self, text: str | None, fraction: float | None = None) -> None:
+        """Show a small note in the top-right corner, with an optional progress bar."""
         self._badge = text
+        self._badge_fraction = fraction
         self.update()
 
     def paintEvent(self, event: object) -> None:
@@ -200,12 +202,18 @@ class CropView(QWidget):
         metrics = painter.fontMetrics()
         pad = 6
         width = metrics.horizontalAdvance(text) + pad * 2
-        box = QRectF(self.width() - width - 12, 12, width, metrics.height() + pad)
+        box = QRectF(self.width() - width - 12, 12, width, metrics.height() + pad + 4)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(60, 60, 60, 170))
         painter.drawRoundedRect(box, 4, 4)
         painter.setPen(QColor("#ffcc66"))
         painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+        if self._badge_fraction is not None:
+            bar = QRectF(box.left() + pad, box.bottom() - 4, box.width() - pad * 2, 3)
+            painter.setBrush(QColor(255, 255, 255, 60))
+            painter.drawRect(bar)
+            painter.setBrush(QColor("#ffcc66"))
+            painter.drawRect(QRectF(bar.left(), bar.top(), bar.width() * self._badge_fraction, 3))
         painter.restore()
 
     def _draw_failed(self, painter: QPainter, text: str) -> None:
