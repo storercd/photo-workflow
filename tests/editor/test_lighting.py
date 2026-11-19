@@ -1,5 +1,7 @@
 """Tests for automatic preview lighting adjustment."""
 
+from dataclasses import replace
+
 import numpy as np
 from PySide6.QtGui import QImage
 
@@ -44,11 +46,21 @@ def test_bright_scene_is_darkened() -> None:
 def test_color_cast_is_reduced() -> None:
     """A strong warm cast is pulled toward neutral."""
     warm = scene(40, 200, tint=(1.0, 0.85, 0.6))
-    result = apply_adjustment(warm, estimate_adjustment(warm))
+    result = apply_adjustment(warm, replace(estimate_adjustment(warm), skin_tone=0.0))
 
     before = warm[..., 0].mean() / warm[..., 2].mean()
     after = result[..., 0].mean() / result[..., 2].mean()
     assert after < before
+
+
+def test_skin_tone_enriches_skin_and_leaves_other_colors() -> None:
+    """Skin-colored pixels gain chroma; a blue pixel is untouched."""
+    pixels = np.array([[[200, 150, 120], [40, 80, 200]]], dtype=np.uint8)
+    result = apply_adjustment(pixels, LightingAdjustment(skin_tone=1.0))
+
+    skin_before, skin_after = pixels[0, 0].astype(int), result[0, 0].astype(int)
+    assert skin_after[0] - skin_after[2] > skin_before[0] - skin_before[2]
+    assert np.array_equal(result[0, 1], pixels[0, 1])
 
 
 def test_neutral_adjustment_returns_same_array() -> None:
