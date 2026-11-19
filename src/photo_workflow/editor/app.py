@@ -1356,8 +1356,10 @@ class CropWindow(QMainWindow):
         self.auto_light_button.toggled.connect(self._auto_light_toggled)
         self.wb_slider.valueChanged.connect(self._wb_slider_changed)
         self.wb_value.returnPressed.connect(self._finish_wb_edit)
+        self.wb_value.returnPressed.connect(self.view.setFocus)
         self.wb_value.editingFinished.connect(self._restore_wb_text)
         self.rotation_value.returnPressed.connect(self._finish_rotation_edit)
+        self.rotation_value.returnPressed.connect(self.view.setFocus)
         self.rotation_value.editingFinished.connect(self._restore_rotation_text)
         self.wb_fixed_button.toggled.connect(self._wb_fixed_toggled)
         self.ball_button.toggled.connect(self._ball_toggled)
@@ -2025,6 +2027,17 @@ class CropWindow(QMainWindow):
         Returns:
             Whether the event was consumed.
         """
+        if (
+            watched in (self.wb_value, self.rotation_value)
+            and event.type() in (QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride)
+            and event.key() == Qt.Key.Key_Escape
+        ):
+            if event.type() == QEvent.Type.KeyPress:
+                self._restore_wb_text()
+                self._restore_rotation_text()
+                self.view.setFocus()
+            event.accept()
+            return True
         if (
             event.type() == QEvent.Type.MouseButtonPress
             and self._mouse_bindings
@@ -3363,6 +3376,11 @@ class CropWindow(QMainWindow):
             self.navigate(target_index - self._current_index)
             return
         self.open_folder(folder, selected_photo)
+
+    def showEvent(self, event: object) -> None:  # noqa: N802
+        """Start with focus in the photo area rather than a value field."""
+        super().showEvent(event)
+        self.view.setFocus()
 
     def closeEvent(self, event: object) -> None:
         """Wait for dirty crop data to be written before closing the window."""

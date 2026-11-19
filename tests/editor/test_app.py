@@ -1590,3 +1590,20 @@ def test_toolbar_is_two_rows_with_uniform_buttons_and_no_visible_status_bar() ->
         assert not button.icon().isNull() or button is window.flag_button
     assert window.statusBar().isHidden()
     window.close()
+
+
+def test_value_fields_give_focus_back_to_the_photo_on_enter_and_escape() -> None:
+    """Typing in the angle box ends with Enter or Escape, and focus returns to the photo."""
+    QApplication.instance() or QApplication([])
+    window = CropWindow()
+    window.show()
+    QTest.qWaitForWindowActive(window)
+    assert window.view.hasFocus()
+    field = window.rotation_value
+    field.setEnabled(True)
+    for key in (Qt.Key.Key_Return, Qt.Key.Key_Escape):
+        field.setFocus()
+        assert field.hasFocus()
+        QTest.keyClick(field, key)
+        assert window.view.hasFocus()
+    window.close()
