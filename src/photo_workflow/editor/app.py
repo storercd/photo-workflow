@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 import sys
 from collections import OrderedDict
 from collections.abc import Callable
@@ -126,6 +128,7 @@ from photo_workflow.editor.preferences import (
     save_preferences,
 )
 from photo_workflow.editor.view import CroppedPreview, CropView
+from photo_workflow.live.darktable import terminate_active
 from photo_workflow.live.features.mask import NO_SUBJECT_MESSAGE
 from photo_workflow.live.layout import IMAGE_SUFFIXES
 from photo_workflow.live.logs import configure_live_logging
@@ -3550,7 +3553,17 @@ def main(argv: list[str] | None = None) -> int:
         debug=args.debug,
     )
     window.show()
-    return app.exec()
+    code = app.exec()
+    live = getattr(window, "_live", None)
+    if live is not None and live.pipeline.has_running_work():
+        # Worker threads cannot be interrupted and Python joins them at exit; every write
+        # is atomic, so abandoning a long job (such as auto lighting) is safe.
+        terminate_active()
+        if settings is not None:
+            settings.sync()
+        logging.shutdown()
+        os._exit(code)
+    return code
 
 
 if __name__ == "__main__":

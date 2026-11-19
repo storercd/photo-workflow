@@ -15,6 +15,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 import cv2
@@ -30,6 +31,47 @@ CLI_LOCATIONS = (
     Path.home() / "Applications/darktable.app/Contents/MacOS/darktable-cli",
 )
 TIMEOUT_SECONDS = 600
+_ACTIVE: set[subprocess.Popen[str]] = set()
+_ACTIVE_LOCK = threading.Lock()
+
+
+def _run(command: list[str], folder: Path) -> None:
+    """
+    Run darktable-cli, registering it so `terminate_active` can stop it.
+
+    Raises:
+        TimeoutExpired: If it runs longer than `TIMEOUT_SECONDS`.
+        CalledProcessError: If it exits with an error.
+    """
+    with subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=folder,
+    ) as process:
+        with _ACTIVE_LOCK:
+            _ACTIVE.add(process)
+        try:
+            _, stderr = process.communicate(timeout=TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            raise
+        finally:
+            with _ACTIVE_LOCK:
+                _ACTIVE.discard(process)
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command, stderr=stderr)
+
+
+def terminate_active() -> None:
+    """Kill any darktable-cli still running, so quitting does not wait for it."""
+    with _ACTIVE_LOCK:
+        running = list(_ACTIVE)
+    for process in running:
+        process.kill()
+
+
 # `denoiseprofile` parameters, version 12: non-local means, automatic strength.
 MODE_NLMEANS_AUTO = 3
 PARAMS_VERSION = 12
@@ -153,14 +195,7 @@ def denoise_raw(raw: Path) -> NDArray[np.uint16]:
             "plugins/imageio/format/tiff/compress=0",
         ]
         try:
-            subprocess.run(
-                command,
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=TIMEOUT_SECONDS,
-                cwd=folder,
-            )
+            _run(command, folder)
         except (OSError, subprocess.SubprocessError) as error:
             detail = getattr(error, "stderr", "") or str(error)
             raise DarktableError(f"darktable-cli failed: {detail.strip()[-300:]}") from error

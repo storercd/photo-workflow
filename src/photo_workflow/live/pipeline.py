@@ -824,6 +824,15 @@ class LivePipeline:
         LOGGER.info("cleaned live folder %s", self.layout.root)
         self.pump()
 
+    def has_running_work(self) -> bool:
+        """Return whether any stage job or bypass upload is still running."""
+        with self._lock:
+            return bool(self._bypass_sending) or any(
+                record.status is StageStatus.RUNNING
+                for stages in self._state.images.values()
+                for record in stages.values()
+            )
+
     def shutdown(self) -> None:
         """Stop starting work, stop feature services, and release the worker threads."""
         with self._lock:
