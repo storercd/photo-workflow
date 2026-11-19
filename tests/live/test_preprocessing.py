@@ -150,15 +150,14 @@ def test_srgb_decoding_inverts_the_encoding() -> None:
     assert np.abs(decoded.astype(int) - linear.astype(int)).max() <= 4
 
 
-def test_denoise_stage_uses_darktable_for_raw_and_falls_back_without_it(
+def test_denoise_stage_requires_darktable_for_raw(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A RAW goes through darktable; a missing darktable warns and uses the built-in filter."""
+    """A RAW goes through darktable; a missing darktable fails the stage."""
     raw = tmp_path / PHOTO_NAME
     raw.write_bytes(b"raw")
     linear = linear_gradient()
     monkeypatch.setattr(darktable, "find_cli", lambda: Path("/x/darktable-cli"))
-    monkeypatch.setattr(denoise_stage, "find_cli", lambda: Path("/x/darktable-cli"))
     monkeypatch.setattr(denoise_stage, "denoise_raw", lambda _raw: linear)
     registry = StageRegistry()
     load_features(registry)
@@ -172,15 +171,17 @@ def test_denoise_stage_uses_darktable_for_raw_and_falls_back_without_it(
     assert np.array_equal(load_linear_rgb(result.outputs[-1]), linear)
     assert not warnings
 
-    monkeypatch.setattr(denoise_stage, "find_cli", lambda: None)
     monkeypatch.setattr(imaging, "_develop_raw", lambda _path: linear)
-
-    fallback = registry.get(StageId.DENOISE).process(
-        make_job(tmp_path, StageId.DENOISE, raw, warnings)
+    monkeypatch.setattr(
+        denoise_stage,
+        "denoise_raw",
+        lambda _raw: (_ for _ in ()).throw(
+            darktable.DarktableError("darktable-cli is not installed")
+        ),
     )
 
-    assert fallback.message == "built-in denoise"
-    assert len(warnings) == 1 and "darktable" in warnings[0]
+    with pytest.raises(darktable.DarktableError):
+        registry.get(StageId.DENOISE).process(make_job(tmp_path, StageId.DENOISE, raw, warnings))
 
 
 def test_camera_look_follows_the_embedded_jpeg_tone_curve(
